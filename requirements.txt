@@ -1,0 +1,6 @@
+fastapi==0.116.1
+uvicorn[standard]==0.35.0
+httpx==0.28.1
+scikit-learn==1.7.1
+joblib==1.5.1
+numpy==2.3.2
