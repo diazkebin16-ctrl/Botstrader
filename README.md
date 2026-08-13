@@ -1,19 +1,14 @@
-# Market Alert V1.8 — Validation & Execution Audit
+# Market Alert V1.9 — Supervised 24/7 Worker
 
-Preparada para prueba prolongada en OANDA Practice.
+Corrige el fallo de V1.8 donde Railway podía seguir ONLINE mientras el scanner quedaba detenido en `cycles: 1`.
 
-- Validación ML temporal walk-forward (`TimeSeriesSplit`).
-- Calibración por bandas: confianza predicha vs win rate observado.
-- Brier score para evaluar probabilidades.
-- Win rate por umbral de confianza.
-- Precio esperado vs fill real y slippage en pips.
-- Verificación posterior de Stop Loss y Take Profit; `PROTECTION_ERROR` si falta alguno.
-- Salud de estrategia: win rate, Profit Factor en R, expectancy y setups más/menos efectivos.
-- Mantiene aprendizaje y confianza adaptativa.
-- Sin límite diario de operaciones.
-- OANDA PRACTICE ONLY.
+- Mantiene referencia explícita a las tareas asyncio.
+- Supervisor reinicia el worker si se cae.
+- Watchdog comprueba el heartbeat cada 30 s.
+- Si pasan más de 180 s sin un scan, cancela y reinicia el scanner.
+- `/health` deja de reportar `ok: true` cuando el scanner está estancado.
+- `/api/status` muestra `cycles`, `successful_cycles`, `worker_restarts` y edad del último scan.
+- OANDA PRACTICE ONLY, sin endpoint live.
+- Conserva auto-trade demo, aprendizaje, confianza adaptativa y auditoría de ejecución.
 
-Nuevos endpoints:
-- `/api/health/strategy`
-- `/api/health/thresholds`
-- `/api/execution-audit`
+Después de desplegar, `cycles` debe aumentar aproximadamente cada minuto.

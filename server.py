@@ -38,16 +38,27 @@ CONFIDENCE_LOCAL_MIN = max(10, int(os.getenv("CONFIDENCE_LOCAL_MIN", "25")))
 EXECUTION_MIN_CONFIDENCE = max(0.50, min(0.95, float(os.getenv("EXECUTION_MIN_CONFIDENCE", "0.68"))))
 BOOTSTRAP_SCORE_THRESHOLD = max(80, min(100, int(os.getenv("BOOTSTRAP_SCORE_THRESHOLD", "90"))))
 RECENT_PERFORMANCE_WINDOW = max(20, int(os.getenv("RECENT_PERFORMANCE_WINDOW", "40")))
+WATCHDOG_ENABLED = os.getenv("WATCHDOG_ENABLED", "true").lower() == "true"
+WATCHDOG_STALE_SECONDS = max(120, int(os.getenv("WATCHDOG_STALE_SECONDS", "180")))
+WATCHDOG_CHECK_SECONDS = max(15, int(os.getenv("WATCHDOG_CHECK_SECONDS", "30")))
+WORKER_RESTART_BACKOFF_SECONDS = max(1, int(os.getenv("WORKER_RESTART_BACKOFF_SECONDS", "5")))
 NY = ZoneInfo("America/New_York")
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("market-alert")
-app = FastAPI(title="Market Alert V1.8 — Validation & Execution Audit / OANDA Practice Only")
+app = FastAPI(title="Market Alert V1.9 — Supervised 24/7 Worker / OANDA Practice Only")
 state: Dict[str, Any] = {
     "started": datetime.now(timezone.utc).isoformat(),
     "last_scan": None,
+    "last_successful_scan": None,
     "last_error": None,
     "cycles": 0,
+    "successful_cycles": 0,
+    "worker_restarts": 0,
+    "worker_running": False,
+    "worker_started_at": None,
+    "worker_last_heartbeat": None,
+    "watchdog_last_check": None,
     "last_results": {},
     "learning": {"last_train": None, "model_ready": False, "note": "Waiting for resolved samples"},
 }
@@ -836,44 +847,156 @@ async def scan(client: httpx.AsyncClient, inst: str) -> Dict[str, Any]:
     }
 
 
+def _parse_iso(ts: Optional[str]) -> Optional[datetime]:
+    if not ts:
+        return None
+    try:
+        return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+
+def scanner_health_snapshot() -> Dict[str, Any]:
+    now = datetime.now(timezone.utc)
+    last = _parse_iso(state.get("last_scan"))
+    age = (now - last).total_seconds() if last else None
+    stale = age is None or age > WATCHDOG_STALE_SECONDS
+    return {
+        "worker_running": bool(state.get("worker_running")),
+        "last_scan_age_seconds": age,
+        "stale": stale,
+        "watchdog_enabled": WATCHDOG_ENABLED,
+        "watchdog_stale_seconds": WATCHDOG_STALE_SECONDS,
+        "worker_restarts": state.get("worker_restarts", 0),
+        "successful_cycles": state.get("successful_cycles", 0),
+        "cycles": state.get("cycles", 0),
+    }
+
+
 async def worker():
-    await asyncio.sleep(2)
+    state["worker_running"] = True
+    state["worker_started_at"] = now_iso()
     last_train_check = datetime.min.replace(tzinfo=timezone.utc)
-    while True:
-        now = datetime.now(timezone.utc)
-        await asyncio.sleep(max(1, 60 - now.second - now.microsecond / 1e6 + 2.5))
-        state["cycles"] += 1
-        state["last_scan"] = now_iso()
-        async with httpx.AsyncClient() as client:
-            for inst in INSTRUMENTS:
+    log.info("Scanner worker started")
+    try:
+        while True:
+            now = datetime.now(timezone.utc)
+            await asyncio.sleep(max(1, 60 - now.second - now.microsecond / 1e6 + 2.5))
+            state["cycles"] += 1
+            state["last_scan"] = now_iso()
+            state["worker_last_heartbeat"] = state["last_scan"]
+            cycle_ok = True
+            async with httpx.AsyncClient() as client:
+                for inst in INSTRUMENTS:
+                    try:
+                        state["last_results"][inst] = await scan(client, inst)
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as e:
+                        cycle_ok = False
+                        state["last_results"][inst] = {"error": str(e)}
+                        state["last_error"] = str(e)
+                        log.exception("scan failed for %s", inst)
+            if cycle_ok:
+                state["successful_cycles"] += 1
+                state["last_successful_scan"] = now_iso()
+                state["last_error"] = None
+            if datetime.now(timezone.utc) - last_train_check >= timedelta(hours=1):
                 try:
-                    state["last_results"][inst] = await scan(client, inst)
-                    state["last_error"] = None
+                    result = train_shadow_model(force=False)
+                    state["learning"] = {**result, "last_train": now_iso(), "model_ready": Path(MODEL_PATH).exists()}
                 except Exception as e:
-                    state["last_results"][inst] = {"error": str(e)}
-                    state["last_error"] = str(e)
-                    log.exception("scan failed for %s", inst)
-        if datetime.now(timezone.utc) - last_train_check >= timedelta(hours=1):
-            result = train_shadow_model(force=False)
-            state["learning"] = {**result, "last_train": now_iso(), "model_ready": Path(MODEL_PATH).exists()}
-            last_train_check = datetime.now(timezone.utc)
+                    log.exception("learning cycle failed")
+                    state["learning"] = {"trained": False, "last_train": now_iso(), "model_ready": Path(MODEL_PATH).exists(), "error": str(e)}
+                last_train_check = datetime.now(timezone.utc)
+    finally:
+        state["worker_running"] = False
+        log.warning("Scanner worker stopped")
+
+
+async def supervised_worker_loop():
+    while True:
+        app.state.restart_requested = False
+        state["worker_restarts"] += 1
+        task = asyncio.create_task(worker(), name="scanner-worker")
+        app.state.scanner_worker_task = task
+        try:
+            await task
+            # A perpetual worker should never return normally.
+            state["last_error"] = "SCANNER_EXITED: worker returned unexpectedly"
+            log.error(state["last_error"])
+        except asyncio.CancelledError:
+            if getattr(app.state, "restart_requested", False):
+                log.warning("Scanner worker cancelled by watchdog; restarting")
+            else:
+                task.cancel()
+                raise
+        except Exception as e:
+            state["last_error"] = f"SCANNER_CRASHED: {e}"
+            log.exception("Scanner worker crashed")
+        await asyncio.sleep(WORKER_RESTART_BACKOFF_SECONDS)
+
+
+async def watchdog_loop():
+    if not WATCHDOG_ENABLED:
+        return
+    while True:
+        await asyncio.sleep(WATCHDOG_CHECK_SECONDS)
+        state["watchdog_last_check"] = now_iso()
+        started = _parse_iso(state.get("started"))
+        startup_age = (datetime.now(timezone.utc) - started).total_seconds() if started else 9999
+        if startup_age < WATCHDOG_STALE_SECONDS:
+            continue
+        snap = scanner_health_snapshot()
+        if snap["stale"]:
+            age = snap["last_scan_age_seconds"]
+            state["last_error"] = f"SCANNER_STALE: last scan age={age} seconds"
+            log.error(state["last_error"])
+            task = getattr(app.state, "scanner_worker_task", None)
+            if task and not task.done():
+                app.state.restart_requested = True
+                task.cancel()
 
 
 @app.on_event("startup")
 async def start():
     conn().close()
-    asyncio.create_task(worker())
-    log.info("24/7 PRACTICE ONLY. AUTO=%s. No daily operation-count limit. Adaptive confidence=%s; ML=%s shadow/refinement.", AUTO, ADAPTIVE_CONFIDENCE, ML_SHADOW)
+    app.state.restart_requested = False
+    app.state.worker_supervisor_task = asyncio.create_task(supervised_worker_loop(), name="scanner-supervisor")
+    app.state.watchdog_task = asyncio.create_task(watchdog_loop(), name="scanner-watchdog")
+    log.info("24/7 PRACTICE ONLY. AUTO=%s. Scanner supervisor/watchdog active.", AUTO)
+
+
+@app.on_event("shutdown")
+async def shutdown():
+    for name in ("scanner_worker_task", "worker_supervisor_task", "watchdog_task"):
+        task = getattr(app.state, name, None)
+        if task and not task.done():
+            task.cancel()
 
 
 @app.get("/health")
 async def health():
-    return {"ok": True, "practice_only": True, "auto_trade": AUTO, "last_scan": state["last_scan"], "last_error": state["last_error"], "learning_mode": "adaptive_confidence", "adaptive_confidence": ADAPTIVE_CONFIDENCE}
+    snap = scanner_health_snapshot()
+    started = _parse_iso(state.get("started"))
+    startup_age = (datetime.now(timezone.utc) - started).total_seconds() if started else 9999
+    stale_effective = snap["stale"] and startup_age > WATCHDOG_STALE_SECONDS
+    ok = bool(state.get("worker_running")) and not stale_effective
+    return {"ok": ok, "practice_only": True, "auto_trade": AUTO, "last_scan": state["last_scan"],
+            "last_successful_scan": state["last_successful_scan"], "last_error": state["last_error"],
+            "learning_mode": "adaptive_confidence", "adaptive_confidence": ADAPTIVE_CONFIDENCE,
+            "scanner": {**snap, "stale_effective": stale_effective}}
 
 
 @app.get("/api/status")
 async def status():
-    return {**state, "practice_only": True, "operation_count_limit": None, "auto_trade": AUTO, "instruments": INSTRUMENTS, "trade_units": UNITS, "quality_threshold": THRESH, "bootstrap_score_threshold": BOOTSTRAP_SCORE_THRESHOLD, "execution_min_confidence": EXECUTION_MIN_CONFIDENCE, "confidence_min_samples": CONFIDENCE_MIN_SAMPLES, "single_position_per_instrument": SINGLE, "adaptive_confidence": ADAPTIVE_CONFIDENCE, "ml_shadow": ML_SHADOW, "ml_role": "secondary_refinement"}
+    return {**state, "practice_only": True, "operation_count_limit": None, "auto_trade": AUTO,
+            "instruments": INSTRUMENTS, "trade_units": UNITS, "quality_threshold": THRESH,
+            "bootstrap_score_threshold": BOOTSTRAP_SCORE_THRESHOLD,
+            "execution_min_confidence": EXECUTION_MIN_CONFIDENCE, "confidence_min_samples": CONFIDENCE_MIN_SAMPLES,
+            "single_position_per_instrument": SINGLE, "adaptive_confidence": ADAPTIVE_CONFIDENCE,
+            "ml_shadow": ML_SHADOW, "ml_role": "secondary_refinement",
+            "scanner": scanner_health_snapshot()}
 
 
 @app.get("/api/signals")
@@ -941,7 +1064,7 @@ async def train_now():
 async def home():
     return """<!doctype html><html lang='es'><meta name='viewport' content='width=device-width'><title>Market Alert V1.7</title>
 <style>body{font-family:system-ui;background:#0b1020;color:#eef2ff;max-width:1050px;margin:auto;padding:24px}.c{background:#151c32;border:1px solid #2c3656;border-radius:16px;padding:18px;margin:12px 0}pre{white-space:pre-wrap;word-break:break-word;background:#080c17;padding:14px;border-radius:12px}.tag{display:inline-block;padding:5px 9px;border-radius:999px;background:#25304f;margin-right:6px}</style>
-<h1>Market Alert V1.8 · Validation & Execution Audit</h1><div class=c><span class=tag>OANDA PRACTICE ONLY</span><span class=tag>24/7</span><span class=tag>Sin límite diario</span><span class=tag>Confianza calibrada</span>
+<h1>Market Alert V1.9 · Supervised 24/7 Worker</h1><div class=c><span class=tag>OANDA PRACTICE ONLY</span><span class=tag>24/7</span><span class=tag>Sin límite diario</span><span class=tag>Confianza calibrada</span>
 <p><b>Quality Score ≠ probabilidad.</b> La confianza dinámica se calibra con resultados reales. Con poca muestra se limita deliberadamente y el 90% requiere evidencia sustancial.</p></div>
 <div class=c><h2>Estado</h2><pre id=s>Cargando…</pre></div><div class=c><h2>Aprendizaje</h2><pre id=l>Cargando…</pre></div><div class=c><h2>Última decisión</h2><pre id=d>Cargando…</pre></div><div class=c><h2>Últimas señales</h2><pre id=h>Cargando…</pre></div>
 <script>async function u(){s.textContent=JSON.stringify(await fetch('/api/status').then(r=>r.json()),null,2);l.textContent=JSON.stringify(await fetch('/api/learning').then(r=>r.json()),null,2);d.textContent=JSON.stringify(await fetch('/api/decisions?limit=5').then(r=>r.json()),null,2);h.textContent=JSON.stringify(await fetch('/api/signals?limit=15').then(r=>r.json()),null,2)}u();setInterval(u,15000)</script></html>"""
