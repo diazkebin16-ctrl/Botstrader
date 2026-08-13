@@ -35,18 +35,23 @@ OUTCOME_HORIZON_MIN = max(30, int(os.getenv("OUTCOME_HORIZON_MIN", "180")))
 ADAPTIVE_CONFIDENCE = os.getenv("ADAPTIVE_CONFIDENCE", "true").lower() == "true"
 CONFIDENCE_MIN_SAMPLES = max(20, int(os.getenv("CONFIDENCE_MIN_SAMPLES", "60")))
 CONFIDENCE_LOCAL_MIN = max(10, int(os.getenv("CONFIDENCE_LOCAL_MIN", "25")))
-EXECUTION_MIN_CONFIDENCE = max(0.50, min(0.95, float(os.getenv("EXECUTION_MIN_CONFIDENCE", "0.68"))))
 BOOTSTRAP_SCORE_THRESHOLD = max(80, min(100, int(os.getenv("BOOTSTRAP_SCORE_THRESHOLD", "90"))))
 RECENT_PERFORMANCE_WINDOW = max(20, int(os.getenv("RECENT_PERFORMANCE_WINDOW", "40")))
 WATCHDOG_ENABLED = os.getenv("WATCHDOG_ENABLED", "true").lower() == "true"
 WATCHDOG_STALE_SECONDS = max(120, int(os.getenv("WATCHDOG_STALE_SECONDS", "180")))
 WATCHDOG_CHECK_SECONDS = max(15, int(os.getenv("WATCHDOG_CHECK_SECONDS", "30")))
 WORKER_RESTART_BACKOFF_SECONDS = max(1, int(os.getenv("WORKER_RESTART_BACKOFF_SECONDS", "5")))
+# V2.0: market factors are evidence, not all-or-nothing gates.
+# Only execution-safety constraints remain hard.
+DISCOVERY_MIN_SAMPLES = max(100, int(os.getenv("DISCOVERY_MIN_SAMPLES", "100")))
+DISCOVERY_MIN_EDGE = max(0.01, min(0.30, float(os.getenv("DISCOVERY_MIN_EDGE", "0.08"))))
+DISCOVERY_SHRINKAGE = max(10.0, float(os.getenv("DISCOVERY_SHRINKAGE", "40")))
+EXECUTION_MIN_CONFIDENCE = max(0.50, min(0.95, float(os.getenv("EXECUTION_MIN_CONFIDENCE", "0.65"))))
 NY = ZoneInfo("America/New_York")
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("market-alert")
-app = FastAPI(title="Market Alert V1.9 — Supervised 24/7 Worker / OANDA Practice Only")
+app = FastAPI(title="Market Alert V2.0 — Adaptive Discovery / OANDA Practice Only")
 state: Dict[str, Any] = {
     "started": datetime.now(timezone.utc).isoformat(),
     "last_scan": None,
@@ -196,6 +201,35 @@ def conn() -> sqlite3.Connection:
     for name, ddl in migrations.items():
         if name not in existing:
             c.execute(f"ALTER TABLE signals ADD COLUMN {name} {ddl}")
+    # V2.0 learning schema migration.
+    sample_cols = {row[1] for row in c.execute("PRAGMA table_info(learning_samples)").fetchall()}
+    sample_migrations = {
+        "resolved_ts": "TEXT",
+        "bars_to_resolution": "INTEGER",
+        "mfe_r": "REAL",
+        "mae_r": "REAL",
+        "note": "TEXT",
+    }
+    for name, ddl in sample_migrations.items():
+        if name not in sample_cols:
+            c.execute(f"ALTER TABLE learning_samples ADD COLUMN {name} {ddl}")
+
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS discovered_patterns(
+            pattern_key TEXT PRIMARY KEY,
+            family TEXT NOT NULL,
+            value TEXT NOT NULL,
+            samples INTEGER NOT NULL,
+            wins INTEGER NOT NULL,
+            win_rate REAL,
+            global_win_rate REAL,
+            edge REAL,
+            weight REAL NOT NULL,
+            validated INTEGER NOT NULL,
+            updated_ts TEXT NOT NULL
+        )
+    """)
+    c.execute("CREATE INDEX IF NOT EXISTS idx_patterns_validated ON discovered_patterns(validated,weight)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_samples_pending ON learning_samples(status,instrument)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_signals_ts ON signals(ts)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_decision_ts ON decision_log(ts)")
@@ -371,13 +405,22 @@ def analyze(m15, m5, m1, inst) -> Dict[str, Any]:
         "session_ok": 1 if sess["ok"] else 0,
         "news_confirm": 0,
         "news_contradict": 0,
-        "blocked": 1 if not all(checks.values()) else 0,
+        # "blocked" is retained as a historical feature only. In V2 market filters are soft evidence.
+        "blocked": 0,
         "hour_ny": float(sess["hour"]),
+    }
+    safety_checks = {
+        "valid_direction": sig in ("BUY", "SELL"),
+        "finite_prices": all(math.isfinite(float(x)) for x in (entry, stop, target)),
+        "positive_risk": abs(entry - stop) > 0,
+        "minimum_rr": rr_raw >= MIN_RR,
+        "volatility_sane": 0.35 <= vol <= 3.5,
     }
     return {
         "instrument": inst, "signal": sig, "technical": int(tech), "score": int(tech),
         "entry": entry, "stop": stop, "target": target, "rr": rr, "rr_raw": rr_raw,
-        "blocked": not all(checks.values()), "pullbacks": pc, "filters": checks,
+        "blocked": not all(safety_checks.values()), "pullbacks": pc, "filters": checks,
+        "safety_checks": safety_checks,
         "features": features, "candle_ts": last["t"].isoformat(), "alignment": "N/A"
     }
 
@@ -406,7 +449,7 @@ async def news(client: httpx.AsyncClient, r: Dict[str, Any]) -> Dict[str, Any]:
         features["final_score"] = int(score)
         features["news_confirm"] = 1 if align == "CONFIRMA" else 0
         features["news_contradict"] = 1 if align == "CONTRADICE" else 0
-        blocked = r["blocked"] or align == "CONTRADICE"
+        blocked = r["blocked"]
         features["blocked"] = 1 if blocked else 0
         return {**r, "score": score, "alignment": align, "blocked": blocked, "features": features, "news_articles": [{"title": a.get("title", ""), "url": a.get("url", "")} for a in arts[:5]]}
     except Exception as e:
@@ -429,6 +472,113 @@ def setup_variant(r: Dict[str, Any]) -> str:
     score_tag = "Q90" if score >= 90 else "Q85" if score >= 85 else "Q80" if score >= 80 else "QLOW"
     return f"SECOND_PULLBACK_{news_tag}_{rr_tag}_{score_tag}"
 
+
+
+def candidate_patterns(r: Dict[str, Any]) -> Dict[str, str]:
+    """Generate interpretable candidate regimes. Nothing is trusted until >= DISCOVERY_MIN_SAMPLES."""
+    f = r.get("features", {})
+    hour = int(float(f.get("hour_ny", 0) or 0))
+    vol = float(f.get("volatility_ratio", 0) or 0)
+    ext = float(f.get("extension_atr", 0) or 0)
+    mom5 = float(f.get("m5_momentum", 0) or 0)
+    mom1 = float(f.get("m1_momentum", 0) or 0)
+    slope = float(f.get("m15_slope_atr", 0) or 0)
+    rr = float(f.get("rr_raw", 0) or 0)
+    align = r.get("alignment", "N/A")
+    filters = r.get("filters", {})
+
+    session = "ASIA" if hour < 3 else "LONDON" if hour < 8 else "NY_AM" if hour < 12 else "NY_PM" if hour < 17 else "OFF_HOURS"
+    vol_regime = "LOW" if vol < .75 else "NORMAL" if vol <= 1.35 else "HIGH"
+    ext_regime = "FRESH" if ext <= .8 else "NORMAL" if ext <= 1.35 else "EXTENDED"
+    momentum = "ALIGNED" if (r.get("signal") == "BUY" and mom5 > 0 and mom1 > 0) or (r.get("signal") == "SELL" and mom5 < 0 and mom1 < 0) else "MIXED"
+    trend_strength = "STRONG" if abs(slope) >= .35 else "MEDIUM" if abs(slope) >= .15 else "WEAK"
+    rr_bucket = "RR2+" if rr >= 2 else "RR15+" if rr >= 1.5 else "RRLOW"
+    confirmations = sum(1 for k in ("m5_structure","second_pullback","m1_confirmation","not_extended","volatility_ok") if filters.get(k))
+
+    return {
+        "session": session,
+        "volatility": vol_regime,
+        "extension": ext_regime,
+        "momentum": momentum,
+        "trend_strength": trend_strength,
+        "rr_bucket": rr_bucket,
+        "news": align,
+        "confirmations": str(confirmations),
+        # Interaction patterns allow discovery beyond any single hand-written rule.
+        "session_x_volatility": f"{session}|{vol_regime}",
+        "trend_x_momentum": f"{trend_strength}|{momentum}",
+        "volatility_x_extension": f"{vol_regime}|{ext_regime}",
+        "direction_x_session": f"{r.get('signal')}|{session}",
+    }
+
+
+def refresh_discovered_patterns() -> Dict[str, Any]:
+    """Re-evaluate candidate patterns from resolved samples; validates only after >=100 observations."""
+    c = conn()
+    rows = c.execute("""
+        SELECT ls.label, s.signal, s.alignment, s.features_json, s.filters_json
+        FROM learning_samples ls JOIN signals s ON s.id=ls.signal_id
+        WHERE ls.label IN (0,1)
+        ORDER BY ls.id ASC
+    """).fetchall()
+    if not rows:
+        c.close()
+        return {"resolved_samples": 0, "validated_patterns": 0}
+
+    global_wr = sum(int(x["label"]) for x in rows) / len(rows)
+    buckets: Dict[str, Dict[str, Any]] = {}
+    for row in rows:
+        rr = {
+            "signal": row["signal"], "alignment": row["alignment"],
+            "features": json.loads(row["features_json"] or "{}"),
+            "filters": json.loads(row["filters_json"] or "{}"),
+        }
+        for family, value in candidate_patterns(rr).items():
+            key = f"{family}={value}"
+            b = buckets.setdefault(key, {"family": family, "value": value, "samples": 0, "wins": 0})
+            b["samples"] += 1
+            b["wins"] += int(row["label"])
+
+    validated = 0
+    for key, b in buckets.items():
+        n, wins = b["samples"], b["wins"]
+        wr = wins / n
+        edge = wr - global_wr
+        # Shrink the observed edge toward zero to avoid overreacting.
+        weight = edge * (n / (n + DISCOVERY_SHRINKAGE))
+        is_valid = int(n >= DISCOVERY_MIN_SAMPLES and abs(edge) >= DISCOVERY_MIN_EDGE)
+        if is_valid:
+            validated += 1
+        c.execute("""
+            INSERT INTO discovered_patterns(pattern_key,family,value,samples,wins,win_rate,global_win_rate,edge,weight,validated,updated_ts)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(pattern_key) DO UPDATE SET
+              samples=excluded.samples,wins=excluded.wins,win_rate=excluded.win_rate,
+              global_win_rate=excluded.global_win_rate,edge=excluded.edge,weight=excluded.weight,
+              validated=excluded.validated,updated_ts=excluded.updated_ts
+        """, (key,b["family"],b["value"],n,wins,wr,global_wr,edge,weight,is_valid,now_iso()))
+    c.commit(); c.close()
+    return {"resolved_samples": len(rows), "validated_patterns": validated, "global_win_rate": global_wr}
+
+
+def discovery_adjustment(r: Dict[str, Any]) -> Dict[str, Any]:
+    """Apply only validated patterns. Positive and negative evidence can both change confidence."""
+    pats = candidate_patterns(r)
+    c = conn()
+    rows = c.execute("SELECT * FROM discovered_patterns WHERE validated=1").fetchall()
+    c.close()
+    by_key = {x["pattern_key"]: dict(x) for x in rows}
+    matches = []
+    raw = 0.0
+    for family, value in pats.items():
+        key = f"{family}={value}"
+        if key in by_key:
+            p = by_key[key]
+            raw += float(p["weight"])
+            matches.append({"pattern": key, "samples": p["samples"], "win_rate": p["win_rate"], "weight": p["weight"]})
+    # Multiple correlated patterns should not swing the probability wildly.
+    adjustment = clamp(raw * 0.35, -0.15, 0.15)
+    return {"adjustment": adjustment, "matches": matches, "candidate_patterns": pats}
 
 def wilson_lower_bound(wins: int, total: int, z: float = 1.28) -> float:
     """Conservative lower bound (~80% two-sided) so small samples do not look overconfident."""
@@ -540,44 +690,56 @@ def dynamic_confidence(r: Dict[str, Any], mlp: Optional[float]) -> Dict[str, Any
     p = float(emp["probability"])
     source = emp["source"]
 
-    # ML is still a secondary estimate. It can refine, not dominate, the empirical calibration.
+    discovery = discovery_adjustment(r)
+    p += float(discovery["adjustment"])
+    if discovery["matches"]:
+        source += "+DISCOVERY"
+
+    # ML remains secondary and only refines after enough labeled history.
     if emp["mature"] and mlp is not None:
-        p = 0.75 * p + 0.25 * float(mlp)
-        source += "+ML_SHADOW"
+        p = 0.80 * p + 0.20 * float(mlp)
+        source += "+ML"
 
     perf = recent_performance()
     penalty = float(perf["penalty"])
-    # Poor recent execution raises the gate and slightly reduces reported confidence.
     p = max(0.05, p - penalty * 0.5)
     required = min(0.90, EXECUTION_MIN_CONFIDENCE + penalty)
 
     return {
         **emp,
-        "probability": min(0.97, p),
+        "probability": min(0.97, max(0.03, p)),
         "source": source,
         "recent_samples": perf["samples"],
         "recent_win_rate": perf["win_rate"],
         "performance_penalty": penalty,
         "required_confidence": required,
+        "discovery_adjustment": discovery["adjustment"],
+        "validated_pattern_matches": discovery["matches"],
+        "candidate_patterns": discovery["candidate_patterns"],
     }
 
 
 def execution_decision(r: Dict[str, Any], conf: Dict[str, Any]) -> Dict[str, Any]:
     if r["signal"] == "WAIT":
         return {"execute": False, "reason": "WAIT: no hay señal direccional"}
-    if r["blocked"]:
-        failed = [k for k,v in r.get("filters", {}).items() if not v]
-        return {"execute": False, "reason": "Hard filters: " + ", ".join(failed)}
-    if not ADAPTIVE_CONFIDENCE:
-        ok = r["score"] >= THRESH
-        return {"execute": ok, "reason": "Adaptive confidence desactivada; usa Quality Score"}
-    if not conf["mature"]:
-        ok = r["score"] >= BOOTSTRAP_SCORE_THRESHOLD and conf["probability"] >= 0.65
-        return {"execute": ok, "reason": "Bootstrap: exige Quality Score alto mientras aprende" if ok else f"Bootstrap insuficiente: Q={r['score']} < {BOOTSTRAP_SCORE_THRESHOLD} o confianza conservadora baja"}
-    ok = conf["probability"] >= conf["required_confidence"] and r["score"] >= THRESH
-    if ok:
-        return {"execute": True, "reason": f"Confianza dinámica {conf['probability']:.1%} >= {conf['required_confidence']:.1%} y Q >= {THRESH}"}
-    return {"execute": False, "reason": f"No alcanza gate: confianza {conf['probability']:.1%}/{conf['required_confidence']:.1%}, Q={r['score']}/{THRESH}"}
+
+    # Only safety constraints can veto. Market-analysis factors are evidence, not mandatory rules.
+    if r.get("blocked"):
+        failed = [k for k,v in r.get("safety_checks", {}).items() if not v]
+        return {"execute": False, "reason": "Safety veto: " + ", ".join(failed)}
+
+    p = float(conf.get("probability") or 0)
+    required = float(conf.get("required_confidence") or EXECUTION_MIN_CONFIDENCE)
+
+    if p >= required:
+        return {
+            "execute": True,
+            "reason": f"Adaptive gate: confianza {p:.1%} >= {required:.1%}; factores de mercado ponderados, no obligatorios"
+        }
+    return {
+        "execute": False,
+        "reason": f"Adaptive gate: confianza {p:.1%} < {required:.1%}; continúa observando y aprendiendo"
+    }
 
 
 def save_decision(r: Dict[str, Any], conf: Dict[str, Any], executed: int, reason: str):
@@ -761,17 +923,17 @@ def learning_stats() -> Dict[str, Any]:
         "executed_resolved": executed_resolved, "win_rate_executed": (executed_wins / executed_resolved) if executed_resolved else None,
         "blocked_resolved": blocked_resolved, "counterfactual_win_rate_blocked": (blocked_wins / blocked_resolved) if blocked_resolved else None,
         "ml_min_samples": ML_MIN_SAMPLES, "model_ready": Path(MODEL_PATH).exists(), "last_model_run": dict(run) if run else None,
-        "mode": "ADAPTIVE_CONFIDENCE", "changes_execution": ADAPTIVE_CONFIDENCE, "ml_role": "secondary_refinement"
+        "mode": "ADAPTIVE_DISCOVERY", "changes_execution": ADAPTIVE_CONFIDENCE, "ml_role": "secondary_refinement", "discovery_min_samples": DISCOVERY_MIN_SAMPLES
     }
 
 
 def train_shadow_model(force: bool = False) -> Dict[str, Any]:
-    c=conn(); rows=c.execute("SELECT features_json,label,resolved_at FROM learning_samples WHERE label IN (0,1) ORDER BY resolved_at,id").fetchall(); c.close()
+    c=conn(); rows=c.execute("SELECT features_json,label,resolved_ts FROM learning_samples WHERE label IN (0,1) ORDER BY resolved_ts,id").fetchall(); c.close()
     if len(rows)<ML_MIN_SAMPLES and not force:return {"trained":False,"reason":f"need {ML_MIN_SAMPLES}, have {len(rows)}","samples":len(rows)}
     if len(rows)<20:return {"trained":False,"reason":"need at least 20 resolved samples for temporal validation","samples":len(rows)}
     X=[]; y=[]
     for row in rows:
-        f=json.loads(row["features_json"]); X.append([float(f.get(k,0) or 0) for k in FEATURE_NAMES]); y.append(int(row["label"]))
+        f=json.loads(row["features_json"]); X.append([float(f.get(k,0) or 0) for k in FEATURE_COLUMNS]); y.append(int(row["label"]))
     X=np.asarray(X); y=np.asarray(y)
     if len(set(y.tolist()))<2:return {"trained":False,"reason":"need WIN and LOSS labels","samples":len(y)}
     folds=[]; splits=min(5,max(2,len(y)//20))
@@ -785,9 +947,10 @@ def train_shadow_model(force: bool = False) -> Dict[str, Any]:
     if not folds:return {"trained":False,"reason":"insufficient class diversity across time folds","samples":len(y)}
     final=Pipeline([("scale",StandardScaler()),("clf",LogisticRegression(max_iter=1000,class_weight="balanced"))]); final.fit(X,y)
     avg={k:float(np.mean([f[k] for f in folds])) for k in ["accuracy","auc","log_loss","brier","baseline"]}
-    joblib.dump({"model":final,"features":FEATURE_NAMES,"trained_at":now_iso(),"samples":len(y),"walk_forward":folds},MODEL_PATH)
-    c=conn(); c.execute("INSERT INTO model_runs(ts,samples,train_samples,test_samples,accuracy,baseline_accuracy,auc,log_loss,detail) VALUES(?,?,?,?,?,?,?,?,?)",
-      (now_iso(),len(y),folds[-1]["train"],folds[-1]["test"],avg["accuracy"],avg["baseline"],avg["auc"],avg["log_loss"],
+    joblib.dump({"model":final,"features":FEATURE_COLUMNS,"trained_at":now_iso(),"samples":len(y),"walk_forward":folds},MODEL_PATH)
+    c=conn(); c.execute("""INSERT INTO model_runs(trained_ts,samples,train_samples,test_samples,win_rate,baseline_accuracy,accuracy,roc_auc,log_loss,accepted,model_path,note)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
+      (now_iso(),len(y),folds[-1]["train"],folds[-1]["test"],float(np.mean(y)),avg["baseline"],avg["accuracy"],avg["auc"],avg["log_loss"],1,MODEL_PATH,
        json.dumps({"validation":"TimeSeriesSplit_walk_forward","folds":folds,"brier":avg["brier"]}))); c.commit(); c.close()
     return {"trained":True,"samples":len(y),"validation":"TimeSeriesSplit_walk_forward","folds":folds,"average":avg}
 
@@ -798,6 +961,8 @@ async def scan(client: httpx.AsyncClient, inst: str) -> Dict[str, Any]:
         candles(client, inst, "M1", max(220, OUTCOME_HORIZON_MIN + 30))
     )
     resolved = resolve_pending(inst, m1)
+    if resolved:
+        refresh_discovered_patterns()
     r = analyze(m15, m5, m1, inst)
     r = await news(client, r) if r["signal"] != "WAIT" and r["technical"] >= 50 else {**r, "alignment": "N/A"}
     mlp = load_shadow_probability(r["features"]) if r["signal"] != "WAIT" else None
@@ -839,6 +1004,8 @@ async def scan(client: httpx.AsyncClient, inst: str) -> Dict[str, Any]:
         "confidence_source": conf.get("source"), "confidence_samples": conf.get("samples"),
         "local_confidence_samples": conf.get("local_samples"),
         "required_confidence": conf.get("required_confidence"),
+        "discovery_adjustment": conf.get("discovery_adjustment", 0.0),
+        "validated_pattern_matches": conf.get("validated_pattern_matches", []),
         "recent_win_rate": conf.get("recent_win_rate"),
         "performance_penalty": conf.get("performance_penalty"),
         "setup_variant": conf.get("variant"),
@@ -1060,11 +1227,18 @@ async def train_now():
     return train_shadow_model(force=True)
 
 
+@app.get("/api/discovery")
+async def discovery():
+    c=conn()
+    rows=[dict(x) for x in c.execute("SELECT * FROM discovered_patterns ORDER BY validated DESC, ABS(weight) DESC, samples DESC LIMIT 100").fetchall()]
+    c.close()
+    return {"minimum_samples": DISCOVERY_MIN_SAMPLES, "minimum_edge": DISCOVERY_MIN_EDGE, "patterns": rows}
+
 @app.get("/", response_class=HTMLResponse)
 async def home():
     return """<!doctype html><html lang='es'><meta name='viewport' content='width=device-width'><title>Market Alert V1.7</title>
 <style>body{font-family:system-ui;background:#0b1020;color:#eef2ff;max-width:1050px;margin:auto;padding:24px}.c{background:#151c32;border:1px solid #2c3656;border-radius:16px;padding:18px;margin:12px 0}pre{white-space:pre-wrap;word-break:break-word;background:#080c17;padding:14px;border-radius:12px}.tag{display:inline-block;padding:5px 9px;border-radius:999px;background:#25304f;margin-right:6px}</style>
-<h1>Market Alert V1.9 · Supervised 24/7 Worker</h1><div class=c><span class=tag>OANDA PRACTICE ONLY</span><span class=tag>24/7</span><span class=tag>Sin límite diario</span><span class=tag>Confianza calibrada</span>
+<h1>Market Alert V2.0 · Adaptive Discovery</h1><div class=c><span class=tag>OANDA PRACTICE ONLY</span><span class=tag>24/7</span><span class=tag>Sin límite diario</span><span class=tag>Confianza calibrada</span>
 <p><b>Quality Score ≠ probabilidad.</b> La confianza dinámica se calibra con resultados reales. Con poca muestra se limita deliberadamente y el 90% requiere evidencia sustancial.</p></div>
 <div class=c><h2>Estado</h2><pre id=s>Cargando…</pre></div><div class=c><h2>Aprendizaje</h2><pre id=l>Cargando…</pre></div><div class=c><h2>Última decisión</h2><pre id=d>Cargando…</pre></div><div class=c><h2>Últimas señales</h2><pre id=h>Cargando…</pre></div>
 <script>async function u(){s.textContent=JSON.stringify(await fetch('/api/status').then(r=>r.json()),null,2);l.textContent=JSON.stringify(await fetch('/api/learning').then(r=>r.json()),null,2);d.textContent=JSON.stringify(await fetch('/api/decisions?limit=5').then(r=>r.json()),null,2);h.textContent=JSON.stringify(await fetch('/api/signals?limit=15').then(r=>r.json()),null,2)}u();setInterval(u,15000)</script></html>"""
