@@ -1,33 +1,46 @@
-# Market Alert V2.0 — Adaptive Discovery
+# Market Alert V2.1 — Adaptive Bootstrap Learning
 
-Esta versión cambia el enfoque de decisión para que coincida con el objetivo del sistema:
+Esta versión corrige el problema observado en V2.0 donde la confianza bootstrap permanecía en 50% y no permitía empezar a generar operaciones demo.
 
-- **Los factores de mercado ya no son reglas de todo-o-nada.** M5, pullbacks, M1, extensión, sesión y noticias se observan y se registran como evidencia.
-- **Umbral base de ejecución: 65%** (`EXECUTION_MIN_CONFIDENCE=0.65`).
-- **Solo quedan vetos duros de seguridad de ejecución:** dirección válida, precios finitos, riesgo positivo, RR mínimo y volatilidad no extrema.
-- **Descubrimiento de patrones:** el bot genera regímenes e interacciones (sesión×volatilidad, tendencia×momentum, volatilidad×extensión, etc.).
-- **Una señal descubierta NO influye por verla 2 o 3 veces.** Requiere al menos **100 resultados resueltos** y una ventaja estadística mínima antes de recibir peso.
-- Los patrones validados pueden sumar **o restar** confianza. Si dejan de funcionar, su peso se recalcula y disminuye/cambia.
-- El ML sigue siendo secundario y no domina la decisión.
-- Se conserva el supervisor/watchdog 24/7 de V1.9.
-- Se corrige el error de aprendizaje `no such column: resolved_at` y la compatibilidad del registro de entrenamiento.
-- Sigue siendo **OANDA PRACTICE ONLY**.
+## Nuevo arranque adaptativo
+Antes de tener suficientes operaciones resueltas, el sistema calcula una confianza provisional usando evidencia ponderada:
 
-## Qué mirar después del despliegue
+- contexto y fuerza M15;
+- estructura M5;
+- primer/segundo retroceso;
+- confirmación M1;
+- alineación de momentum;
+- R:R;
+- extensión;
+- régimen de volatilidad;
+- sesión;
+- noticias;
+- Quality Score como evidencia secundaria.
 
-`/health`:
-- `ok: true`
-- `scanner.worker_running: true`
-- `scanner.stale_effective: false`
+Estos factores **no tienen que cumplirse todos**.
 
-Panel principal:
-- `cycles` y `successful_cycles` deben seguir aumentando.
-- `required_confidence` debe mostrar 0.65 salvo penalización automática por mal rendimiento reciente.
-- Ya no debe aparecer `Hard filters: m5_structure...`; los rechazos normales deben decir `Adaptive gate`.
+La confianza bootstrap empieza alrededor de 50%, puede bajar si hay evidencia negativa y puede subir hasta un máximo conservador de 78%. Por tanto, una oportunidad convincente puede superar el umbral de ejecución de 65% incluso antes de que existan 60-100 muestras.
 
-`/api/discovery`:
-- muestra patrones candidatos y validados.
-- `validated=1` solo después de cumplir la muestra mínima y el edge configurado.
+## Transición hacia aprendizaje real
+- Desde 20 resultados resueltos, la confianza provisional empieza a mezclarse gradualmente con el win rate observado.
+- A partir de 60 muestras, el motor empírico toma el control.
+- A partir de 100 muestras, los patrones descubiertos pueden validarse y recibir peso.
+- El ML sigue siendo secundario.
 
-## Nota de validación
-Los patrones descubiertos son hipótesis estadísticas, no garantías. La validación debe continuar en Practice antes de considerar cualquier uso con dinero real.
+## Seguridad
+Solo siguen como vetos absolutos:
+- dirección válida;
+- precios finitos;
+- riesgo positivo;
+- R:R mínimo;
+- volatilidad extrema/no razonable.
+
+Sigue siendo **OANDA PRACTICE ONLY**.
+
+## Qué debes observar
+En las decisiones ya no debería aparecer siempre:
+`confianza 50.0%`
+
+Podrás ver valores distintos, por ejemplo 58%, 64%, 69%, etc., según la evidencia del setup.
+
+Si `dynamic_confidence >= required_confidence` y no hay Safety veto, AUTO_TRADE puede ejecutar la orden en Practice.

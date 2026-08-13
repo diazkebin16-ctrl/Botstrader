@@ -46,12 +46,15 @@ WORKER_RESTART_BACKOFF_SECONDS = max(1, int(os.getenv("WORKER_RESTART_BACKOFF_SE
 DISCOVERY_MIN_SAMPLES = max(100, int(os.getenv("DISCOVERY_MIN_SAMPLES", "100")))
 DISCOVERY_MIN_EDGE = max(0.01, min(0.30, float(os.getenv("DISCOVERY_MIN_EDGE", "0.08"))))
 DISCOVERY_SHRINKAGE = max(10.0, float(os.getenv("DISCOVERY_SHRINKAGE", "40")))
+BOOTSTRAP_MIN_CONFIDENCE = max(0.35, min(0.60, float(os.getenv("BOOTSTRAP_MIN_CONFIDENCE", "0.45"))))
+BOOTSTRAP_MAX_CONFIDENCE = max(0.66, min(0.85, float(os.getenv("BOOTSTRAP_MAX_CONFIDENCE", "0.78"))))
+BOOTSTRAP_BLEND_MIN_SAMPLES = max(10, int(os.getenv("BOOTSTRAP_BLEND_MIN_SAMPLES", "20")))
 EXECUTION_MIN_CONFIDENCE = max(0.50, min(0.95, float(os.getenv("EXECUTION_MIN_CONFIDENCE", "0.65"))))
 NY = ZoneInfo("America/New_York")
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("market-alert")
-app = FastAPI(title="Market Alert V2.0 — Adaptive Discovery / OANDA Practice Only")
+app = FastAPI(title="Market Alert V2.1 — Adaptive Bootstrap Learning / OANDA Practice Only")
 state: Dict[str, Any] = {
     "started": datetime.now(timezone.utc).isoformat(),
     "last_scan": None,
@@ -615,6 +618,96 @@ def recent_performance() -> Dict[str, Any]:
     return {"samples": n, "win_rate": wr, "penalty": penalty}
 
 
+
+def bootstrap_evidence_confidence(r: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Provisional confidence before enough labeled history exists.
+    It is NOT treated as learned probability; it is a bounded evidence estimate
+    so the bot can begin collecting executed demo trades.
+    """
+    f = r.get("features", {})
+    filters = r.get("filters", {})
+    sig = r.get("signal")
+    score = 0.50
+    detail = []
+
+    def add(name, delta):
+        nonlocal score
+        score += delta
+        detail.append({"factor": name, "delta": round(delta, 4)})
+
+    # Trend/context evidence
+    gap = abs(float(f.get("m15_gap_atr", 0) or 0))
+    slope = abs(float(f.get("m15_slope_atr", 0) or 0))
+    if filters.get("m15_context"):
+        add("m15_context", 0.045)
+    if gap >= 0.55:
+        add("m15_gap_strength", 0.025)
+    if slope >= 0.25:
+        add("m15_slope_strength", 0.025)
+
+    # Structure and confirmations
+    if filters.get("m5_structure"):
+        add("m5_structure", 0.055)
+    if filters.get("second_pullback"):
+        add("second_pullback", 0.060)
+    elif int(f.get("pullbacks", 0) or 0) >= 1:
+        add("first_pullback", 0.020)
+    if filters.get("m1_confirmation"):
+        add("m1_confirmation", 0.055)
+
+    # Momentum alignment
+    m5 = float(f.get("m5_momentum", 0) or 0)
+    m1 = float(f.get("m1_momentum", 0) or 0)
+    aligned = (sig == "BUY" and m5 > 0 and m1 > 0) or (sig == "SELL" and m5 < 0 and m1 < 0)
+    if aligned:
+        add("momentum_alignment", 0.045)
+    elif m5 * m1 < 0:
+        add("momentum_conflict", -0.035)
+
+    # R:R
+    rr = float(f.get("rr_raw", 0) or 0)
+    if rr >= 2.0:
+        add("rr_2_plus", 0.045)
+    elif rr >= 1.5:
+        add("rr_1_5_plus", 0.020)
+
+    # Extension and volatility
+    ext = float(f.get("extension_atr", 0) or 0)
+    if ext <= 0.85:
+        add("fresh_entry", 0.025)
+    elif ext > 1.35:
+        add("extended_price", -0.040)
+
+    vol = float(f.get("volatility_ratio", 0) or 0)
+    if 0.75 <= vol <= 1.35:
+        add("normal_volatility", 0.020)
+    elif vol > 1.8:
+        add("high_volatility", -0.030)
+
+    # Session is evidence, never a veto
+    if filters.get("ny_session"):
+        add("ny_session", 0.025)
+
+    # News
+    align = r.get("alignment", "N/A")
+    if align == "CONFIRMA":
+        add("news_confirm", 0.055)
+    elif align == "CONTRADICE":
+        add("news_contradict", -0.070)
+
+    # Technical score contributes modestly; it is not itself a probability.
+    tech = float(r.get("technical", r.get("score", 0)) or 0)
+    if tech >= 70:
+        add("technical_70_plus", 0.040)
+    elif tech >= 50:
+        add("technical_50_plus", 0.020)
+    elif tech < 25:
+        add("technical_very_low", -0.025)
+
+    score = clamp(score, BOOTSTRAP_MIN_CONFIDENCE, BOOTSTRAP_MAX_CONFIDENCE)
+    return {"probability": score, "detail": detail}
+
 def empirical_confidence(r: Dict[str, Any]) -> Dict[str, Any]:
     """
     Estimates win probability from resolved historical setups.
@@ -640,13 +733,20 @@ def empirical_confidence(r: Dict[str, Any]) -> Dict[str, Any]:
     local_n, local_w = len(local), sum(local)
 
     if total < CONFIDENCE_MIN_SAMPLES:
-        # Bootstrap: quality is a heuristic, not a probability. Cap confidence below 80%.
-        q = int(r.get("score", 0))
-        proxy = 0.50 + max(0, q - 70) * 0.009
-        proxy = min(proxy, 0.79)
+        boot = bootstrap_evidence_confidence(r)
+        # As real labels accumulate, blend the provisional evidence estimate with
+        # the observed global win rate. This prevents a sudden jump at sample 60.
+        if total >= BOOTSTRAP_BLEND_MIN_SAMPLES and total > 0:
+            global_rate = wins / total
+            alpha = min(0.65, (total - BOOTSTRAP_BLEND_MIN_SAMPLES) / max(1, CONFIDENCE_MIN_SAMPLES - BOOTSTRAP_BLEND_MIN_SAMPLES) * 0.65)
+            probability = (1 - alpha) * boot["probability"] + alpha * global_rate
+            source = "BOOTSTRAP_EVIDENCE+EMPIRICAL_BLEND"
+        else:
+            probability = boot["probability"]
+            source = "BOOTSTRAP_EVIDENCE"
         return {
-            "probability": proxy,
-            "source": "BOOTSTRAP_CONSERVATIVE",
+            "probability": clamp(probability, BOOTSTRAP_MIN_CONFIDENCE, BOOTSTRAP_MAX_CONFIDENCE),
+            "source": source,
             "samples": total,
             "local_samples": local_n,
             "variant": variant,
@@ -654,6 +754,7 @@ def empirical_confidence(r: Dict[str, Any]) -> Dict[str, Any]:
             "local_win_rate": (local_w/local_n) if local_n else None,
             "lower_bound": None,
             "mature": False,
+            "bootstrap_detail": boot["detail"],
         }
 
     # Beta prior centered on global performance, equivalent to 20 pseudo-observations.
@@ -723,22 +824,22 @@ def execution_decision(r: Dict[str, Any], conf: Dict[str, Any]) -> Dict[str, Any
     if r["signal"] == "WAIT":
         return {"execute": False, "reason": "WAIT: no hay señal direccional"}
 
-    # Only safety constraints can veto. Market-analysis factors are evidence, not mandatory rules.
     if r.get("blocked"):
         failed = [k for k,v in r.get("safety_checks", {}).items() if not v]
         return {"execute": False, "reason": "Safety veto: " + ", ".join(failed)}
 
     p = float(conf.get("probability") or 0)
     required = float(conf.get("required_confidence") or EXECUTION_MIN_CONFIDENCE)
+    phase = "learned" if conf.get("mature") else "bootstrap"
 
     if p >= required:
         return {
             "execute": True,
-            "reason": f"Adaptive gate: confianza {p:.1%} >= {required:.1%}; factores de mercado ponderados, no obligatorios"
+            "reason": f"Adaptive gate ({phase}): confianza {p:.1%} >= {required:.1%}; puede ejecutar en Practice"
         }
     return {
         "execute": False,
-        "reason": f"Adaptive gate: confianza {p:.1%} < {required:.1%}; continúa observando y aprendiendo"
+        "reason": f"Adaptive gate ({phase}): confianza {p:.1%} < {required:.1%}; continúa observando"
     }
 
 
@@ -1006,6 +1107,7 @@ async def scan(client: httpx.AsyncClient, inst: str) -> Dict[str, Any]:
         "required_confidence": conf.get("required_confidence"),
         "discovery_adjustment": conf.get("discovery_adjustment", 0.0),
         "validated_pattern_matches": conf.get("validated_pattern_matches", []),
+        "bootstrap_detail": conf.get("bootstrap_detail", []),
         "recent_win_rate": conf.get("recent_win_rate"),
         "performance_penalty": conf.get("performance_penalty"),
         "setup_variant": conf.get("variant"),
@@ -1238,7 +1340,7 @@ async def discovery():
 async def home():
     return """<!doctype html><html lang='es'><meta name='viewport' content='width=device-width'><title>Market Alert V1.7</title>
 <style>body{font-family:system-ui;background:#0b1020;color:#eef2ff;max-width:1050px;margin:auto;padding:24px}.c{background:#151c32;border:1px solid #2c3656;border-radius:16px;padding:18px;margin:12px 0}pre{white-space:pre-wrap;word-break:break-word;background:#080c17;padding:14px;border-radius:12px}.tag{display:inline-block;padding:5px 9px;border-radius:999px;background:#25304f;margin-right:6px}</style>
-<h1>Market Alert V2.0 · Adaptive Discovery</h1><div class=c><span class=tag>OANDA PRACTICE ONLY</span><span class=tag>24/7</span><span class=tag>Sin límite diario</span><span class=tag>Confianza calibrada</span>
+<h1>Market Alert V2.1 · Adaptive Bootstrap Learning</h1><div class=c><span class=tag>OANDA PRACTICE ONLY</span><span class=tag>24/7</span><span class=tag>Sin límite diario</span><span class=tag>Confianza calibrada</span>
 <p><b>Quality Score ≠ probabilidad.</b> La confianza dinámica se calibra con resultados reales. Con poca muestra se limita deliberadamente y el 90% requiere evidencia sustancial.</p></div>
 <div class=c><h2>Estado</h2><pre id=s>Cargando…</pre></div><div class=c><h2>Aprendizaje</h2><pre id=l>Cargando…</pre></div><div class=c><h2>Última decisión</h2><pre id=d>Cargando…</pre></div><div class=c><h2>Últimas señales</h2><pre id=h>Cargando…</pre></div>
 <script>async function u(){s.textContent=JSON.stringify(await fetch('/api/status').then(r=>r.json()),null,2);l.textContent=JSON.stringify(await fetch('/api/learning').then(r=>r.json()),null,2);d.textContent=JSON.stringify(await fetch('/api/decisions?limit=5').then(r=>r.json()),null,2);h.textContent=JSON.stringify(await fetch('/api/signals?limit=15').then(r=>r.json()),null,2)}u();setInterval(u,15000)</script></html>"""
