@@ -49,12 +49,25 @@ DISCOVERY_SHRINKAGE = max(10.0, float(os.getenv("DISCOVERY_SHRINKAGE", "40")))
 BOOTSTRAP_MIN_CONFIDENCE = max(0.35, min(0.60, float(os.getenv("BOOTSTRAP_MIN_CONFIDENCE", "0.45"))))
 BOOTSTRAP_MAX_CONFIDENCE = max(0.66, min(0.85, float(os.getenv("BOOTSTRAP_MAX_CONFIDENCE", "0.78"))))
 BOOTSTRAP_BLEND_MIN_SAMPLES = max(10, int(os.getenv("BOOTSTRAP_BLEND_MIN_SAMPLES", "20")))
+BREAK_EVEN_TRIGGER_R = max(0.5, float(os.getenv("BREAK_EVEN_TRIGGER_R", "1.0")))
+BREAK_EVEN_LOCK_R = max(0.0, float(os.getenv("BREAK_EVEN_LOCK_R", "0.05")))
+PROFIT_LOCK_TRIGGER_R = max(BREAK_EVEN_TRIGGER_R, float(os.getenv("PROFIT_LOCK_TRIGGER_R", "1.5")))
+PROFIT_LOCK_R = max(BREAK_EVEN_LOCK_R, float(os.getenv("PROFIT_LOCK_R", "0.75")))
+TRAIL_TRIGGER_R = max(PROFIT_LOCK_TRIGGER_R, float(os.getenv("TRAIL_TRIGGER_R", "2.0")))
+TRAIL_DISTANCE_R = max(0.25, float(os.getenv("TRAIL_DISTANCE_R", "0.75")))
+EXIT_POLICY_MIN_SAMPLES = max(100, int(os.getenv("EXIT_POLICY_MIN_SAMPLES", "100")))
+TREND_RUNNER_ENABLED = os.getenv("TREND_RUNNER_ENABLED", "true").lower() == "true"
+TREND_RUNNER_MIN_SCORE = max(0.0, float(os.getenv("TREND_RUNNER_MIN_SCORE", "0.62")))
+TREND_RUNNER_TP_R = max(2.0, float(os.getenv("TREND_RUNNER_TP_R", "3.0")))
+TREND_RUNNER_TRAIL_START_R = max(1.5, float(os.getenv("TREND_RUNNER_TRAIL_START_R", "1.75")))
+TREND_RUNNER_TRAIL_DISTANCE_R = max(0.40, float(os.getenv("TREND_RUNNER_TRAIL_DISTANCE_R", "0.90")))
+VERSION_TAG = "2.3"
 EXECUTION_MIN_CONFIDENCE = max(0.50, min(0.95, float(os.getenv("EXECUTION_MIN_CONFIDENCE", "0.65"))))
 NY = ZoneInfo("America/New_York")
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("market-alert")
-app = FastAPI(title="Market Alert V2.1 — Adaptive Bootstrap Learning / OANDA Practice Only")
+app = FastAPI(title="Market Alert V2.3 — Quality Scalper / OANDA Practice Only")
 state: Dict[str, Any] = {
     "started": datetime.now(timezone.utc).isoformat(),
     "last_scan": None,
@@ -232,6 +245,43 @@ def conn() -> sqlite3.Connection:
             updated_ts TEXT NOT NULL
         )
     """)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS active_trade_management(
+            trade_id TEXT PRIMARY KEY,
+            instrument TEXT NOT NULL,
+            side TEXT NOT NULL,
+            entry REAL NOT NULL,
+            initial_stop REAL NOT NULL,
+            initial_target REAL NOT NULL,
+            current_stop REAL,
+            setup_variant TEXT,
+            policy TEXT NOT NULL,
+            trend_score REAL,
+            opened_ts TEXT NOT NULL,
+            last_r REAL NOT NULL DEFAULT 0,
+            last_action TEXT,
+            break_even_applied INTEGER NOT NULL DEFAULT 0,
+            profit_lock_applied INTEGER NOT NULL DEFAULT 0,
+            trailing_applied INTEGER NOT NULL DEFAULT 0,
+            closed INTEGER NOT NULL DEFAULT 0,
+            updated_ts TEXT NOT NULL
+        )
+    """)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS strategy_version_stats(
+            version_tag TEXT PRIMARY KEY,
+            started_ts TEXT NOT NULL,
+            resolved_trades INTEGER NOT NULL DEFAULT 0,
+            wins INTEGER NOT NULL DEFAULT 0,
+            losses INTEGER NOT NULL DEFAULT 0,
+            total_r REAL NOT NULL DEFAULT 0,
+            avg_r REAL,
+            win_rate REAL,
+            note TEXT
+        )
+    """)
+    c.execute("INSERT OR IGNORE INTO strategy_version_stats(version_tag,started_ts,note) VALUES(?,?,?)",
+              (VERSION_TAG, now_iso(), "Quality Scalper: RR>=1.5, trend runner, active stop management"))
     c.execute("CREATE INDEX IF NOT EXISTS idx_patterns_validated ON discovered_patterns(validated,weight)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_samples_pending ON learning_samples(status,instrument)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_signals_ts ON signals(ts)")
@@ -820,27 +870,125 @@ def dynamic_confidence(r: Dict[str, Any], mlp: Optional[float]) -> Dict[str, Any
     }
 
 
+
+def adaptive_stop_price(side: str, entry: float, initial_stop: float, current_price: float,
+                        policy: str = "BE_PROFIT_TRAIL") -> Dict[str, Any]:
+    """Calculate a tighter stop proposal in R multiples; never widen initial risk."""
+    risk = abs(entry - initial_stop)
+    if risk <= 0:
+        return {"action": "NONE", "new_stop": initial_stop, "r_multiple": 0.0, "reason": "invalid_initial_risk"}
+
+    signed_move = (current_price - entry) if side == "BUY" else (entry - current_price)
+    r_mult = signed_move / risk
+    new_stop, action = initial_stop, "NONE"
+
+    def locked_level(lock_r):
+        return entry + lock_r * risk if side == "BUY" else entry - lock_r * risk
+
+    # Small epsilon avoids floating-point boundary misses exactly at 1R/1.5R/2R.
+    eps = 1e-9
+    if r_mult + eps >= BREAK_EVEN_TRIGGER_R:
+        new_stop, action = locked_level(BREAK_EVEN_LOCK_R), "BREAK_EVEN"
+
+    if policy in ("BE_PROFIT_LOCK", "BE_PROFIT_TRAIL") and r_mult + eps >= PROFIT_LOCK_TRIGGER_R:
+        new_stop, action = locked_level(PROFIT_LOCK_R), "PROFIT_LOCK"
+
+    if policy == "BE_PROFIT_TRAIL" and r_mult + eps >= TRAIL_TRIGGER_R:
+        trailing = current_price - TRAIL_DISTANCE_R * risk if side == "BUY" else current_price + TRAIL_DISTANCE_R * risk
+        new_stop = max(new_stop, trailing) if side == "BUY" else min(new_stop, trailing)
+        action = "TRAIL"
+
+    new_stop = max(initial_stop, new_stop) if side == "BUY" else min(initial_stop, new_stop)
+    return {"action": action, "new_stop": new_stop, "r_multiple": r_mult, "reason": f"{action} at {r_mult:.2f}R"}
+
+
+def exit_policy_for_setup(setup_variant: str) -> Dict[str, Any]:
+    """Promote learned exit policy only after >=100 resolved observations."""
+    default = {"policy": "BE_PROFIT_TRAIL", "source": "DEFAULT_CONSERVATIVE", "samples": 0}
+    try:
+        c = conn()
+        c.execute("""CREATE TABLE IF NOT EXISTS exit_policy_stats (
+            setup_variant TEXT NOT NULL,
+            policy TEXT NOT NULL,
+            samples INTEGER NOT NULL DEFAULT 0,
+            wins INTEGER NOT NULL DEFAULT 0,
+            avg_r REAL NOT NULL DEFAULT 0,
+            updated_ts TEXT,
+            PRIMARY KEY(setup_variant, policy)
+        )""")
+        rows = c.execute(
+            "SELECT policy,samples,wins,avg_r FROM exit_policy_stats WHERE setup_variant=? AND samples>=?",
+            (setup_variant, EXIT_POLICY_MIN_SAMPLES)
+        ).fetchall()
+        c.commit(); c.close()
+        if not rows:
+            return default
+        best = max(rows, key=lambda x: (float(x[3]), float(x[2]) / max(1, int(x[1]))))
+        return {"policy": best[0], "source": "LEARNED_EXIT_POLICY",
+                "samples": int(best[1]), "avg_r": float(best[3])}
+    except Exception:
+        return default
+
+
+def trend_runner_score(r: Dict[str, Any]) -> float:
+    f = r.get("features", {})
+    sig = r.get("signal")
+    score = 0.0
+    slope = abs(float(f.get("m15_slope_atr", 0) or 0))
+    gap = abs(float(f.get("m15_gap_atr", 0) or 0))
+    m5 = float(f.get("m5_momentum", 0) or 0)
+    m1 = float(f.get("m1_momentum", 0) or 0)
+    vol = float(f.get("volatility_ratio", 0) or 0)
+    ext = float(f.get("extension_atr", 0) or 0)
+    filters = r.get("filters", {})
+    if slope >= 0.30: score += 0.20
+    elif slope >= 0.18: score += 0.10
+    if gap >= 0.55: score += 0.10
+    aligned = (sig == "BUY" and m5 > 0 and m1 > 0) or (sig == "SELL" and m5 < 0 and m1 < 0)
+    if aligned: score += 0.25
+    if filters.get("m5_structure"): score += 0.15
+    if filters.get("m1_confirmation"): score += 0.10
+    if 0.80 <= vol <= 1.50: score += 0.10
+    if ext <= 1.20: score += 0.05
+    if r.get("alignment") == "CONFIRMA": score += 0.10
+    if r.get("alignment") == "CONTRADICE": score -= 0.20
+    return clamp(score, 0.0, 1.0)
+
+def desired_target_for_trade(r: Dict[str, Any]) -> Dict[str, Any]:
+    entry, stop = float(r["entry"]), float(r["stop"])
+    risk = abs(entry - stop)
+    base_target = float(r["target"])
+    tscore = trend_runner_score(r)
+    if not TREND_RUNNER_ENABLED or tscore < TREND_RUNNER_MIN_SCORE or risk <= 0:
+        return {"target": base_target, "runner": False, "trend_score": tscore}
+    target = entry + TREND_RUNNER_TP_R*risk if r["signal"]=="BUY" else entry - TREND_RUNNER_TP_R*risk
+    return {"target": target, "runner": True, "trend_score": tscore}
+
+def quality_entry_gate(r: Dict[str, Any], conf: Dict[str, Any]) -> Dict[str, Any]:
+    rr = float(r.get("rr_raw", 0) or 0)
+    if rr < 1.5:
+        return {"ok": False, "reason": f"RR insuficiente: {rr:.2f} < 1.50"}
+    ext = float((r.get("features") or {}).get("extension_atr", 0) or 0)
+    p = float(conf.get("probability") or 0)
+    if ext > 1.50 and p < 0.75:
+        return {"ok": False, "reason": f"Entrada tardía: extensión {ext:.2f} ATR con confianza {p:.1%}"}
+    return {"ok": True, "reason": "quality_ok"}
+
 def execution_decision(r: Dict[str, Any], conf: Dict[str, Any]) -> Dict[str, Any]:
     if r["signal"] == "WAIT":
         return {"execute": False, "reason": "WAIT: no hay señal direccional"}
-
     if r.get("blocked"):
         failed = [k for k,v in r.get("safety_checks", {}).items() if not v]
         return {"execute": False, "reason": "Safety veto: " + ", ".join(failed)}
-
+    q = quality_entry_gate(r, conf)
+    if not q["ok"]:
+        return {"execute": False, "reason": "Quality veto: " + q["reason"]}
     p = float(conf.get("probability") or 0)
     required = float(conf.get("required_confidence") or EXECUTION_MIN_CONFIDENCE)
     phase = "learned" if conf.get("mature") else "bootstrap"
-
     if p >= required:
-        return {
-            "execute": True,
-            "reason": f"Adaptive gate ({phase}): confianza {p:.1%} >= {required:.1%}; puede ejecutar en Practice"
-        }
-    return {
-        "execute": False,
-        "reason": f"Adaptive gate ({phase}): confianza {p:.1%} < {required:.1%}; continúa observando"
-    }
+        return {"execute": True, "reason": f"Adaptive gate ({phase}): confianza {p:.1%} >= {required:.1%}; RR={float(r.get('rr_raw',0)):.2f}"}
+    return {"execute": False, "reason": f"Adaptive gate ({phase}): confianza {p:.1%} < {required:.1%}"}
 
 
 def save_decision(r: Dict[str, Any], conf: Dict[str, Any], executed: int, reason: str):
@@ -1055,17 +1203,82 @@ def train_shadow_model(force: bool = False) -> Dict[str, Any]:
        json.dumps({"validation":"TimeSeriesSplit_walk_forward","folds":folds,"brier":avg["brier"]}))); c.commit(); c.close()
     return {"trained":True,"samples":len(y),"validation":"TimeSeriesSplit_walk_forward","folds":folds,"average":avg}
 
+
+async def replace_trade_stop(client: httpx.AsyncClient, trade_id: str, price: float) -> Dict[str, Any]:
+    body = {"stopLoss": {"price": f"{price:.5f}", "timeInForce": "GTC"}}
+    return await req(client, "PUT", f"/v3/accounts/{{account}}/trades/{trade_id}/orders", body)
+
+def register_trade_management(trade_id: str, r: Dict[str, Any], target: float):
+    if not trade_id:
+        return
+    tscore = trend_runner_score(r)
+    policy = "BE_PROFIT_TRAIL"
+    c = conn()
+    c.execute("""INSERT OR REPLACE INTO active_trade_management(
+        trade_id,instrument,side,entry,initial_stop,initial_target,current_stop,setup_variant,policy,trend_score,
+        opened_ts,last_r,last_action,updated_ts,closed)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,0)""",
+        (trade_id,r["instrument"],r["signal"],float(r["entry"]),float(r["stop"]),float(target),
+         float(r["stop"]),setup_variant(r),policy,tscore,now_iso(),0.0,"OPEN",now_iso()))
+    c.commit(); c.close()
+
+async def manage_open_trades(client: httpx.AsyncClient, instrument: str, current_price: float) -> int:
+    c=conn()
+    rows=[dict(x) for x in c.execute(
+        "SELECT * FROM active_trade_management WHERE instrument=? AND closed=0",(instrument,)
+    ).fetchall()]
+    c.close()
+    changed=0
+    for tr in rows:
+        proposal=adaptive_stop_price(tr["side"],float(tr["entry"]),float(tr["initial_stop"]),current_price,tr["policy"])
+        if float(tr.get("trend_score") or 0) >= TREND_RUNNER_MIN_SCORE and proposal["r_multiple"] >= TREND_RUNNER_TRAIL_START_R:
+            risk=abs(float(tr["entry"])-float(tr["initial_stop"]))
+            runner_stop=current_price-TREND_RUNNER_TRAIL_DISTANCE_R*risk if tr["side"]=="BUY" else current_price+TREND_RUNNER_TRAIL_DISTANCE_R*risk
+            proposal["new_stop"]=max(float(proposal["new_stop"]),runner_stop) if tr["side"]=="BUY" else min(float(proposal["new_stop"]),runner_stop)
+            proposal["action"]="TREND_RUNNER_TRAIL"
+        old=float(tr["current_stop"] or tr["initial_stop"])
+        improves=proposal["new_stop"]>old+1e-7 if tr["side"]=="BUY" else proposal["new_stop"]<old-1e-7
+        if proposal["action"]!="NONE" and improves:
+            try:
+                await replace_trade_stop(client,tr["trade_id"],float(proposal["new_stop"]))
+                c=conn()
+                c.execute("""UPDATE active_trade_management SET current_stop=?,last_r=?,last_action=?,
+                  break_even_applied=MAX(break_even_applied,?),profit_lock_applied=MAX(profit_lock_applied,?),
+                  trailing_applied=MAX(trailing_applied,?),updated_ts=? WHERE trade_id=?""",
+                  (float(proposal["new_stop"]),float(proposal["r_multiple"]),proposal["action"],
+                   int(proposal["action"] in ("BREAK_EVEN","PROFIT_LOCK","TRAIL","TREND_RUNNER_TRAIL")),
+                   int(proposal["action"] in ("PROFIT_LOCK","TRAIL","TREND_RUNNER_TRAIL")),
+                   int(proposal["action"] in ("TRAIL","TREND_RUNNER_TRAIL")),
+                   now_iso(),tr["trade_id"]))
+                c.commit(); c.close()
+                changed += 1
+            except Exception as e:
+                log.exception("Trade management update failed: %s",e)
+        else:
+            c=conn()
+            c.execute("UPDATE active_trade_management SET last_r=?,updated_ts=? WHERE trade_id=?",
+                      (float(proposal["r_multiple"]),now_iso(),tr["trade_id"]))
+            c.commit(); c.close()
+    return changed
+
 async def scan(client: httpx.AsyncClient, inst: str) -> Dict[str, Any]:
     m15, m5, m1 = await asyncio.gather(
         candles(client, inst, "M15", 100),
         candles(client, inst, "M5", 130),
         candles(client, inst, "M1", max(220, OUTCOME_HORIZON_MIN + 30))
     )
+    current_price=float(m1[-1]["c"]) if m1 else 0.0
+    managed_changes=await manage_open_trades(client,inst,current_price) if current_price else 0
     resolved = resolve_pending(inst, m1)
     if resolved:
         refresh_discovered_patterns()
     r = analyze(m15, m5, m1, inst)
     r = await news(client, r) if r["signal"] != "WAIT" and r["technical"] >= 50 else {**r, "alignment": "N/A"}
+    target_plan=desired_target_for_trade(r) if r["signal"]!="WAIT" else {"target":r.get("target"),"runner":False,"trend_score":0.0}
+    if r["signal"]!="WAIT":
+        r["managed_target"]=target_plan["target"]
+        r["trend_runner"]=target_plan["runner"]
+        r["trend_score"]=target_plan["trend_score"]
     mlp = load_shadow_probability(r["features"]) if r["signal"] != "WAIT" else None
     conf = dynamic_confidence(r, mlp) if r["signal"] != "WAIT" else {
         "probability": None, "source": "WAIT", "samples": 0, "local_samples": 0,
@@ -1084,6 +1297,7 @@ async def scan(client: httpx.AsyncClient, inst: str) -> Dict[str, Any]:
             if r["signal"]=="SELL": slippage=-slippage
             protection=await verify_trade_protection(client,trade_id)
             if protection["status"]!="OK": decision["reason"] += "; PROTECTION_ERROR"
+            register_trade_management(trade_id,r,float(r.get("managed_target",r["target"])))
             log.info("PRACTICE EXECUTED %s %s quality=%s confidence=%s order=%s slippage=%.2f protection=%s",
                      r["signal"], inst, r["score"], conf.get("probability"), oid, slippage, protection["status"])
         elif x and x.get("skipped"):
@@ -1112,6 +1326,10 @@ async def scan(client: httpx.AsyncClient, inst: str) -> Dict[str, Any]:
         "performance_penalty": conf.get("performance_penalty"),
         "setup_variant": conf.get("variant"),
         "decision": decision,
+        "management_updates_this_cycle": managed_changes,
+        "trend_runner": r.get("trend_runner",False),
+        "trend_score": r.get("trend_score",0.0),
+        "managed_target": r.get("managed_target",r.get("target")),
         "learning_resolved_this_cycle": resolved
     }
 
@@ -1340,7 +1558,39 @@ async def discovery():
 async def home():
     return """<!doctype html><html lang='es'><meta name='viewport' content='width=device-width'><title>Market Alert V1.7</title>
 <style>body{font-family:system-ui;background:#0b1020;color:#eef2ff;max-width:1050px;margin:auto;padding:24px}.c{background:#151c32;border:1px solid #2c3656;border-radius:16px;padding:18px;margin:12px 0}pre{white-space:pre-wrap;word-break:break-word;background:#080c17;padding:14px;border-radius:12px}.tag{display:inline-block;padding:5px 9px;border-radius:999px;background:#25304f;margin-right:6px}</style>
-<h1>Market Alert V2.1 · Adaptive Bootstrap Learning</h1><div class=c><span class=tag>OANDA PRACTICE ONLY</span><span class=tag>24/7</span><span class=tag>Sin límite diario</span><span class=tag>Confianza calibrada</span>
+<h1>Market Alert V2.3 · Quality Scalper</h1><div class=c><span class=tag>OANDA PRACTICE ONLY</span><span class=tag>24/7</span><span class=tag>Sin límite diario</span><span class=tag>Confianza calibrada</span>
 <p><b>Quality Score ≠ probabilidad.</b> La confianza dinámica se calibra con resultados reales. Con poca muestra se limita deliberadamente y el 90% requiere evidencia sustancial.</p></div>
 <div class=c><h2>Estado</h2><pre id=s>Cargando…</pre></div><div class=c><h2>Aprendizaje</h2><pre id=l>Cargando…</pre></div><div class=c><h2>Última decisión</h2><pre id=d>Cargando…</pre></div><div class=c><h2>Últimas señales</h2><pre id=h>Cargando…</pre></div>
 <script>async function u(){s.textContent=JSON.stringify(await fetch('/api/status').then(r=>r.json()),null,2);l.textContent=JSON.stringify(await fetch('/api/learning').then(r=>r.json()),null,2);d.textContent=JSON.stringify(await fetch('/api/decisions?limit=5').then(r=>r.json()),null,2);h.textContent=JSON.stringify(await fetch('/api/signals?limit=15').then(r=>r.json()),null,2)}u();setInterval(u,15000)</script></html>"""
+
+@app.get("/api/trade-management")
+def trade_management_status():
+    return {
+        "ok": True,
+        "mode": "ADAPTIVE_TRADE_MANAGEMENT",
+        "break_even_trigger_r": BREAK_EVEN_TRIGGER_R,
+        "break_even_lock_r": BREAK_EVEN_LOCK_R,
+        "profit_lock_trigger_r": PROFIT_LOCK_TRIGGER_R,
+        "profit_lock_r": PROFIT_LOCK_R,
+        "trail_trigger_r": TRAIL_TRIGGER_R,
+        "trail_distance_r": TRAIL_DISTANCE_R,
+        "exit_policy_min_samples": EXIT_POLICY_MIN_SAMPLES,
+        "default_policy": "BE_PROFIT_TRAIL",
+        "practice_only": True,
+    }
+
+
+@app.get("/api/open-trade-management")
+def open_trade_management():
+    c=conn()
+    rows=[dict(x) for x in c.execute("SELECT * FROM active_trade_management WHERE closed=0 ORDER BY opened_ts DESC").fetchall()]
+    c.close()
+    return rows
+
+@app.get("/api/version-stats")
+def version_stats():
+    c=conn()
+    rows=[dict(x) for x in c.execute("SELECT * FROM strategy_version_stats ORDER BY started_ts DESC").fetchall()]
+    c.close()
+    return rows
+
