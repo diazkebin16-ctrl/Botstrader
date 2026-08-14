@@ -61,13 +61,18 @@ TREND_RUNNER_MIN_SCORE = max(0.0, float(os.getenv("TREND_RUNNER_MIN_SCORE", "0.6
 TREND_RUNNER_TP_R = max(2.0, float(os.getenv("TREND_RUNNER_TP_R", "3.0")))
 TREND_RUNNER_TRAIL_START_R = max(1.5, float(os.getenv("TREND_RUNNER_TRAIL_START_R", "1.75")))
 TREND_RUNNER_TRAIL_DISTANCE_R = max(0.40, float(os.getenv("TREND_RUNNER_TRAIL_DISTANCE_R", "0.90")))
-VERSION_TAG = "2.3"
+VERSION_TAG = "2.4"
+ENTRY_TIMING_ENABLED = os.getenv("ENTRY_TIMING_ENABLED", "true").lower() == "true"
+MAX_ENTRY_EXTENSION_ATR = max(0.5, float(os.getenv("MAX_ENTRY_EXTENSION_ATR", "1.20")))
+MIN_ROOM_TO_BARRIER_R = max(1.0, float(os.getenv("MIN_ROOM_TO_BARRIER_R", "1.50")))
+REENTRY_REQUIRE_NEW_CANDLE = os.getenv("REENTRY_REQUIRE_NEW_CANDLE", "true").lower() == "true"
+REENTRY_REQUIRE_STRUCTURE_CHANGE = os.getenv("REENTRY_REQUIRE_STRUCTURE_CHANGE", "true").lower() == "true"
 EXECUTION_MIN_CONFIDENCE = max(0.50, min(0.95, float(os.getenv("EXECUTION_MIN_CONFIDENCE", "0.65"))))
 NY = ZoneInfo("America/New_York")
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("market-alert")
-app = FastAPI(title="Market Alert V2.3 — Quality Scalper / OANDA Practice Only")
+app = FastAPI(title="Market Alert V2.4 — Entry Timing / OANDA Practice Only")
 state: Dict[str, Any] = {
     "started": datetime.now(timezone.utc).isoformat(),
     "last_scan": None,
@@ -965,14 +970,62 @@ def desired_target_for_trade(r: Dict[str, Any]) -> Dict[str, Any]:
     return {"target": target, "runner": True, "trend_score": tscore}
 
 def quality_entry_gate(r: Dict[str, Any], conf: Dict[str, Any]) -> Dict[str, Any]:
+    """Reject low-RR and late/chasing entries without imposing a clock-based cooldown."""
     rr = float(r.get("rr_raw", 0) or 0)
     if rr < 1.5:
         return {"ok": False, "reason": f"RR insuficiente: {rr:.2f} < 1.50"}
-    ext = float((r.get("features") or {}).get("extension_atr", 0) or 0)
+
+    if not ENTRY_TIMING_ENABLED:
+        return {"ok": True, "reason": "quality_ok"}
+
+    f = r.get("features") or {}
+    ext = float(f.get("extension_atr", 0) or 0)
     p = float(conf.get("probability") or 0)
-    if ext > 1.50 and p < 0.75:
-        return {"ok": False, "reason": f"Entrada tardía: extensión {ext:.2f} ATR con confianza {p:.1%}"}
-    return {"ok": True, "reason": "quality_ok"}
+
+    # Strong anti-chase rule: after a large impulse, wait for price/structure to reset.
+    if ext > MAX_ENTRY_EXTENSION_ATR:
+        return {
+            "ok": False,
+            "reason": f"Entrada tardía/chasing: extensión {ext:.2f} ATR > {MAX_ENTRY_EXTENSION_ATR:.2f}; esperar retroceso o nueva estructura"
+        }
+
+    # Optional room-to-barrier value can be supplied by the analyzer when H1/M15
+    # support/resistance is available. If absent, it does not fabricate a barrier.
+    room_r = r.get("room_to_barrier_r")
+    if room_r is not None and float(room_r) < MIN_ROOM_TO_BARRIER_R:
+        return {
+            "ok": False,
+            "reason": f"Poco recorrido disponible: {float(room_r):.2f}R < {MIN_ROOM_TO_BARRIER_R:.2f}R antes de soporte/resistencia"
+        }
+
+    # Borderline extension requires stronger evidence.
+    if ext > 0.90 and p < 0.72:
+        return {
+            "ok": False,
+            "reason": f"Entrada adelantada/tardía dudosa: extensión {ext:.2f} ATR y confianza {p:.1%}; esperar mejor precio"
+        }
+
+    return {"ok": True, "reason": "quality_timing_ok"}
+
+
+
+def reentry_guard(r: Dict[str, Any]) -> Dict[str, Any]:
+    """Avoid immediate duplicate/revenge-style re-entry, but never waits a fixed number of minutes."""
+    if not REENTRY_REQUIRE_NEW_CANDLE:
+        return {"ok": True, "reason": "disabled"}
+    candle = r.get("candle_ts")
+    if not candle:
+        return {"ok": True, "reason": "no_candle"}
+    c = conn()
+    row = c.execute(
+        """SELECT candle_ts, signal, executed FROM decisions
+           WHERE instrument=? ORDER BY id DESC LIMIT 1""",
+        (r["instrument"],)
+    ).fetchone()
+    c.close()
+    if row and row["executed"] and row["candle_ts"] == candle:
+        return {"ok": False, "reason": "misma vela que la operación anterior; esperar una señal nueva"}
+    return {"ok": True, "reason": "new_opportunity"}
 
 def execution_decision(r: Dict[str, Any], conf: Dict[str, Any]) -> Dict[str, Any]:
     if r["signal"] == "WAIT":
@@ -983,6 +1036,9 @@ def execution_decision(r: Dict[str, Any], conf: Dict[str, Any]) -> Dict[str, Any
     q = quality_entry_gate(r, conf)
     if not q["ok"]:
         return {"execute": False, "reason": "Quality veto: " + q["reason"]}
+    rg = reentry_guard(r)
+    if not rg["ok"]:
+        return {"execute": False, "reason": "Re-entry veto: " + rg["reason"]}
     p = float(conf.get("probability") or 0)
     required = float(conf.get("required_confidence") or EXECUTION_MIN_CONFIDENCE)
     phase = "learned" if conf.get("mature") else "bootstrap"
@@ -1558,7 +1614,7 @@ async def discovery():
 async def home():
     return """<!doctype html><html lang='es'><meta name='viewport' content='width=device-width'><title>Market Alert V1.7</title>
 <style>body{font-family:system-ui;background:#0b1020;color:#eef2ff;max-width:1050px;margin:auto;padding:24px}.c{background:#151c32;border:1px solid #2c3656;border-radius:16px;padding:18px;margin:12px 0}pre{white-space:pre-wrap;word-break:break-word;background:#080c17;padding:14px;border-radius:12px}.tag{display:inline-block;padding:5px 9px;border-radius:999px;background:#25304f;margin-right:6px}</style>
-<h1>Market Alert V2.3 · Quality Scalper</h1><div class=c><span class=tag>OANDA PRACTICE ONLY</span><span class=tag>24/7</span><span class=tag>Sin límite diario</span><span class=tag>Confianza calibrada</span>
+<h1>Market Alert V2.4 · Entry Timing</h1><div class=c><span class=tag>OANDA PRACTICE ONLY</span><span class=tag>24/7</span><span class=tag>Sin límite diario</span><span class=tag>Confianza calibrada</span>
 <p><b>Quality Score ≠ probabilidad.</b> La confianza dinámica se calibra con resultados reales. Con poca muestra se limita deliberadamente y el 90% requiere evidencia sustancial.</p></div>
 <div class=c><h2>Estado</h2><pre id=s>Cargando…</pre></div><div class=c><h2>Aprendizaje</h2><pre id=l>Cargando…</pre></div><div class=c><h2>Última decisión</h2><pre id=d>Cargando…</pre></div><div class=c><h2>Últimas señales</h2><pre id=h>Cargando…</pre></div>
 <script>async function u(){s.textContent=JSON.stringify(await fetch('/api/status').then(r=>r.json()),null,2);l.textContent=JSON.stringify(await fetch('/api/learning').then(r=>r.json()),null,2);d.textContent=JSON.stringify(await fetch('/api/decisions?limit=5').then(r=>r.json()),null,2);h.textContent=JSON.stringify(await fetch('/api/signals?limit=15').then(r=>r.json()),null,2)}u();setInterval(u,15000)</script></html>"""
