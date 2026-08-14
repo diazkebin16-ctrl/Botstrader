@@ -61,7 +61,7 @@ TREND_RUNNER_MIN_SCORE = max(0.0, float(os.getenv("TREND_RUNNER_MIN_SCORE", "0.6
 TREND_RUNNER_TP_R = max(2.0, float(os.getenv("TREND_RUNNER_TP_R", "3.0")))
 TREND_RUNNER_TRAIL_START_R = max(1.5, float(os.getenv("TREND_RUNNER_TRAIL_START_R", "1.75")))
 TREND_RUNNER_TRAIL_DISTANCE_R = max(0.40, float(os.getenv("TREND_RUNNER_TRAIL_DISTANCE_R", "0.90")))
-VERSION_TAG = "2.8"
+VERSION_TAG = "2.9"
 ENTRY_TIMING_ENABLED = os.getenv("ENTRY_TIMING_ENABLED", "true").lower() == "true"
 MAX_ENTRY_EXTENSION_ATR = max(0.5, float(os.getenv("MAX_ENTRY_EXTENSION_ATR", "1.20")))
 MIN_ROOM_TO_BARRIER_R = max(1.0, float(os.getenv("MIN_ROOM_TO_BARRIER_R", "1.50")))
@@ -82,12 +82,14 @@ MIN_TAKE_PROFIT_PIPS = max(0.1, float(os.getenv("MIN_TAKE_PROFIT_PIPS", "7.0")))
 MIN_STOP_PIPS = max(0.1, float(os.getenv("MIN_STOP_PIPS", "3.0")))
 STOP_ATR_M1_MULT = max(0.1, float(os.getenv("STOP_ATR_M1_MULT", "1.50")))
 STOP_ATR_M5_MULT = max(0.1, float(os.getenv("STOP_ATR_M5_MULT", "0.40")))
+M1_CONFIRMATION_REQUIRED = os.getenv("M1_CONFIRMATION_REQUIRED", "true").lower() == "true"
+DEDUP_SIGNAL_SNAPSHOTS = os.getenv("DEDUP_SIGNAL_SNAPSHOTS", "true").lower() == "true"
 EXECUTION_MIN_CONFIDENCE = max(0.50, min(0.95, float(os.getenv("EXECUTION_MIN_CONFIDENCE", "0.65"))))
 NY = ZoneInfo("America/New_York")
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("market-alert")
-app = FastAPI(title="Market Alert V2.8 — Adaptive Risk Engine / OANDA Practice Only")
+app = FastAPI(title="Market Alert V2.9 — Closed-Loop Learning / OANDA Practice Only")
 state: Dict[str, Any] = {
     "started": datetime.now(timezone.utc).isoformat(),
     "last_scan": None,
@@ -652,7 +654,7 @@ def _direction_hypothesis(h1, m15, m5, m1, inst: str, sig: str) -> Dict[str, Any
     min_tp_distance=max(risk*MIN_RR, MIN_TAKE_PROFIT_PIPS*pip)
     target=entry+min_tp_distance if sig=="BUY" else entry-min_tp_distance
     barrier_allows_target=True
-    if active and barrier_class=="STRONG":
+    if active and barrier_class=="STRONG" and not bool(active.get("broken")):
         buffer=risk*STRUCTURAL_BARRIER_BUFFER_R
         cap=barrier-buffer if sig=="BUY" else barrier+buffer
         barrier_allows_target=(target<=cap) if sig=="BUY" else (target>=cap)
@@ -1299,6 +1301,11 @@ def quality_entry_gate(r: Dict[str, Any], conf: Dict[str, Any]) -> Dict[str, Any
     if rr < 1.5 and r.get("barrier_class")=="STRONG":
         return {"ok":False,"reason":f"barrera fuerte deja solo {rr:.2f}R < 1.50R"}
 
+    # M1 is the execution trigger, not the directional thesis. We still record the
+    # BUY/SELL hypothesis for learning, but do not put money behind it until M1 agrees.
+    if M1_CONFIRMATION_REQUIRED and not bool((r.get("filters") or {}).get("m1_confirmation")):
+        return {"ok":False,"reason":"falta confirmación M1; hipótesis registrada, entrada aplazada"}
+
     if not ENTRY_TIMING_ENABLED:
         return {"ok":True,"reason":"quality_ok"}
 
@@ -1355,6 +1362,13 @@ def execution_decision(r: Dict[str, Any], conf: Dict[str, Any]) -> Dict[str, Any
 
 def save_decision(r: Dict[str, Any], conf: Dict[str, Any], executed: int, reason: str):
     c = conn()
+    if DEDUP_SIGNAL_SNAPSHOTS and not executed:
+        prev = c.execute("""SELECT id FROM decision_log WHERE instrument=? AND candle_ts=? AND signal=? AND reason=?
+                            ORDER BY id DESC LIMIT 1""",
+                         (r["instrument"], r.get("candle_ts"), r["signal"], reason)).fetchone()
+        if prev:
+            c.close()
+            return
     c.execute("""
         INSERT INTO decision_log(ts,candle_ts,instrument,signal,setup_variant,quality_score,dynamic_confidence,
           confidence_source,confidence_samples,required_confidence,recent_win_rate,performance_penalty,
@@ -1450,6 +1464,17 @@ async def execute(client: httpx.AsyncClient, r: Dict[str, Any]):
 
 def save_signal(r: Dict[str, Any], executed: int, order_id: str, ml_probability: Optional[float], conf: Dict[str, Any], decision_reason: str) -> int:
     c = conn()
+    # One learning observation per market opportunity snapshot. The scanner may run
+    # more than once against the same M1 candle; those repeats must not inflate the
+    # empirical sample count or dominate the training set.
+    if DEDUP_SIGNAL_SNAPSHOTS and not executed and r.get("candle_ts"):
+        prev = c.execute("""SELECT id FROM signals WHERE instrument=? AND candle_ts=? AND signal=?
+                            ORDER BY id DESC LIMIT 1""",
+                         (r["instrument"], r.get("candle_ts"), r["signal"])).fetchone()
+        if prev:
+            signal_id = int(prev["id"])
+            c.close()
+            return signal_id
     cur = c.execute("""
         INSERT INTO signals(ts,candle_ts,instrument,signal,technical,score,alignment,blocked,entry,stop,target,rr,executed,order_id,ml_probability,
           dynamic_confidence,confidence_source,confidence_samples,required_confidence,decision_reason,setup_variant,features_json,filters_json)
@@ -1526,10 +1551,15 @@ def learning_stats() -> Dict[str, Any]:
     executed_wins = c.execute("SELECT COUNT(*) n FROM learning_samples WHERE label=1 AND executed=1").fetchone()["n"]
     blocked_resolved = c.execute("SELECT COUNT(*) n FROM learning_samples WHERE label IS NOT NULL AND blocked=1").fetchone()["n"]
     blocked_wins = c.execute("SELECT COUNT(*) n FROM learning_samples WHERE label=1 AND blocked=1").fetchone()["n"]
+    pending = c.execute("SELECT COUNT(*) n FROM learning_samples WHERE status='PENDING'").fetchone()["n"]
+    ambiguous = c.execute("SELECT COUNT(*) n FROM learning_samples WHERE status='AMBIGUOUS'").fetchone()["n"]
+    timeouts = c.execute("SELECT COUNT(*) n FROM learning_samples WHERE status='TIMEOUT'").fetchone()["n"]
     run = c.execute("SELECT * FROM model_runs ORDER BY id DESC LIMIT 1").fetchone()
     c.close()
     return {
         "samples_total": total, "resolved_labeled": resolved, "pending_or_unlabeled": total - resolved,
+        "pending": pending, "ambiguous": ambiguous, "timeouts": timeouts,
+        "db_path": DB, "persistent_db_recommended": DB.startswith("/data/"),
         "win_rate_all": (wins / resolved) if resolved else None,
         "executed_resolved": executed_resolved, "win_rate_executed": (executed_wins / executed_resolved) if executed_resolved else None,
         "blocked_resolved": blocked_resolved, "counterfactual_win_rate_blocked": (blocked_wins / blocked_resolved) if blocked_resolved else None,
@@ -1635,6 +1665,17 @@ async def scan(client: httpx.AsyncClient, inst: str) -> Dict[str, Any]:
     resolved = resolve_pending(inst, m1)
     if resolved:
         refresh_discovered_patterns()
+        # Close the learning loop as soon as enough labeled outcomes exist instead
+        # of waiting for the hourly maintenance tick. Training still enforces its
+        # own minimum sample and temporal-validation requirements.
+        ctmp = conn()
+        labeled_now = ctmp.execute("SELECT COUNT(*) n FROM learning_samples WHERE label IN (0,1)").fetchone()["n"]
+        ctmp.close()
+        if labeled_now >= ML_MIN_SAMPLES:
+            try:
+                state["learning"] = {**train_shadow_model(force=False), "last_train": now_iso(), "model_ready": Path(MODEL_PATH).exists()}
+            except Exception as e:
+                log.exception("immediate learning refresh failed: %s", e)
     r = analyze(h1, m15, m5, m1, inst)
     r = await news(client, r) if r["signal"] != "WAIT" and r["technical"] >= 50 else {**r, "alignment": "N/A"}
     target_plan=desired_target_for_trade(r) if r["signal"]!="WAIT" else {"target":r.get("target"),"runner":False,"trend_score":0.0}
