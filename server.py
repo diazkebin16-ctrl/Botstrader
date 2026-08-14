@@ -61,7 +61,7 @@ TREND_RUNNER_MIN_SCORE = max(0.0, float(os.getenv("TREND_RUNNER_MIN_SCORE", "0.6
 TREND_RUNNER_TP_R = max(2.0, float(os.getenv("TREND_RUNNER_TP_R", "3.0")))
 TREND_RUNNER_TRAIL_START_R = max(1.5, float(os.getenv("TREND_RUNNER_TRAIL_START_R", "1.75")))
 TREND_RUNNER_TRAIL_DISTANCE_R = max(0.40, float(os.getenv("TREND_RUNNER_TRAIL_DISTANCE_R", "0.90")))
-VERSION_TAG = "3.7"
+VERSION_TAG = "3.8"
 ENTRY_TIMING_ENABLED = os.getenv("ENTRY_TIMING_ENABLED", "true").lower() == "true"
 MAX_ENTRY_EXTENSION_ATR = max(0.5, float(os.getenv("MAX_ENTRY_EXTENSION_ATR", "1.20")))
 MIN_ROOM_TO_BARRIER_R = max(1.0, float(os.getenv("MIN_ROOM_TO_BARRIER_R", "1.50")))
@@ -125,6 +125,11 @@ MULTI_FILTER_MIN_JOINT_SAMPLES = max(10, int(os.getenv("MULTI_FILTER_MIN_JOINT_S
 MULTI_FILTER_MIN_JOINT_COVERAGE = max(0.05, min(0.40, float(os.getenv("MULTI_FILTER_MIN_JOINT_COVERAGE", "0.10"))))
 MULTI_FILTER_MAX_WR_DROP = max(0.00, min(0.20, float(os.getenv("MULTI_FILTER_MAX_WR_DROP", "0.05"))))
 ACTIVE_RULE_HEALTH_BLOCK = 50
+WEEKEND_RESEARCH_ENABLED = os.getenv("WEEKEND_RESEARCH_ENABLED", "true").lower() == "true"
+WEEKEND_NEWS_INTERVAL_MIN = max(30, int(os.getenv("WEEKEND_NEWS_INTERVAL_MIN", "60")))
+WEEKEND_SIGNAL_CONTEXT_HOURS = max(1, min(48, int(os.getenv("WEEKEND_SIGNAL_CONTEXT_HOURS", "24"))))
+WEEKEND_REACTION_HORIZONS = (1, 4, 12, 24)
+MARKET_TZ = ZoneInfo("America/New_York")
 EXTERNAL_INCLUDE_SHADOW = os.getenv("EXTERNAL_INCLUDE_SHADOW", "true").lower() == "true"
 EXTERNAL_SHADOW_BASELINE_WEIGHT = max(0.10, min(1.0, float(os.getenv("EXTERNAL_SHADOW_BASELINE_WEIGHT", "0.50"))))
 EXTERNAL_SHADOW_VARIANT_WEIGHT = max(0.05, min(EXTERNAL_SHADOW_BASELINE_WEIGHT, float(os.getenv("EXTERNAL_SHADOW_VARIANT_WEIGHT", "0.25"))))
@@ -134,7 +139,7 @@ NY = ZoneInfo("America/New_York")
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("market-alert")
-app = FastAPI(title="Market Alert V3.7 — Parallel Filter Evolution / OANDA Practice Only")
+app = FastAPI(title="Market Alert V3.8 — Weekend Context Research / OANDA Practice Only")
 state: Dict[str, Any] = {
     "started": datetime.now(timezone.utc).isoformat(),
     "last_scan": None,
@@ -310,6 +315,24 @@ def conn() -> sqlite3.Connection:
             weight REAL NOT NULL,
             validated INTEGER NOT NULL,
             updated_ts TEXT NOT NULL
+        )
+    """)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS weekend_context(
+            id INTEGER PRIMARY KEY AUTOINCREMENT, weekend_id TEXT NOT NULL, instrument TEXT NOT NULL,
+            bucket_ts TEXT NOT NULL, collected_ts TEXT NOT NULL, bias TEXT NOT NULL,
+            positive_hits INTEGER NOT NULL DEFAULT 0, negative_hits INTEGER NOT NULL DEFAULT 0,
+            article_count INTEGER NOT NULL DEFAULT 0, titles_json TEXT NOT NULL DEFAULT '[]',
+            UNIQUE(weekend_id,instrument,bucket_ts)
+        )
+    """)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS weekend_sessions(
+            weekend_id TEXT NOT NULL, instrument TEXT NOT NULL, opened_ts TEXT NOT NULL, open_price REAL NOT NULL,
+            context_bias TEXT NOT NULL, context_score REAL NOT NULL DEFAULT 0, article_count INTEGER NOT NULL DEFAULT 0,
+            context_json TEXT NOT NULL DEFAULT '{}', reaction_1h_pips REAL, reaction_4h_pips REAL,
+            reaction_12h_pips REAL, reaction_24h_pips REAL, updated_ts TEXT NOT NULL,
+            PRIMARY KEY(weekend_id,instrument)
         )
     """)
     c.execute("""
@@ -495,6 +518,8 @@ def conn() -> sqlite3.Connection:
     c.execute("CREATE INDEX IF NOT EXISTS idx_patterns_validated ON discovered_patterns(validated,weight)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_shadow_pending ON shadow_trials(status,instrument)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_filter_stage ON filter_hypotheses(stage,total_samples)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_weekend_context ON weekend_context(weekend_id,instrument,bucket_ts)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_weekend_sessions_open ON weekend_sessions(instrument,opened_ts)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_active_research_status ON active_research_rules(status,activated_ts)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_research_rule_audit ON research_rule_audit(source,rule_key,ts)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_autonomous_stage ON autonomous_hypotheses(stage,validation_samples)")
@@ -1703,6 +1728,104 @@ def save_signal(r: Dict[str, Any], executed: int, order_id: str, ml_probability:
 
 
 
+
+def market_is_weekend_closed(at: Optional[datetime] = None) -> bool:
+    at=at or datetime.now(timezone.utc); ny=at.astimezone(MARKET_TZ); wd=ny.weekday()
+    return bool((wd==4 and ny.hour>=17) or wd==5 or (wd==6 and ny.hour<17))
+
+def weekend_id_for_time(at: Optional[datetime] = None) -> Optional[str]:
+    at=at or datetime.now(timezone.utc); ny=at.astimezone(MARKET_TZ); wd=ny.weekday()
+    if wd==4 and ny.hour>=17: friday=ny.date()
+    elif wd==5: friday=(ny-timedelta(days=1)).date()
+    elif wd==6: friday=(ny-timedelta(days=2)).date()
+    elif wd==0: friday=(ny-timedelta(days=3)).date()
+    else:return None
+    return friday.isoformat()
+
+def latest_relevant_weekend_id(at: Optional[datetime] = None) -> Optional[str]:
+    at=at or datetime.now(timezone.utc); ny=at.astimezone(MARKET_TZ); wd=ny.weekday()
+    if wd==4 and ny.hour>=17:return ny.date().isoformat()
+    if wd==5:return (ny-timedelta(days=1)).date().isoformat()
+    if wd==6:return (ny-timedelta(days=2)).date().isoformat()
+    if wd==0:return (ny-timedelta(days=3)).date().isoformat()
+    return None
+
+def _weekend_bucket(at: datetime) -> str:
+    at=at.astimezone(timezone.utc)
+    minutes=max(30,WEEKEND_NEWS_INTERVAL_MIN)
+    epoch=int(at.timestamp()); bucket=epoch-(epoch%(minutes*60))
+    return datetime.fromtimestamp(bucket,tz=timezone.utc).isoformat()
+
+async def collect_weekend_news_snapshot(client: httpx.AsyncClient,instrument: str,at: Optional[datetime]=None)->Dict[str,Any]:
+    at=at or datetime.now(timezone.utc)
+    if not WEEKEND_RESEARCH_ENABLED or not market_is_weekend_closed(at):return {"collected":False,"reason":"not_weekend_closed"}
+    wid=weekend_id_for_time(at); bucket=_weekend_bucket(at)
+    c=conn(); exists=c.execute("SELECT 1 FROM weekend_context WHERE weekend_id=? AND instrument=? AND bucket_ts=?",(wid,instrument,bucket)).fetchone(); c.close()
+    if exists:return {"collected":False,"reason":"bucket_already_collected","weekend_id":wid}
+    base,quote=instrument.split('_'); q=f"({base} OR {quote}) (forex OR currency OR inflation OR rates OR central bank OR jobs OR GDP OR election OR geopolitical)"
+    try:
+        x=await client.get(GDELT,params={"query":q,"mode":"ArtList","maxrecords":"25","format":"json","timespan":"360min","sort":"HybridRel"},timeout=10); x.raise_for_status()
+        arts=x.json().get('articles',[]); text=' '.join(a.get('title','').lower() for a in arts)
+        pos=sum(text.count(w) for w in ['hawkish','rate hike','strong jobs','jobs beat','growth beats','currency gains','higher rates','inflation rises','economy strong'])
+        neg=sum(text.count(w) for w in ['dovish','rate cut','weak jobs','jobs miss','recession','currency falls','lower rates','economy weak','growth slows'])
+        bias='BULLISH' if pos-neg>=2 else 'BEARISH' if neg-pos>=2 else 'NEUTRAL'; titles=[a.get('title','') for a in arts[:12]]
+        c=conn(); c.execute("""INSERT OR IGNORE INTO weekend_context(weekend_id,instrument,bucket_ts,collected_ts,bias,positive_hits,negative_hits,article_count,titles_json) VALUES(?,?,?,?,?,?,?,?,?)""",(wid,instrument,bucket,now_iso(),bias,pos,neg,len(arts),json.dumps(titles,separators=(',',':')))); c.commit(); c.close()
+        return {"collected":True,"weekend_id":wid,"bucket":bucket,"bias":bias,"positive_hits":pos,"negative_hits":neg,"article_count":len(arts)}
+    except Exception as e:return {"collected":False,"weekend_id":wid,"error":str(e)}
+
+def summarize_weekend_context(weekend_id: str,instrument: str)->Optional[Dict[str,Any]]:
+    c=conn(); rows=c.execute("SELECT * FROM weekend_context WHERE weekend_id=? AND instrument=? ORDER BY bucket_ts",(weekend_id,instrument)).fetchall(); c.close()
+    if not rows:return None
+    pos=sum(int(r['positive_hits'] or 0) for r in rows); neg=sum(int(r['negative_hits'] or 0) for r in rows); articles=sum(int(r['article_count'] or 0) for r in rows); score=float(pos-neg)
+    bias='BULLISH' if score>=2 else 'BEARISH' if score<=-2 else 'NEUTRAL'; titles=[]; seen=set()
+    for r in rows:
+        try:arr=json.loads(r['titles_json'] or '[]')
+        except Exception:arr=[]
+        for t in arr:
+            if t and t not in seen:seen.add(t);titles.append(t)
+            if len(titles)>=20:break
+        if len(titles)>=20:break
+    return {"weekend_id":weekend_id,"instrument":instrument,"bias":bias,"score":score,"positive_hits":pos,"negative_hits":neg,"article_count":articles,"snapshots":len(rows),"titles":titles}
+
+def ensure_weekend_session(instrument: str,current_price: float,at: Optional[datetime]=None)->Optional[Dict[str,Any]]:
+    if not WEEKEND_RESEARCH_ENABLED or not current_price:return None
+    at=at or datetime.now(timezone.utc)
+    if market_is_weekend_closed(at):return None
+    wid=latest_relevant_weekend_id(at)
+    if not wid:return None
+    ny=at.astimezone(MARKET_TZ)
+    if not ((ny.weekday()==6 and ny.hour>=17) or ny.weekday()==0):return None
+    c=conn(); row=c.execute("SELECT * FROM weekend_sessions WHERE weekend_id=? AND instrument=?",(wid,instrument)).fetchone(); c.close()
+    if row:return dict(row)
+    summary=summarize_weekend_context(wid,instrument)
+    if not summary:return None
+    c=conn(); c.execute("""INSERT OR IGNORE INTO weekend_sessions(weekend_id,instrument,opened_ts,open_price,context_bias,context_score,article_count,context_json,updated_ts) VALUES(?,?,?,?,?,?,?,?,?)""",(wid,instrument,at.astimezone(timezone.utc).isoformat(),float(current_price),summary['bias'],float(summary['score']),int(summary['article_count']),json.dumps(summary,separators=(',',':')),now_iso())); c.commit(); row=c.execute("SELECT * FROM weekend_sessions WHERE weekend_id=? AND instrument=?",(wid,instrument)).fetchone(); c.close(); return dict(row) if row else None
+
+def update_weekend_reactions(instrument: str,current_price: float,at: Optional[datetime]=None)->Dict[str,Any]:
+    at=at or datetime.now(timezone.utc); c=conn(); row=c.execute("SELECT * FROM weekend_sessions WHERE instrument=? ORDER BY opened_ts DESC LIMIT 1",(instrument,)).fetchone()
+    if not row:c.close();return {"updated":False,"reason":"no_weekend_session"}
+    opened=datetime.fromisoformat(row['opened_ts'].replace('Z','+00:00')); elapsed=(at.astimezone(timezone.utc)-opened).total_seconds()/3600; pip=pip_size(instrument); move=(float(current_price)-float(row['open_price']))/pip if pip else 0; changes={}
+    for h in WEEKEND_REACTION_HORIZONS:
+        col=f'reaction_{h}h_pips'
+        if elapsed>=h and row[col] is None:changes[col]=float(move)
+    if changes:
+        sets=', '.join(f'{k}=?' for k in changes); vals=list(changes.values())+[now_iso(),row['weekend_id'],instrument]
+        c.execute(f"UPDATE weekend_sessions SET {sets},updated_ts=? WHERE weekend_id=? AND instrument=?",vals); c.commit()
+    c.close();return {"updated":bool(changes),"elapsed_hours":elapsed,"changes":changes}
+
+def active_weekend_context(instrument: str,at: Optional[datetime]=None)->Optional[Dict[str,Any]]:
+    at=at or datetime.now(timezone.utc); c=conn(); row=c.execute("SELECT * FROM weekend_sessions WHERE instrument=? ORDER BY opened_ts DESC LIMIT 1",(instrument,)).fetchone(); c.close()
+    if not row:return None
+    opened=datetime.fromisoformat(row['opened_ts'].replace('Z','+00:00')); age=(at.astimezone(timezone.utc)-opened).total_seconds()/3600
+    if age<0 or age>WEEKEND_SIGNAL_CONTEXT_HOURS:return None
+    out=dict(row);out['age_hours']=age;return out
+
+def attach_weekend_context_observation(instrument: str,candle_ts: Optional[str],at: Optional[datetime]=None)->Optional[Dict[str,Any]]:
+    ctx=active_weekend_context(instrument,at)
+    if not ctx or not candle_ts:return None
+    record_external_observation(instrument,'WEEKEND_CONTEXT',f'{instrument}_WEEKEND',float(ctx['context_score']),str(ctx['context_bias']),{"weekend_id":ctx['weekend_id'],"age_hours":ctx['age_hours'],"article_count":ctx['article_count'],"reaction_1h_pips":ctx['reaction_1h_pips'],"reaction_4h_pips":ctx['reaction_4h_pips'],"reaction_12h_pips":ctx['reaction_12h_pips'],"reaction_24h_pips":ctx['reaction_24h_pips']},candle_ts)
+    return ctx
+
 def record_external_observation(instrument: str, source_type: str, source_key: str,
                                 value_num=None, value_text=None, metadata=None, candle_ts=None):
     """Research-only ingestion. It cannot place or modify OANDA orders."""
@@ -1831,6 +1954,17 @@ def external_research_candidates(signal_row, observations):
             out[f"news::{key}::low_conflict"]={"family":"NEWS_MACRO",
                 "aligned":neutral and abs(float(val or 0))<1.0,
                 "description":f"{key} low directional conflict around signal"}
+        elif typ=="WEEKEND_CONTEXT":
+            v=float(val or 0); bullish=v>0; bearish=v<0
+            aligned=(direction=="BUY" and bullish) or (direction=="SELL" and bearish)
+            inverse=(direction=="BUY" and bearish) or (direction=="SELL" and bullish)
+            try: meta=json.loads(o.get("metadata_json") or "{}")
+            except Exception: meta={}
+            age=float(meta.get("age_hours",999) or 999)
+            out[f"weekend::{key}::bias_aligned"]={"family":"WEEKEND_CONTEXT","aligned":bool(aligned),"description":f"{key} weekend bias aligned with signal"}
+            out[f"weekend::{key}::bias_inverse"]={"family":"WEEKEND_CONTEXT","aligned":bool(inverse),"description":f"{key} weekend bias inverse to signal"}
+            out[f"weekend::{key}::first_4h"]={"family":"WEEKEND_CONTEXT","aligned":bool(age<=4),"description":f"{key} signal within first 4h after reopen"}
+            out[f"weekend::{key}::first_12h"]={"family":"WEEKEND_CONTEXT","aligned":bool(age<=12),"description":f"{key} signal within first 12h after reopen"}
     return out
 
 
@@ -2604,6 +2738,9 @@ def learning_stats() -> Dict[str, Any]:
         "external_research":{"enabled":EXTERNAL_RESEARCH_ENABLED,"symbols":EXTERNAL_RESEARCH_SYMBOLS,
                              "granularity":EXTERNAL_RESEARCH_GRANULARITY,"news_research":EXTERNAL_NEWS_RESEARCH,
                              "automatic_live_activation":False},
+        "weekend_research":{"enabled":WEEKEND_RESEARCH_ENABLED,"signal_context_hours":WEEKEND_SIGNAL_CONTEXT_HOURS,
+                            "reaction_horizons_hours":list(WEEKEND_REACTION_HORIZONS),
+                            "creates_trade_labels_while_closed":False},
         "retrain_policy":retrain_policy
     }
 
@@ -2722,6 +2859,11 @@ async def scan(client: httpx.AsyncClient, inst: str) -> Dict[str, Any]:
         promote_validated_research_rules()
 
     r = analyze(h1, m15, m5, m1, inst)
+
+    weekend_session=ensure_weekend_session(inst,current_price)
+    weekend_reaction=update_weekend_reactions(inst,current_price) if current_price else {"updated":False}
+    weekend_signal_context=attach_weekend_context_observation(inst,r.get("candle_ts"))
+    r["weekend_research"]={"session":weekend_session,"reaction_update":weekend_reaction,"active_signal_context":weekend_signal_context}
 
     # Research brain runs independently of order execution.
     r["external_research_collection"] = await collect_cross_asset_research(client, inst, r.get("candle_ts"))
@@ -2843,6 +2985,9 @@ async def worker():
             async with httpx.AsyncClient() as client:
                 for inst in INSTRUMENTS:
                     try:
+                        if WEEKEND_RESEARCH_ENABLED and market_is_weekend_closed():
+                            snap=await collect_weekend_news_snapshot(client,inst)
+                            state.setdefault("weekend_research",{})[inst]=snap
                         state["last_results"][inst] = await scan(client, inst)
                     except asyncio.CancelledError:
                         raise
@@ -3061,6 +3206,17 @@ async def research_knowledge(limit: int = 100):
 
 
 
+
+@app.get("/api/research/weekends")
+async def research_weekends(limit: int = 20):
+    c=conn(); sessions=c.execute("SELECT * FROM weekend_sessions ORDER BY opened_ts DESC LIMIT ?",(min(max(limit,1),200),)).fetchall(); recent=c.execute("SELECT * FROM weekend_context ORDER BY collected_ts DESC LIMIT ?",(min(max(limit*10,10),500),)).fetchall(); c.close()
+    return {"enabled":WEEKEND_RESEARCH_ENABLED,"market_closed_now":market_is_weekend_closed(),"signal_context_hours":WEEKEND_SIGNAL_CONTEXT_HOURS,"reaction_horizons_hours":list(WEEKEND_REACTION_HORIZONS),"sessions":[dict(x) for x in sessions],"recent_context":[dict(x) for x in recent]}
+
+@app.post("/api/research/weekends/collect")
+async def research_weekend_collect():
+    async with httpx.AsyncClient() as client:
+        return {"results":[await collect_weekend_news_snapshot(client,inst) for inst in INSTRUMENTS]}
+
 @app.get("/api/research/autonomous")
 async def research_autonomous(limit: int = 100):
     c=conn()
@@ -3151,7 +3307,7 @@ async def discovery():
 async def home():
     return """<!doctype html><html lang='es'><meta name='viewport' content='width=device-width'><title>Market Alert V1.7</title>
 <style>body{font-family:system-ui;background:#0b1020;color:#eef2ff;max-width:1050px;margin:auto;padding:24px}.c{background:#151c32;border:1px solid #2c3656;border-radius:16px;padding:18px;margin:12px 0}pre{white-space:pre-wrap;word-break:break-word;background:#080c17;padding:14px;border-radius:12px}.tag{display:inline-block;padding:5px 9px;border-radius:999px;background:#25304f;margin-right:6px}</style>
-<h1>Market Alert V2.8 · Adaptive Risk Engine</h1><div class=c><span class=tag>OANDA PRACTICE ONLY</span><span class=tag>24/7</span><span class=tag>Sin límite diario</span><span class=tag>Confianza calibrada</span>
+<h1>Market Alert V3.8 · Weekend Context Research</h1><div class=c><span class=tag>OANDA PRACTICE ONLY</span><span class=tag>24/7</span><span class=tag>Sin límite diario</span><span class=tag>Confianza calibrada</span>
 <p><b>Quality Score ≠ probabilidad.</b> La confianza dinámica se calibra con resultados reales. Con poca muestra se limita deliberadamente y el 90% requiere evidencia sustancial.</p></div>
 <div class=c><h2>Estado</h2><pre id=s>Cargando…</pre></div><div class=c><h2>Aprendizaje</h2><pre id=l>Cargando…</pre></div><div class=c><h2>Última decisión</h2><pre id=d>Cargando…</pre></div><div class=c><h2>Últimas señales</h2><pre id=h>Cargando…</pre></div>
 <script>async function u(){s.textContent=JSON.stringify(await fetch('/api/status').then(r=>r.json()),null,2);l.textContent=JSON.stringify(await fetch('/api/learning').then(r=>r.json()),null,2);d.textContent=JSON.stringify(await fetch('/api/decisions?limit=5').then(r=>r.json()),null,2);h.textContent=JSON.stringify(await fetch('/api/signals?limit=15').then(r=>r.json()),null,2)}u();setInterval(u,15000)</script></html>"""

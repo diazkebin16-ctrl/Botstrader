@@ -1,28 +1,9 @@
-# Market Alert V3.7 — Parallel Filter Evolution
+# Market Alert V3.8 — Weekend Context Research
 
 OANDA PRACTICE ONLY.
 
-## Estado
-Implementado y probado localmente. Pendiente de validación con datos reales en Railway.
+Implementado y probado localmente; pendiente de Railway.
 
-## Mejoras
-- Investiga muchas hipótesis en paralelo; cada filtro conserva su propio historial/evidencia.
-- Puede activar varios filtros aprendidos a la vez si son compatibles.
-- No hay máximo numérico fijo: compatibilidad, cobertura y evidencia limitan el crecimiento.
-- Detecta contradicciones lógicas y mide historial conjunto antes de combinar reglas.
-- Cada filtro activo tiene su propio ciclo de revisión de 50 evidencias canónicas.
-- Si pasa el primer bloque, queda CONFIRMED.
-- Sigue revisándose en bloques posteriores de 50; si deja de rendir, se revierte individualmente.
-- Retirar un filtro no afecta a los demás filtros sanos.
-- Las combinaciones quedan registradas en `research_rule_compatibility`.
+Durante el cierre Forex el investigador recopila contexto/noticias por hora sin crear WIN/LOSS falsos. Al reabrir congela el resumen, guarda precio de apertura y mide reacción a 1h, 4h, 12h y 24h. Las señales de las primeras 24h reciben contexto de fin de semana y alimentan hipótesis WEEKEND_CONTEXT usando operaciones canónicas y shadow simulations.
 
-## Seguridad
-Los filtros base de seguridad siguen siendo inmutables.
-La auto-evolución solo puede añadir/quitar filtros aprendidos veto-only.
-No puede relajar Safety, R:R mínimo, TP mínimo, stop ni forzar BUY/SELL.
-
-## Endpoints
-- GET `/api/research/active-rule`
-- GET `/api/research/compatibility`
-- POST `/api/research/promote`
-- POST `/api/research/review-active`
+Endpoints: GET /api/research/weekends y POST /api/research/weekends/collect.
