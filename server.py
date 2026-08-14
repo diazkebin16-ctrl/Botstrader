@@ -61,18 +61,20 @@ TREND_RUNNER_MIN_SCORE = max(0.0, float(os.getenv("TREND_RUNNER_MIN_SCORE", "0.6
 TREND_RUNNER_TP_R = max(2.0, float(os.getenv("TREND_RUNNER_TP_R", "3.0")))
 TREND_RUNNER_TRAIL_START_R = max(1.5, float(os.getenv("TREND_RUNNER_TRAIL_START_R", "1.75")))
 TREND_RUNNER_TRAIL_DISTANCE_R = max(0.40, float(os.getenv("TREND_RUNNER_TRAIL_DISTANCE_R", "0.90")))
-VERSION_TAG = "2.4"
+VERSION_TAG = "2.5"
 ENTRY_TIMING_ENABLED = os.getenv("ENTRY_TIMING_ENABLED", "true").lower() == "true"
 MAX_ENTRY_EXTENSION_ATR = max(0.5, float(os.getenv("MAX_ENTRY_EXTENSION_ATR", "1.20")))
 MIN_ROOM_TO_BARRIER_R = max(1.0, float(os.getenv("MIN_ROOM_TO_BARRIER_R", "1.50")))
 REENTRY_REQUIRE_NEW_CANDLE = os.getenv("REENTRY_REQUIRE_NEW_CANDLE", "true").lower() == "true"
 REENTRY_REQUIRE_STRUCTURE_CHANGE = os.getenv("REENTRY_REQUIRE_STRUCTURE_CHANGE", "true").lower() == "true"
+STRUCTURAL_ROOM_ENABLED = os.getenv("STRUCTURAL_ROOM_ENABLED", "true").lower() == "true"
+STRUCTURAL_BARRIER_BUFFER_R = max(0.0, float(os.getenv("STRUCTURAL_BARRIER_BUFFER_R", "0.05")))
 EXECUTION_MIN_CONFIDENCE = max(0.50, min(0.95, float(os.getenv("EXECUTION_MIN_CONFIDENCE", "0.65"))))
 NY = ZoneInfo("America/New_York")
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("market-alert")
-app = FastAPI(title="Market Alert V2.4 — Entry Timing / OANDA Practice Only")
+app = FastAPI(title="Market Alert V2.5 — Structural Room / OANDA Practice Only")
 state: Dict[str, Any] = {
     "started": datetime.now(timezone.utc).isoformat(),
     "last_scan": None,
@@ -395,7 +397,32 @@ async def candles(client: httpx.AsyncClient, inst: str, granularity: str, count:
     return out
 
 
-def analyze(m15, m5, m1, inst) -> Dict[str, Any]:
+
+def pivot_levels(candles_: List[Dict[str, Any]], left: int = 2, right: int = 2) -> Dict[str, List[float]]:
+    """Confirmed local highs/lows only; no future candles beyond the supplied history."""
+    highs, lows = [], []
+    n = len(candles_)
+    for i in range(left, n-right):
+        h = float(candles_[i]["h"]); l = float(candles_[i]["l"])
+        if all(h >= float(candles_[j]["h"]) for j in range(i-left, i+right+1) if j != i):
+            highs.append(h)
+        if all(l <= float(candles_[j]["l"]) for j in range(i-left, i+right+1) if j != i):
+            lows.append(l)
+    return {"highs": highs, "lows": lows}
+
+def structural_barrier(h1, m15, entry: float, signal: str) -> Optional[float]:
+    """Nearest confirmed H1/M15 support or resistance in the trade direction."""
+    h1p = pivot_levels(h1[:-1], 2, 2)
+    m15p = pivot_levels(m15[:-1], 3, 3)
+    if signal == "BUY":
+        levels = [x for x in (h1p["highs"] + m15p["highs"]) if x > entry]
+        return min(levels) if levels else None
+    if signal == "SELL":
+        levels = [x for x in (h1p["lows"] + m15p["lows"]) if x < entry]
+        return max(levels) if levels else None
+    return None
+
+def analyze(h1, m15, m5, m1, inst) -> Dict[str, Any]:
     c15, c5, c1 = [x["c"] for x in m15], [x["c"] for x in m5], [x["c"] for x in m1]
     e20, e50, e5, e9, e1 = ema(c15, 20), ema(c15, 50), ema(c5, 20), ema(c1, 9), ema(c1, 20)
     a15, a1 = atr(m15), atr(m1)
@@ -421,12 +448,29 @@ def analyze(m15, m5, m1, inst) -> Dict[str, Any]:
     astop = entry - a1 * 1.25 if sig == "BUY" else entry + a1 * 1.25
     stop = min(ss, astop) if sig == "BUY" else max(ss, astop) if sig == "SELL" else entry
     risk = abs(entry - stop) or max(a1 * 1.25, entry * .00045)
+    # Minimum target is always 1.5R. A known H1/M15 barrier must leave at least
+    # that much real room; we never invent extra room beyond resistance/support.
+    barrier = structural_barrier(h1, m15, entry, sig) if STRUCTURAL_ROOM_ENABLED and sig != "WAIT" else None
+    room = ((barrier-entry) if sig=="BUY" else (entry-barrier) if sig=="SELL" else 0.0) if barrier is not None else None
+    room_to_barrier_r = (room / risk) if room is not None and risk > 0 else None
+
     st = swing(m5[:-2], "h" if sig == "BUY" else "l", 28)
-    reward = (st - entry) if sig == "BUY" else (entry - st) if sig == "SELL" else 0
-    reward = reward if reward > 0 else risk * 2
-    rr_raw = reward / risk
-    rr = min(2, max(0, rr_raw))
-    target = entry + risk * rr if sig == "BUY" else entry - risk * rr if sig == "SELL" else entry
+    structural_reward = (st-entry) if sig=="BUY" else (entry-st) if sig=="SELL" else 0.0
+    # rr_raw represents genuinely available structural room when a barrier is known.
+    if room_to_barrier_r is not None:
+        rr_raw = room_to_barrier_r
+    elif structural_reward > 0:
+        rr_raw = structural_reward / risk
+    else:
+        rr_raw = MIN_RR
+
+    rr = MIN_RR
+    target = entry + risk*rr if sig=="BUY" else entry - risk*rr if sig=="SELL" else entry
+    # Keep TP on the safe side of a known important level.
+    if barrier is not None and sig in ("BUY","SELL"):
+        buffer = risk * STRUCTURAL_BARRIER_BUFFER_R
+        cap = barrier-buffer if sig=="BUY" else barrier+buffer
+        target = min(target, cap) if sig=="BUY" else max(target, cap)
     sess = session_info(last["t"])
     tech = min(85,
         (12 if sig != "WAIT" else 0) + (10 if aligned else 0) + (8 if confirm else 0) +
@@ -460,6 +504,7 @@ def analyze(m15, m5, m1, inst) -> Dict[str, Any]:
         "extension_atr": float(ext),
         "volatility_ratio": float(vol),
         "rr_raw": float(rr_raw),
+        "room_to_barrier_r": float(room_to_barrier_r) if room_to_barrier_r is not None else None,
         "session_ok": 1 if sess["ok"] else 0,
         "news_confirm": 0,
         "news_contradict": 0,
@@ -471,12 +516,13 @@ def analyze(m15, m5, m1, inst) -> Dict[str, Any]:
         "valid_direction": sig in ("BUY", "SELL"),
         "finite_prices": all(math.isfinite(float(x)) for x in (entry, stop, target)),
         "positive_risk": abs(entry - stop) > 0,
-        "minimum_rr": rr_raw >= MIN_RR,
+        "minimum_rr": rr_raw >= MIN_RR and (abs(target-entry)/max(risk,1e-12)) >= MIN_RR-1e-9,
         "volatility_sane": 0.35 <= vol <= 3.5,
     }
     return {
         "instrument": inst, "signal": sig, "technical": int(tech), "score": int(tech),
         "entry": entry, "stop": stop, "target": target, "rr": rr, "rr_raw": rr_raw,
+        "structural_barrier": barrier, "room_to_barrier_r": room_to_barrier_r,
         "blocked": not all(safety_checks.values()), "pullbacks": pc, "filters": checks,
         "safety_checks": safety_checks,
         "features": features, "candle_ts": last["t"].isoformat(), "alignment": "N/A"
@@ -961,13 +1007,23 @@ def trend_runner_score(r: Dict[str, Any]) -> float:
 
 def desired_target_for_trade(r: Dict[str, Any]) -> Dict[str, Any]:
     entry, stop = float(r["entry"]), float(r["stop"])
-    risk = abs(entry - stop)
+    risk = abs(entry-stop)
     base_target = float(r["target"])
     tscore = trend_runner_score(r)
     if not TREND_RUNNER_ENABLED or tscore < TREND_RUNNER_MIN_SCORE or risk <= 0:
         return {"target": base_target, "runner": False, "trend_score": tscore}
-    target = entry + TREND_RUNNER_TP_R*risk if r["signal"]=="BUY" else entry - TREND_RUNNER_TP_R*risk
-    return {"target": target, "runner": True, "trend_score": tscore}
+
+    desired = entry + TREND_RUNNER_TP_R*risk if r["signal"]=="BUY" else entry - TREND_RUNNER_TP_R*risk
+    barrier = r.get("structural_barrier")
+    if barrier is not None:
+        buffer = risk * STRUCTURAL_BARRIER_BUFFER_R
+        cap = float(barrier)-buffer if r["signal"]=="BUY" else float(barrier)+buffer
+        desired = min(desired, cap) if r["signal"]=="BUY" else max(desired, cap)
+
+    # Never call it a runner if the barrier prevents an extension beyond the base target.
+    extends = desired > base_target + 1e-9 if r["signal"]=="BUY" else desired < base_target - 1e-9
+    return {"target": desired if extends else base_target, "runner": bool(extends), "trend_score": tscore}
+
 
 def quality_entry_gate(r: Dict[str, Any], conf: Dict[str, Any]) -> Dict[str, Any]:
     """Reject low-RR and late/chasing entries without imposing a clock-based cooldown."""
@@ -1137,7 +1193,7 @@ async def execute(client: httpx.AsyncClient, r: Dict[str, Any]):
     body = {"order": {
         "instrument": r["instrument"], "units": str(u), "type": "MARKET", "timeInForce": "FOK", "positionFill": "DEFAULT",
         "stopLossOnFill": {"price": f"{r['stop']:.{d}f}", "timeInForce": "GTC"},
-        "takeProfitOnFill": {"price": f"{r['target']:.{d}f}", "timeInForce": "GTC"}
+        "takeProfitOnFill": {"price": f"{r.get('managed_target', r['target']):.{d}f}", "timeInForce": "GTC"}
     }}
     return await req(client, "POST", "/v3/accounts/{account}/orders", body=body)
 
@@ -1318,8 +1374,9 @@ async def manage_open_trades(client: httpx.AsyncClient, instrument: str, current
     return changed
 
 async def scan(client: httpx.AsyncClient, inst: str) -> Dict[str, Any]:
-    m15, m5, m1 = await asyncio.gather(
-        candles(client, inst, "M15", 100),
+    h1, m15, m5, m1 = await asyncio.gather(
+        candles(client, inst, "H1", 140),
+        candles(client, inst, "M15", 140),
         candles(client, inst, "M5", 130),
         candles(client, inst, "M1", max(220, OUTCOME_HORIZON_MIN + 30))
     )
@@ -1328,7 +1385,7 @@ async def scan(client: httpx.AsyncClient, inst: str) -> Dict[str, Any]:
     resolved = resolve_pending(inst, m1)
     if resolved:
         refresh_discovered_patterns()
-    r = analyze(m15, m5, m1, inst)
+    r = analyze(h1, m15, m5, m1, inst)
     r = await news(client, r) if r["signal"] != "WAIT" and r["technical"] >= 50 else {**r, "alignment": "N/A"}
     target_plan=desired_target_for_trade(r) if r["signal"]!="WAIT" else {"target":r.get("target"),"runner":False,"trend_score":0.0}
     if r["signal"]!="WAIT":
@@ -1614,7 +1671,7 @@ async def discovery():
 async def home():
     return """<!doctype html><html lang='es'><meta name='viewport' content='width=device-width'><title>Market Alert V1.7</title>
 <style>body{font-family:system-ui;background:#0b1020;color:#eef2ff;max-width:1050px;margin:auto;padding:24px}.c{background:#151c32;border:1px solid #2c3656;border-radius:16px;padding:18px;margin:12px 0}pre{white-space:pre-wrap;word-break:break-word;background:#080c17;padding:14px;border-radius:12px}.tag{display:inline-block;padding:5px 9px;border-radius:999px;background:#25304f;margin-right:6px}</style>
-<h1>Market Alert V2.4 · Entry Timing</h1><div class=c><span class=tag>OANDA PRACTICE ONLY</span><span class=tag>24/7</span><span class=tag>Sin límite diario</span><span class=tag>Confianza calibrada</span>
+<h1>Market Alert V2.5 · Structural Room</h1><div class=c><span class=tag>OANDA PRACTICE ONLY</span><span class=tag>24/7</span><span class=tag>Sin límite diario</span><span class=tag>Confianza calibrada</span>
 <p><b>Quality Score ≠ probabilidad.</b> La confianza dinámica se calibra con resultados reales. Con poca muestra se limita deliberadamente y el 90% requiere evidencia sustancial.</p></div>
 <div class=c><h2>Estado</h2><pre id=s>Cargando…</pre></div><div class=c><h2>Aprendizaje</h2><pre id=l>Cargando…</pre></div><div class=c><h2>Última decisión</h2><pre id=d>Cargando…</pre></div><div class=c><h2>Últimas señales</h2><pre id=h>Cargando…</pre></div>
 <script>async function u(){s.textContent=JSON.stringify(await fetch('/api/status').then(r=>r.json()),null,2);l.textContent=JSON.stringify(await fetch('/api/learning').then(r=>r.json()),null,2);d.textContent=JSON.stringify(await fetch('/api/decisions?limit=5').then(r=>r.json()),null,2);h.textContent=JSON.stringify(await fetch('/api/signals?limit=15').then(r=>r.json()),null,2)}u();setInterval(u,15000)</script></html>"""
