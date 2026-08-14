@@ -61,7 +61,7 @@ TREND_RUNNER_MIN_SCORE = max(0.0, float(os.getenv("TREND_RUNNER_MIN_SCORE", "0.6
 TREND_RUNNER_TP_R = max(2.0, float(os.getenv("TREND_RUNNER_TP_R", "3.0")))
 TREND_RUNNER_TRAIL_START_R = max(1.5, float(os.getenv("TREND_RUNNER_TRAIL_START_R", "1.75")))
 TREND_RUNNER_TRAIL_DISTANCE_R = max(0.40, float(os.getenv("TREND_RUNNER_TRAIL_DISTANCE_R", "0.90")))
-VERSION_TAG = "2.7.1"
+VERSION_TAG = "2.8"
 ENTRY_TIMING_ENABLED = os.getenv("ENTRY_TIMING_ENABLED", "true").lower() == "true"
 MAX_ENTRY_EXTENSION_ATR = max(0.5, float(os.getenv("MAX_ENTRY_EXTENSION_ATR", "1.20")))
 MIN_ROOM_TO_BARRIER_R = max(1.0, float(os.getenv("MIN_ROOM_TO_BARRIER_R", "1.50")))
@@ -78,12 +78,16 @@ MEDIUM_BARRIER_CONFIDENCE_PENALTY = max(WEAK_BARRIER_CONFIDENCE_PENALTY, min(0.2
 DIRECTION_MIN_SCORE = max(0.0, min(100.0, float(os.getenv("DIRECTION_MIN_SCORE", "30"))))
 DIRECTION_MIN_EDGE = max(0.0, min(50.0, float(os.getenv("DIRECTION_MIN_EDGE", "6"))))
 COUNTERTREND_EXECUTION_MIN_SCORE = max(0.0, min(100.0, float(os.getenv("COUNTERTREND_EXECUTION_MIN_SCORE", "82"))))
+MIN_TAKE_PROFIT_PIPS = max(0.1, float(os.getenv("MIN_TAKE_PROFIT_PIPS", "7.0")))
+MIN_STOP_PIPS = max(0.1, float(os.getenv("MIN_STOP_PIPS", "3.0")))
+STOP_ATR_M1_MULT = max(0.1, float(os.getenv("STOP_ATR_M1_MULT", "1.50")))
+STOP_ATR_M5_MULT = max(0.1, float(os.getenv("STOP_ATR_M5_MULT", "0.40")))
 EXECUTION_MIN_CONFIDENCE = max(0.50, min(0.95, float(os.getenv("EXECUTION_MIN_CONFIDENCE", "0.65"))))
 NY = ZoneInfo("America/New_York")
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("market-alert")
-app = FastAPI(title="Market Alert V2.7.1 — Dual Hypothesis Fix / OANDA Practice Only")
+app = FastAPI(title="Market Alert V2.8 — Adaptive Risk Engine / OANDA Practice Only")
 state: Dict[str, Any] = {
     "started": datetime.now(timezone.utc).isoformat(),
     "last_scan": None,
@@ -578,6 +582,12 @@ def structural_confidence_adjustment(ctx: Dict[str, Any]) -> Dict[str, Any]:
     return {"adjustment":-WEAK_BARRIER_CONFIDENCE_PENALTY,"classification":"WEAK","reason":f"barrera débil score={score:.2f}"}
 
 
+def pip_size(inst: str) -> float:
+    return 0.01 if "_JPY" in inst.upper() or inst.upper().endswith("JPY") else 0.0001
+
+def pips_between(a: float, b: float, inst: str) -> float:
+    return abs(float(a)-float(b))/pip_size(inst)
+
 def _direction_hypothesis(h1, m15, m5, m1, inst: str, sig: str) -> Dict[str, Any]:
     """Evaluate BUY or SELL independently. Higher timeframes are evidence, not a direction lock."""
     c60, c15, c5, c1 = ([x["c"] for x in h1], [x["c"] for x in m15],
@@ -618,9 +628,12 @@ def _direction_hypothesis(h1, m15, m5, m1, inst: str, sig: str) -> Dict[str, Any
     entry=last["c"]
 
     ss=swing(m1,"l" if sig=="BUY" else "h",12)
-    astop=entry-a1*1.25 if sig=="BUY" else entry+a1*1.25
-    stop=min(ss,astop) if sig=="BUY" else max(ss,astop)
-    risk=abs(entry-stop) or max(a1*1.25,entry*.00045)
+    a5=atr(m5)
+    pip=pip_size(inst)
+    volatility_risk=max(a1*STOP_ATR_M1_MULT, a5*STOP_ATR_M5_MULT, MIN_STOP_PIPS*pip)
+    structure_risk=abs(entry-ss) if math.isfinite(float(ss)) else 0.0
+    risk=max(volatility_risk, structure_risk)
+    stop=entry-risk if sig=="BUY" else entry+risk
 
     ctx=structural_context(h1,m15,entry,sig) if STRUCTURAL_ROOM_ENABLED else {"active_barrier":None,"levels":[],"broken_levels":[]}
     active=ctx.get("active_barrier")
@@ -636,12 +649,16 @@ def _direction_hypothesis(h1, m15, m5, m1, inst: str, sig: str) -> Dict[str, Any
     structural_reward=(st-entry) if sig=="BUY" else (entry-st)
     rr_raw=structural_reward/risk if structural_reward>0 else MIN_RR
     rr=MIN_RR
-    target=entry+risk*rr if sig=="BUY" else entry-risk*rr
+    min_tp_distance=max(risk*MIN_RR, MIN_TAKE_PROFIT_PIPS*pip)
+    target=entry+min_tp_distance if sig=="BUY" else entry-min_tp_distance
+    barrier_allows_target=True
     if active and barrier_class=="STRONG":
         buffer=risk*STRUCTURAL_BARRIER_BUFFER_R
         cap=barrier-buffer if sig=="BUY" else barrier+buffer
-        target=min(target,cap) if sig=="BUY" else max(target,cap)
+        barrier_allows_target=(target<=cap) if sig=="BUY" else (target>=cap)
         rr_raw=min(rr_raw,max(0.0,room_r if room_r is not None else rr_raw))
+    actual_rr=abs(target-entry)/max(risk,1e-12)
+    tp_pips=pips_between(entry,target,inst)
 
     sess=session_info(last["t"])
 
@@ -669,7 +686,9 @@ def _direction_hypothesis(h1, m15, m5, m1, inst: str, sig: str) -> Dict[str, Any
         "m5_structure": m5_structure,
         "second_pullback": second,
         "m1_confirmation": confirm,
-        "minimum_rr": rr_raw>=MIN_RR,
+        "minimum_rr": actual_rr>=MIN_RR and rr_raw>=MIN_RR,
+        "minimum_tp_pips": tp_pips>=MIN_TAKE_PROFIT_PIPS-1e-9,
+        "barrier_room_ok": barrier_allows_target,
         "not_extended": ext<=1.35,
         "volatility_ok": .65<=vol<=2,
     }
@@ -680,13 +699,17 @@ def _direction_hypothesis(h1, m15, m5, m1, inst: str, sig: str) -> Dict[str, Any
         "valid_direction": True,
         "finite_prices": all(math.isfinite(float(x)) for x in (entry,stop,target)),
         "positive_risk": abs(entry-stop)>0,
-        "minimum_rr": (barrier_class!="STRONG") or (rr_raw>=MIN_RR and abs(target-entry)/max(risk,1e-12)>=MIN_RR-1e-9),
+        "minimum_rr": actual_rr>=MIN_RR-1e-9 and rr_raw>=MIN_RR,
+        "minimum_tp_pips": tp_pips>=MIN_TAKE_PROFIT_PIPS-1e-9,
+        "minimum_stop_pips": pips_between(entry,stop,inst)>=MIN_STOP_PIPS-1e-9,
+        "barrier_room_ok": barrier_allows_target,
         "volatility_sane": .35<=vol<=3.5,
     }
 
     return {
         "signal":sig,"direction_score":float(dscore),"entry":entry,"stop":stop,"target":target,
-        "rr":rr,"rr_raw":rr_raw,"risk":risk,"structural_barrier":barrier,
+        "rr":actual_rr,"rr_raw":rr_raw,"risk":risk,"stop_pips":pips_between(entry,stop,inst),
+        "target_pips":tp_pips,"structural_barrier":barrier,
         "room_to_barrier_r":room_r,"barrier_score":barrier_score,"barrier_class":barrier_class,
         "structure_context":ctx,"pullbacks":pc,"filters":checks,"safety_checks":safety,
         "countertrend":countertrend,"transition":transition,
@@ -756,6 +779,7 @@ def analyze(h1, m15, m5, m1, inst) -> Dict[str, Any]:
         "direction_state":"TRANSITION" if chosen["transition"] else "COUNTERTREND" if chosen["countertrend"] else "TREND",
         "entry":chosen["entry"],"stop":chosen["stop"],"target":chosen["target"],
         "rr":chosen["rr"],"rr_raw":chosen["rr_raw"],
+        "stop_pips":chosen["stop_pips"],"target_pips":chosen["target_pips"],
         "structural_barrier":chosen["structural_barrier"],
         "room_to_barrier_r":chosen["room_to_barrier_r"],
         "barrier_score":chosen["barrier_score"],"barrier_class":chosen["barrier_class"],
@@ -1897,7 +1921,7 @@ async def discovery():
 async def home():
     return """<!doctype html><html lang='es'><meta name='viewport' content='width=device-width'><title>Market Alert V1.7</title>
 <style>body{font-family:system-ui;background:#0b1020;color:#eef2ff;max-width:1050px;margin:auto;padding:24px}.c{background:#151c32;border:1px solid #2c3656;border-radius:16px;padding:18px;margin:12px 0}pre{white-space:pre-wrap;word-break:break-word;background:#080c17;padding:14px;border-radius:12px}.tag{display:inline-block;padding:5px 9px;border-radius:999px;background:#25304f;margin-right:6px}</style>
-<h1>Market Alert V2.7.1 · Dual Hypothesis Fix</h1><div class=c><span class=tag>OANDA PRACTICE ONLY</span><span class=tag>24/7</span><span class=tag>Sin límite diario</span><span class=tag>Confianza calibrada</span>
+<h1>Market Alert V2.8 · Adaptive Risk Engine</h1><div class=c><span class=tag>OANDA PRACTICE ONLY</span><span class=tag>24/7</span><span class=tag>Sin límite diario</span><span class=tag>Confianza calibrada</span>
 <p><b>Quality Score ≠ probabilidad.</b> La confianza dinámica se calibra con resultados reales. Con poca muestra se limita deliberadamente y el 90% requiere evidencia sustancial.</p></div>
 <div class=c><h2>Estado</h2><pre id=s>Cargando…</pre></div><div class=c><h2>Aprendizaje</h2><pre id=l>Cargando…</pre></div><div class=c><h2>Última decisión</h2><pre id=d>Cargando…</pre></div><div class=c><h2>Últimas señales</h2><pre id=h>Cargando…</pre></div>
 <script>async function u(){s.textContent=JSON.stringify(await fetch('/api/status').then(r=>r.json()),null,2);l.textContent=JSON.stringify(await fetch('/api/learning').then(r=>r.json()),null,2);d.textContent=JSON.stringify(await fetch('/api/decisions?limit=5').then(r=>r.json()),null,2);h.textContent=JSON.stringify(await fetch('/api/signals?limit=15').then(r=>r.json()),null,2)}u();setInterval(u,15000)</script></html>"""
