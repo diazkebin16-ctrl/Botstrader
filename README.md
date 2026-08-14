@@ -1,22 +1,28 @@
-# Market Alert V2.9 — Adaptive Risk Engine
-
-Mantiene el motor dual BUY/SELL.
-
-- TP inicial mínimo: 7 pips.
-- R:R inicial mínimo: 1.5:1.
-- SL adaptativo: estructura + ATR M1 + ATR M5.
-- Piso de seguridad del SL: 3 pips, para evitar stops microscópicos.
-- Si una barrera fuerte no deja espacio para alcanzar el objetivo completo, no opera.
-- Una barrera no puede reducir el TP por debajo de 7 pips ni de 1.5R.
-- El estado muestra stop_pips y target_pips para auditoría.
+# Market Alert V3.7 — Parallel Filter Evolution
 
 OANDA PRACTICE ONLY.
 
+## Estado
+Implementado y probado localmente. Pendiente de validación con datos reales en Railway.
 
-## V2.9 — Closed-loop learning
-- M1 confirmation is now an execution trigger; BUY/SELL hypotheses without it are still recorded for learning but not executed.
-- Duplicate snapshots from the same M1 candle/direction no longer inflate the signal/learning sample set.
-- Strong barriers are hard room vetoes only while genuinely unbroken; confirmed broken levels are already skipped by structural context.
-- When new outcomes resolve and the labeled sample threshold is reached, model retraining is attempted immediately instead of waiting only for the hourly maintenance cycle.
-- Learning telemetry now exposes pending, ambiguous, timeout counts and whether the configured DB path is the recommended persistent `/data` volume.
-- Existing V2.8 adaptive risk rules remain: minimum 7-pip target, dynamic stop, minimum 1.5R, dual BUY/SELL hypotheses, contextual barriers, trend runner, and practice-only execution.
+## Mejoras
+- Investiga muchas hipótesis en paralelo; cada filtro conserva su propio historial/evidencia.
+- Puede activar varios filtros aprendidos a la vez si son compatibles.
+- No hay máximo numérico fijo: compatibilidad, cobertura y evidencia limitan el crecimiento.
+- Detecta contradicciones lógicas y mide historial conjunto antes de combinar reglas.
+- Cada filtro activo tiene su propio ciclo de revisión de 50 evidencias canónicas.
+- Si pasa el primer bloque, queda CONFIRMED.
+- Sigue revisándose en bloques posteriores de 50; si deja de rendir, se revierte individualmente.
+- Retirar un filtro no afecta a los demás filtros sanos.
+- Las combinaciones quedan registradas en `research_rule_compatibility`.
+
+## Seguridad
+Los filtros base de seguridad siguen siendo inmutables.
+La auto-evolución solo puede añadir/quitar filtros aprendidos veto-only.
+No puede relajar Safety, R:R mínimo, TP mínimo, stop ni forzar BUY/SELL.
+
+## Endpoints
+- GET `/api/research/active-rule`
+- GET `/api/research/compatibility`
+- POST `/api/research/promote`
+- POST `/api/research/review-active`

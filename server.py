@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 from typing import Dict, Any, List, Optional
 
 import httpx
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 
 # PRACTICE ONLY. There is intentionally no OANDA live endpoint or environment switch.
@@ -61,7 +61,7 @@ TREND_RUNNER_MIN_SCORE = max(0.0, float(os.getenv("TREND_RUNNER_MIN_SCORE", "0.6
 TREND_RUNNER_TP_R = max(2.0, float(os.getenv("TREND_RUNNER_TP_R", "3.0")))
 TREND_RUNNER_TRAIL_START_R = max(1.5, float(os.getenv("TREND_RUNNER_TRAIL_START_R", "1.75")))
 TREND_RUNNER_TRAIL_DISTANCE_R = max(0.40, float(os.getenv("TREND_RUNNER_TRAIL_DISTANCE_R", "0.90")))
-VERSION_TAG = "2.9"
+VERSION_TAG = "3.7"
 ENTRY_TIMING_ENABLED = os.getenv("ENTRY_TIMING_ENABLED", "true").lower() == "true"
 MAX_ENTRY_EXTENSION_ATR = max(0.5, float(os.getenv("MAX_ENTRY_EXTENSION_ATR", "1.20")))
 MIN_ROOM_TO_BARRIER_R = max(1.0, float(os.getenv("MIN_ROOM_TO_BARRIER_R", "1.50")))
@@ -84,12 +84,57 @@ STOP_ATR_M1_MULT = max(0.1, float(os.getenv("STOP_ATR_M1_MULT", "1.50")))
 STOP_ATR_M5_MULT = max(0.1, float(os.getenv("STOP_ATR_M5_MULT", "0.40")))
 M1_CONFIRMATION_REQUIRED = os.getenv("M1_CONFIRMATION_REQUIRED", "true").lower() == "true"
 DEDUP_SIGNAL_SNAPSHOTS = os.getenv("DEDUP_SIGNAL_SNAPSHOTS", "true").lower() == "true"
+RESEARCH_LAB_ENABLED = os.getenv("RESEARCH_LAB_ENABLED", "true").lower() == "true"
+RESEARCH_EVAL_MIN_SAMPLES = max(30, int(os.getenv("RESEARCH_EVAL_MIN_SAMPLES", "50")))
+RESEARCH_VALIDATE_MIN_SAMPLES = max(RESEARCH_EVAL_MIN_SAMPLES, int(os.getenv("RESEARCH_VALIDATE_MIN_SAMPLES", "100")))
+RESEARCH_MIN_EDGE = max(0.02, min(0.30, float(os.getenv("RESEARCH_MIN_EDGE", "0.08"))))
+MODEL_MIN_NEW_LABELS = max(20, int(os.getenv("MODEL_MIN_NEW_LABELS", "50")))
+SHADOW_MAX_VARIANTS_PER_SIGNAL = max(1, min(8, int(os.getenv("SHADOW_MAX_VARIANTS_PER_SIGNAL", "4"))))
+
+EXTERNAL_RESEARCH_ENABLED = os.getenv("EXTERNAL_RESEARCH_ENABLED", "true").lower() == "true"
+EXTERNAL_RESEARCH_MIN_SAMPLES = max(50, int(os.getenv("EXTERNAL_RESEARCH_MIN_SAMPLES", "50")))
+EXTERNAL_RESEARCH_VALIDATE_SAMPLES = max(100, int(os.getenv("EXTERNAL_RESEARCH_VALIDATE_SAMPLES", "100")))
+EXTERNAL_RESEARCH_MIN_EDGE = max(0.02, min(0.30, float(os.getenv("EXTERNAL_RESEARCH_MIN_EDGE", "0.08"))))
+EXTERNAL_RESEARCH_AUTO_ACTIVATE = False
+EXTERNAL_RESEARCH_SYMBOLS = [x.strip().upper().replace("/", "_") for x in os.getenv(
+    "EXTERNAL_RESEARCH_SYMBOLS", "GBP_USD,USD_JPY,AUD_USD,USD_CAD"
+).split(",") if x.strip()]
+EXTERNAL_RESEARCH_GRANULARITY = os.getenv("EXTERNAL_RESEARCH_GRANULARITY", "M5").upper()
+EXTERNAL_RESEARCH_CANDLE_COUNT = max(30, min(200, int(os.getenv("EXTERNAL_RESEARCH_CANDLE_COUNT", "80"))))
+EXTERNAL_RESEARCH_MIN_MOVE_ATR = max(0.05, float(os.getenv("EXTERNAL_RESEARCH_MIN_MOVE_ATR", "0.20")))
+EXTERNAL_NEWS_RESEARCH = os.getenv("EXTERNAL_NEWS_RESEARCH", "true").lower() == "true"
+AUTO_PROMOTE_RESEARCH = os.getenv("AUTO_PROMOTE_RESEARCH", "true").lower() == "true"
+AUTO_PROMOTE_MIN_SAMPLES = 100
+AUTO_PROMOTE_MIN_EDGE = max(0.05, min(0.30, float(os.getenv("AUTO_PROMOTE_MIN_EDGE", "0.10"))))
+AUTO_PROMOTE_REVIEW_SAMPLES = 50
+AUTO_PROMOTE_ROLLBACK_DROP = max(0.03, min(0.25, float(os.getenv("AUTO_PROMOTE_ROLLBACK_DROP", "0.08"))))
+AUTO_PROMOTE_RETRY_NEW_SAMPLES = max(30, int(os.getenv("AUTO_PROMOTE_RETRY_NEW_SAMPLES", "50")))
+AUTO_PROMOTE_MAX_ACTIVE = 0  # 0 = no fixed cap; compatibility/evidence governs
+AUTONOMOUS_DISCOVERY_ENABLED = os.getenv("AUTONOMOUS_DISCOVERY_ENABLED", "true").lower() == "true"
+AUTONOMOUS_DISCOVERY_MIN_ROWS = max(80, int(os.getenv("AUTONOMOUS_DISCOVERY_MIN_ROWS", "100")))
+AUTONOMOUS_DISCOVERY_HOLDOUT = max(0.25, min(0.50, float(os.getenv("AUTONOMOUS_DISCOVERY_HOLDOUT", "0.40"))))
+AUTONOMOUS_DISCOVERY_MIN_COVERAGE = max(0.10, min(0.40, float(os.getenv("AUTONOMOUS_DISCOVERY_MIN_COVERAGE", "0.15"))))
+AUTONOMOUS_DISCOVERY_MAX_COVERAGE = max(0.60, min(0.95, float(os.getenv("AUTONOMOUS_DISCOVERY_MAX_COVERAGE", "0.85"))))
+AUTONOMOUS_DISCOVERY_MIN_EDGE = max(0.05, min(0.30, float(os.getenv("AUTONOMOUS_DISCOVERY_MIN_EDGE", "0.10"))))
+AUTONOMOUS_DISCOVERY_MAX_FEATURES = max(6, min(30, int(os.getenv("AUTONOMOUS_DISCOVERY_MAX_FEATURES", "18"))))
+AUTONOMOUS_DISCOVERY_MAX_PAIRWISE = max(5, min(100, int(os.getenv("AUTONOMOUS_DISCOVERY_MAX_PAIRWISE", "30"))))
+AUTONOMOUS_SHADOW_WEIGHT = max(0.05, min(0.50, float(os.getenv("AUTONOMOUS_SHADOW_WEIGHT", "0.20"))))
+AUTONOMOUS_PROMOTION_MIN_CANONICAL = max(20, int(os.getenv("AUTONOMOUS_PROMOTION_MIN_CANONICAL", "30")))
+MULTI_FILTER_COMPAT_ENABLED = os.getenv("MULTI_FILTER_COMPAT_ENABLED", "true").lower() == "true"
+MULTI_FILTER_MIN_JOINT_SAMPLES = max(10, int(os.getenv("MULTI_FILTER_MIN_JOINT_SAMPLES", "20")))
+MULTI_FILTER_MIN_JOINT_COVERAGE = max(0.05, min(0.40, float(os.getenv("MULTI_FILTER_MIN_JOINT_COVERAGE", "0.10"))))
+MULTI_FILTER_MAX_WR_DROP = max(0.00, min(0.20, float(os.getenv("MULTI_FILTER_MAX_WR_DROP", "0.05"))))
+ACTIVE_RULE_HEALTH_BLOCK = 50
+EXTERNAL_INCLUDE_SHADOW = os.getenv("EXTERNAL_INCLUDE_SHADOW", "true").lower() == "true"
+EXTERNAL_SHADOW_BASELINE_WEIGHT = max(0.10, min(1.0, float(os.getenv("EXTERNAL_SHADOW_BASELINE_WEIGHT", "0.50"))))
+EXTERNAL_SHADOW_VARIANT_WEIGHT = max(0.05, min(EXTERNAL_SHADOW_BASELINE_WEIGHT, float(os.getenv("EXTERNAL_SHADOW_VARIANT_WEIGHT", "0.25"))))
+EXTERNAL_PROMOTION_MIN_CANONICAL = max(10, int(os.getenv("EXTERNAL_PROMOTION_MIN_CANONICAL", "20")))
 EXECUTION_MIN_CONFIDENCE = max(0.50, min(0.95, float(os.getenv("EXECUTION_MIN_CONFIDENCE", "0.65"))))
 NY = ZoneInfo("America/New_York")
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("market-alert")
-app = FastAPI(title="Market Alert V2.9 — Closed-Loop Learning / OANDA Practice Only")
+app = FastAPI(title="Market Alert V3.7 — Parallel Filter Evolution / OANDA Practice Only")
 state: Dict[str, Any] = {
     "started": datetime.now(timezone.utc).isoformat(),
     "last_scan": None,
@@ -268,6 +313,149 @@ def conn() -> sqlite3.Connection:
         )
     """)
     c.execute("""
+        CREATE TABLE IF NOT EXISTS external_research_observations(
+            id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL, candle_ts TEXT,
+            instrument TEXT NOT NULL, source_type TEXT NOT NULL, source_key TEXT NOT NULL,
+            value_num REAL, value_text TEXT, metadata_json TEXT NOT NULL DEFAULT '{}'
+        )
+    """)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS external_hypotheses(
+            hypothesis_key TEXT PRIMARY KEY, description TEXT NOT NULL, family TEXT NOT NULL,
+            stage TEXT NOT NULL DEFAULT 'EXPERIMENTAL', total_samples INTEGER NOT NULL DEFAULT 0,
+            aligned_samples INTEGER NOT NULL DEFAULT 0, aligned_wins INTEGER NOT NULL DEFAULT 0,
+            aligned_win_rate REAL, control_samples INTEGER NOT NULL DEFAULT 0,
+            control_wins INTEGER NOT NULL DEFAULT 0, control_win_rate REAL, edge REAL,
+            recommendation TEXT NOT NULL DEFAULT 'KEEP_TESTING',
+            automatic_live_activation INTEGER NOT NULL DEFAULT 0, updated_ts TEXT NOT NULL
+        )
+    """)
+    ext_cols = {row[1] for row in c.execute("PRAGMA table_info(external_hypotheses)").fetchall()}
+    ext_migrations = {
+        "canonical_samples": "INTEGER NOT NULL DEFAULT 0",
+        "shadow_samples": "INTEGER NOT NULL DEFAULT 0",
+        "effective_samples": "REAL NOT NULL DEFAULT 0",
+        "shadow_weighted_wins": "REAL NOT NULL DEFAULT 0"
+    }
+    for name, ddl in ext_migrations.items():
+        if name not in ext_cols:
+            c.execute(f"ALTER TABLE external_hypotheses ADD COLUMN {name} {ddl}")
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS research_knowledge(
+            id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL,
+            hypothesis_key TEXT NOT NULL, finding TEXT NOT NULL,
+            evidence_json TEXT NOT NULL DEFAULT '{}', UNIQUE(hypothesis_key,finding)
+        )
+    """)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS shadow_trials(
+            id INTEGER PRIMARY KEY AUTOINCREMENT, signal_id INTEGER NOT NULL, created_ts TEXT NOT NULL, candle_ts TEXT,
+            instrument TEXT NOT NULL, direction TEXT NOT NULL, variant TEXT NOT NULL, entry REAL NOT NULL, stop REAL NOT NULL,
+            target REAL NOT NULL, risk REAL NOT NULL, status TEXT NOT NULL DEFAULT 'PENDING', label INTEGER, resolved_ts TEXT,
+            bars_to_resolution INTEGER, mfe_r REAL, mae_r REAL, note TEXT, UNIQUE(signal_id, variant),
+            FOREIGN KEY(signal_id) REFERENCES signals(id))
+    """)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS filter_hypotheses(
+            filter_key TEXT PRIMARY KEY, description TEXT NOT NULL, stage TEXT NOT NULL, total_samples INTEGER NOT NULL,
+            pass_samples INTEGER NOT NULL, pass_wins INTEGER NOT NULL, pass_win_rate REAL, fail_samples INTEGER NOT NULL,
+            fail_wins INTEGER NOT NULL, fail_win_rate REAL, edge REAL, coverage REAL, recommendation TEXT, updated_ts TEXT NOT NULL)
+    """)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS autonomous_hypotheses(
+            hypothesis_key TEXT PRIMARY KEY,
+            description TEXT NOT NULL,
+            rule_json TEXT NOT NULL,
+            family TEXT NOT NULL,
+            stage TEXT NOT NULL,
+            discovery_samples REAL NOT NULL DEFAULT 0,
+            validation_samples REAL NOT NULL DEFAULT 0,
+            canonical_validation_samples INTEGER NOT NULL DEFAULT 0,
+            shadow_validation_samples INTEGER NOT NULL DEFAULT 0,
+            pass_samples REAL NOT NULL DEFAULT 0,
+            pass_wins REAL NOT NULL DEFAULT 0,
+            pass_win_rate REAL,
+            fail_samples REAL NOT NULL DEFAULT 0,
+            fail_wins REAL NOT NULL DEFAULT 0,
+            fail_win_rate REAL,
+            edge REAL,
+            coverage REAL,
+            score REAL,
+            recommendation TEXT,
+            generation INTEGER NOT NULL DEFAULT 1,
+            updated_ts TEXT NOT NULL
+        )
+    """)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS research_family_stats(
+            family TEXT PRIMARY KEY,
+            hypotheses_tested INTEGER NOT NULL DEFAULT 0,
+            validated INTEGER NOT NULL DEFAULT 0,
+            rejected INTEGER NOT NULL DEFAULT 0,
+            avg_abs_edge REAL,
+            best_edge REAL,
+            priority_score REAL NOT NULL DEFAULT 1.0,
+            updated_ts TEXT NOT NULL
+        )
+    """)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS active_research_rules(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source TEXT NOT NULL,
+            rule_key TEXT NOT NULL,
+            description TEXT NOT NULL,
+            status TEXT NOT NULL,
+            activated_ts TEXT NOT NULL,
+            deactivated_ts TEXT,
+            evidence_samples INTEGER NOT NULL,
+            evidence_edge REAL,
+            baseline_win_rate REAL,
+            review_after_samples INTEGER NOT NULL,
+            post_samples INTEGER NOT NULL DEFAULT 0,
+            post_wins INTEGER NOT NULL DEFAULT 0,
+            post_win_rate REAL,
+            last_review_ts TEXT,
+            reason TEXT,
+            UNIQUE(source, rule_key, activated_ts)
+        )
+    """)
+    active_cols = {row[1] for row in c.execute("PRAGMA table_info(active_research_rules)").fetchall()}
+    active_migrations = {
+        "reviewed_matches": "INTEGER NOT NULL DEFAULT 0",
+        "confirmed_ts": "TEXT",
+        "last_health_block_wr": "REAL"
+    }
+    for name, ddl in active_migrations.items():
+        if name not in active_cols:
+            c.execute(f"ALTER TABLE active_research_rules ADD COLUMN {name} {ddl}")
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS research_rule_audit(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts TEXT NOT NULL,
+            action TEXT NOT NULL,
+            source TEXT NOT NULL,
+            rule_key TEXT NOT NULL,
+            details_json TEXT NOT NULL DEFAULT '{}'
+        )
+    """)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS research_rule_compatibility(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source_a TEXT NOT NULL,
+            rule_a TEXT NOT NULL,
+            source_b TEXT NOT NULL,
+            rule_b TEXT NOT NULL,
+            checked_ts TEXT NOT NULL,
+            samples INTEGER NOT NULL,
+            joint_pass INTEGER NOT NULL,
+            joint_win_rate REAL,
+            joint_coverage REAL,
+            compatible INTEGER NOT NULL,
+            reason TEXT,
+            UNIQUE(source_a, rule_a, source_b, rule_b)
+        )
+    """)
+    c.execute("""
         CREATE TABLE IF NOT EXISTS active_trade_management(
             trade_id TEXT PRIMARY KEY,
             instrument TEXT NOT NULL,
@@ -305,6 +493,13 @@ def conn() -> sqlite3.Connection:
     c.execute("INSERT OR IGNORE INTO strategy_version_stats(version_tag,started_ts,note) VALUES(?,?,?)",
               (VERSION_TAG, now_iso(), "Quality Scalper: RR>=1.5, trend runner, active stop management"))
     c.execute("CREATE INDEX IF NOT EXISTS idx_patterns_validated ON discovered_patterns(validated,weight)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_shadow_pending ON shadow_trials(status,instrument)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_filter_stage ON filter_hypotheses(stage,total_samples)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_active_research_status ON active_research_rules(status,activated_ts)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_research_rule_audit ON research_rule_audit(source,rule_key,ts)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_autonomous_stage ON autonomous_hypotheses(stage,validation_samples)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_autonomous_score ON autonomous_hypotheses(score,edge)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_rule_compat ON research_rule_compatibility(compatible,checked_ts)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_samples_pending ON learning_samples(status,instrument)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_signals_ts ON signals(ts)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_decision_ts ON decision_log(ts)")
@@ -822,7 +1017,9 @@ async def news(client: httpx.AsyncClient, r: Dict[str, Any]) -> Dict[str, Any]:
         features["news_contradict"] = 1 if align == "CONTRADICE" else 0
         blocked = r["blocked"]
         features["blocked"] = 1 if blocked else 0
-        return {**r, "score": score, "alignment": align, "blocked": blocked, "features": features, "news_articles": [{"title": a.get("title", ""), "url": a.get("url", "")} for a in arts[:5]]}
+        return {**r, "score": score, "alignment": align, "blocked": blocked, "features": features,
+                "news_bias": bias, "news_positive_hits": pos, "news_negative_hits": neg,
+                "news_articles": [{"title": a.get("title", ""), "url": a.get("url", "")} for a in arts[:5]]}
     except Exception as e:
         return {**r, "alignment": "UNKNOWN", "news_error": str(e)}
 
@@ -1349,6 +1546,12 @@ def execution_decision(r: Dict[str, Any], conf: Dict[str, Any]) -> Dict[str, Any
     q = quality_entry_gate(r, conf)
     if not q["ok"]:
         return {"execute": False, "reason": "Quality veto: " + q["reason"]}
+
+    research_gate=evaluate_active_research_rules(r)
+    if not research_gate["ok"]:
+        keys="; ".join(f"{x['source']}:{x['rule_key']}" for x in research_gate.get("vetoes",[])[:5])
+        return {"execute":False,"reason":f"Research veto(s): {keys}"}
+
     rg = reentry_guard(r)
     if not rg["ok"]:
         return {"execute": False, "reason": "Re-entry veto: " + rg["reason"]}
@@ -1494,8 +1697,834 @@ def save_signal(r: Dict[str, Any], executed: int, order_id: str, ml_probability:
         """, (signal_id, now_iso(), r.get("candle_ts"), r["instrument"], r["signal"], r["entry"], r["stop"], r["target"], r["technical"], r["score"], int(r["blocked"]), executed, json.dumps(r["features"], separators=(",", ":"))))
     c.commit()
     c.close()
+    create_shadow_trials(signal_id, r)
     return signal_id
 
+
+
+
+def record_external_observation(instrument: str, source_type: str, source_key: str,
+                                value_num=None, value_text=None, metadata=None, candle_ts=None):
+    """Research-only ingestion. It cannot place or modify OANDA orders."""
+    if not EXTERNAL_RESEARCH_ENABLED: return
+    c=conn()
+    c.execute("""INSERT INTO external_research_observations(
+      ts,candle_ts,instrument,source_type,source_key,value_num,value_text,metadata_json)
+      VALUES(?,?,?,?,?,?,?,?)""",
+      (now_iso(),candle_ts,instrument,source_type,source_key,value_num,value_text,
+       json.dumps(metadata or {},separators=(",",":"))))
+    c.commit(); c.close()
+
+
+
+def _external_momentum_snapshot(candles_: List[Dict[str, Any]]) -> Optional[Dict[str, float]]:
+    if len(candles_) < 14:
+        return None
+    closes=[float(x["c"]) for x in candles_]
+    atr_v=atr(candles_)
+    if atr_v <= 0:
+        return None
+    ret3=(closes[-1]-closes[-4])/atr_v
+    ret8=(closes[-1]-closes[-9])/atr_v
+    fast=ema(closes,5)[-1]
+    slow=ema(closes,13)[-1]
+    trend=(fast-slow)/atr_v
+    composite=(ret3*0.40)+(ret8*0.35)+(trend*0.25)
+    return {
+        "ret3_atr":float(ret3),
+        "ret8_atr":float(ret8),
+        "trend_atr":float(trend),
+        "composite":float(composite),
+        "strength":float((abs(ret3)+abs(ret8)+abs(trend))/3.0),
+    }
+
+
+async def collect_cross_asset_research(client: httpx.AsyncClient, target_instrument: str,
+                                       candle_ts: Optional[str]) -> Dict[str, Any]:
+    """Fetch external pairs automatically. Research only; no execution effect."""
+    if not EXTERNAL_RESEARCH_ENABLED:
+        return {"enabled":False,"collected":0,"errors":[]}
+    symbols=[x for x in EXTERNAL_RESEARCH_SYMBOLS if x != target_instrument]
+    if not symbols:
+        return {"enabled":True,"collected":0,"errors":[]}
+
+    async def one(sym: str):
+        try:
+            cs=await candles(client,sym,EXTERNAL_RESEARCH_GRANULARITY,EXTERNAL_RESEARCH_CANDLE_COUNT)
+            return sym,_external_momentum_snapshot(cs),None
+        except Exception as e:
+            return sym,None,str(e)
+
+    results=await asyncio.gather(*(one(sym) for sym in symbols))
+    collected=0; errors=[]
+    for sym,snap,err in results:
+        if err:
+            errors.append({"symbol":sym,"error":err})
+            continue
+        if not snap:
+            continue
+        record_external_observation(
+            instrument=target_instrument,
+            source_type="CROSS_ASSET",
+            source_key=sym,
+            value_num=snap["composite"],
+            value_text="UP" if snap["composite"]>0 else "DOWN" if snap["composite"]<0 else "FLAT",
+            metadata={
+                "granularity":EXTERNAL_RESEARCH_GRANULARITY,
+                "ret3_atr":snap["ret3_atr"],
+                "ret8_atr":snap["ret8_atr"],
+                "trend_atr":snap["trend_atr"],
+                "strength":snap["strength"],
+            },
+            candle_ts=candle_ts
+        )
+        collected += 1
+    return {"enabled":True,"collected":collected,"errors":errors,"symbols":symbols}
+
+
+def record_news_research(r: Dict[str, Any]) -> None:
+    """Persist the GDELT news context for later hypothesis testing."""
+    if not EXTERNAL_RESEARCH_ENABLED or not EXTERNAL_NEWS_RESEARCH:
+        return
+    bias=str(r.get("news_bias") or "UNKNOWN").upper()
+    align=str(r.get("alignment") or "UNKNOWN").upper()
+    val=1.0 if bias=="BULLISH" else -1.0 if bias=="BEARISH" else 0.0
+    record_external_observation(
+        instrument=r["instrument"],
+        source_type="NEWS",
+        source_key=f"{r['instrument']}_GDELT_180M",
+        value_num=val,
+        value_text=f"{bias}|{align}",
+        metadata={
+            "article_count":len(r.get("news_articles") or []),
+            "titles":[x.get("title","") for x in (r.get("news_articles") or [])[:5]],
+        },
+        candle_ts=r.get("candle_ts")
+    )
+
+
+def external_research_candidates(signal_row, observations):
+    out={}; direction=signal_row.get("signal")
+    for o in observations:
+        typ=str(o.get("source_type","")).upper()
+        key=str(o.get("source_key","")).upper()
+        val=o.get("value_num"); txt=str(o.get("value_text") or "").upper()
+        if typ in ("CROSS_ASSET","ASSET_MOMENTUM") and val is not None:
+            v=float(val)
+            same=(direction=="BUY" and v>0) or (direction=="SELL" and v<0)
+            inverse=(direction=="BUY" and v<0) or (direction=="SELL" and v>0)
+            strong=abs(v)>=EXTERNAL_RESEARCH_MIN_MOVE_ATR
+            out[f"cross_asset::{key}::same_direction"]={
+                "family":"CROSS_ASSET","aligned":bool(same and strong),
+                "description":f"{key} moves in the SAME direction as {signal_row.get('instrument')}"}
+            out[f"cross_asset::{key}::inverse_direction"]={
+                "family":"CROSS_ASSET","aligned":bool(inverse and strong),
+                "description":f"{key} moves INVERSE to {signal_row.get('instrument')}"}
+            out[f"cross_asset::{key}::strong_move"]={
+                "family":"CROSS_ASSET","aligned":bool(strong),
+                "description":f"{key} has a move >= {EXTERNAL_RESEARCH_MIN_MOVE_ATR:.2f} ATR"}
+        elif typ in ("RISK_REGIME","VOLATILITY_REGIME") and val is not None:
+            out[f"regime::{key}::normal"]={"family":"MARKET_REGIME","aligned":abs(float(val))<=1.0,
+                "description":f"{key} inside normal research regime"}
+        elif typ in ("NEWS","MACRO_EVENT"):
+            neutral=("NEUTRAL" in txt or "NONE" in txt or not txt)
+            out[f"news::{key}::low_conflict"]={"family":"NEWS_MACRO",
+                "aligned":neutral and abs(float(val or 0))<1.0,
+                "description":f"{key} low directional conflict around signal"}
+    return out
+
+
+def refresh_external_hypotheses():
+    """
+    Evaluate external hypotheses using BOTH:
+      1) canonical resolved opportunities (executed or rejected/paper-followed), and
+      2) resolved shadow simulations produced by the simulation engine.
+
+    Shadow outcomes are down-weighted so one market opportunity cannot dominate the
+    evidence simply because several stop/target variants were simulated.
+    """
+    if not EXTERNAL_RESEARCH_ENABLED:
+        return {"enabled":False}
+
+    c=conn()
+
+    canonical_rows=c.execute("""SELECT ls.label,s.id signal_id,s.candle_ts,s.instrument,s.signal,
+                                      s.executed,'CANONICAL' evidence_source,NULL shadow_variant
+                               FROM learning_samples ls
+                               JOIN signals s ON s.id=ls.signal_id
+                               WHERE ls.label IN (0,1)
+                               ORDER BY s.id""").fetchall()
+
+    shadow_rows=[]
+    if EXTERNAL_INCLUDE_SHADOW:
+        shadow_rows=c.execute("""SELECT st.label,s.id signal_id,s.candle_ts,s.instrument,s.signal,
+                                       s.executed,'SHADOW' evidence_source,st.variant shadow_variant
+                                FROM shadow_trials st
+                                JOIN signals s ON s.id=st.signal_id
+                                WHERE st.label IN (0,1)
+                                ORDER BY st.id""").fetchall()
+
+    rows=list(canonical_rows)+list(shadow_rows)
+    stats={}
+
+    for row in rows:
+        obs=c.execute("""SELECT * FROM external_research_observations
+                         WHERE instrument=? AND candle_ts=?""",
+                      (row["instrument"],row["candle_ts"])).fetchall()
+        if not obs:
+            continue
+
+        source=row["evidence_source"]
+        variant=row["shadow_variant"]
+        if source=="CANONICAL":
+            weight=1.0
+        elif variant=="BASELINE":
+            weight=EXTERNAL_SHADOW_BASELINE_WEIGHT
+        else:
+            weight=EXTERNAL_SHADOW_VARIANT_WEIGHT
+
+        candidates=external_research_candidates(dict(row),[dict(x) for x in obs])
+        for key,h in candidates.items():
+            x=stats.setdefault(key,{
+                "description":h["description"],"family":h["family"],
+                "an":0,"aw":0,"cn":0,"cw":0,
+                "anw":0.0,"aww":0.0,"cnw":0.0,"cww":0.0,
+                "canonical":0,"shadow":0,"shadow_weighted_wins":0.0
+            })
+
+            if source=="CANONICAL":
+                x["canonical"]+=1
+            else:
+                x["shadow"]+=1
+                x["shadow_weighted_wins"] += float(row["label"])*weight
+
+            if h["aligned"]:
+                x["an"]+=1
+                x["aw"]+=int(row["label"])
+                x["anw"]+=weight
+                x["aww"]+=float(row["label"])*weight
+            else:
+                x["cn"]+=1
+                x["cw"]+=int(row["label"])
+                x["cnw"]+=weight
+                x["cww"]+=float(row["label"])*weight
+
+    stages={"EXPERIMENTAL":0,"EVALUATING":0,"VALIDATED":0,"REJECTED":0}
+
+    for key,x in stats.items():
+        raw_total=x["canonical"]+x["shadow"]
+        effective=x["anw"]+x["cnw"]
+        awr=x["aww"]/x["anw"] if x["anw"] else None
+        cwr=x["cww"]/x["cnw"] if x["cnw"] else None
+        edge=(awr-cwr) if awr is not None and cwr is not None else None
+
+        # Research can advance using simulations, but live promotion later also
+        # requires a minimum amount of canonical evidence.
+        if effective < EXTERNAL_RESEARCH_MIN_SAMPLES:
+            stage="EXPERIMENTAL"
+        elif effective < EXTERNAL_RESEARCH_VALIDATE_SAMPLES:
+            stage="EVALUATING"
+        elif x["anw"]>=20 and x["cnw"]>=20 and edge is not None and edge>=EXTERNAL_RESEARCH_MIN_EDGE:
+            stage="VALIDATED"
+        elif x["anw"]>=20 and x["cnw"]>=20 and edge is not None and edge<=0.02:
+            stage="REJECTED"
+        else:
+            stage="EVALUATING"
+
+        stages[stage]+=1
+        rec="CANDIDATE_FOR_FUTURE_VERSION" if stage=="VALIDATED" else ("DO_NOT_USE" if stage=="REJECTED" else "KEEP_TESTING")
+
+        c.execute("""INSERT INTO external_hypotheses(
+          hypothesis_key,description,family,stage,total_samples,aligned_samples,aligned_wins,aligned_win_rate,
+          control_samples,control_wins,control_win_rate,edge,recommendation,automatic_live_activation,updated_ts,
+          canonical_samples,shadow_samples,effective_samples,shadow_weighted_wins)
+          VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+          ON CONFLICT(hypothesis_key) DO UPDATE SET
+          description=excluded.description,family=excluded.family,stage=excluded.stage,
+          total_samples=excluded.total_samples,aligned_samples=excluded.aligned_samples,
+          aligned_wins=excluded.aligned_wins,aligned_win_rate=excluded.aligned_win_rate,
+          control_samples=excluded.control_samples,control_wins=excluded.control_wins,
+          control_win_rate=excluded.control_win_rate,edge=excluded.edge,
+          recommendation=excluded.recommendation,automatic_live_activation=0,updated_ts=excluded.updated_ts,
+          canonical_samples=excluded.canonical_samples,shadow_samples=excluded.shadow_samples,
+          effective_samples=excluded.effective_samples,shadow_weighted_wins=excluded.shadow_weighted_wins""",
+          (key,x["description"],x["family"],stage,raw_total,x["an"],x["aw"],awr,
+           x["cn"],x["cw"],cwr,edge,rec,0,now_iso(),
+           x["canonical"],x["shadow"],effective,x["shadow_weighted_wins"]))
+
+        if stage=="VALIDATED":
+            evidence={
+                "raw_samples":raw_total,
+                "effective_samples":effective,
+                "canonical_samples":x["canonical"],
+                "shadow_samples":x["shadow"],
+                "edge":edge,
+                "aligned_win_rate":awr,
+                "control_win_rate":cwr,
+                "shadow_weights":{
+                    "baseline":EXTERNAL_SHADOW_BASELINE_WEIGHT,
+                    "variant":EXTERNAL_SHADOW_VARIANT_WEIGHT
+                }
+            }
+            c.execute("""INSERT OR IGNORE INTO research_knowledge(ts,hypothesis_key,finding,evidence_json)
+                         VALUES(?,?,?,?)""",
+                      (now_iso(),key,"Validated research candidate: "+x["description"],
+                       json.dumps(evidence,separators=(",",":"))))
+
+    c.commit()
+    c.close()
+
+    return {
+        "enabled":True,
+        "canonical_resolved":len(canonical_rows),
+        "shadow_resolved":len(shadow_rows),
+        "shadow_included":EXTERNAL_INCLUDE_SHADOW,
+        "shadow_baseline_weight":EXTERNAL_SHADOW_BASELINE_WEIGHT,
+        "shadow_variant_weight":EXTERNAL_SHADOW_VARIANT_WEIGHT,
+        **{k.lower():v for k,v in stages.items()},
+        "automatic_live_activation":False
+    }
+
+
+
+
+AUTONOMOUS_NUMERIC_FEATURES = (
+    "technical_score","final_score","m15_gap_atr","m15_slope_atr","m5_momentum",
+    "pullbacks","m1_momentum","extension_atr","volatility_ratio","rr_raw",
+    "room_to_barrier_r","barrier_score","broken_barriers","hour_ny","buy_score",
+    "sell_score","direction_edge","h1_gap_atr","h1_slope_atr","transition_state"
+)
+
+def _auto_quantile(values, q):
+    vals=sorted(float(x) for x in values if x is not None and math.isfinite(float(x)))
+    if not vals:return None
+    if len(vals)==1:return vals[0]
+    pos=(len(vals)-1)*q; lo=int(math.floor(pos)); hi=int(math.ceil(pos))
+    if lo==hi:return vals[lo]
+    f=pos-lo
+    return vals[lo]*(1-f)+vals[hi]*f
+
+def _auto_variance(vals):
+    if len(vals)<2:return 0.0
+    m=sum(vals)/len(vals)
+    return sum((x-m)*(x-m) for x in vals)/len(vals)
+
+def _auto_dataset():
+    c=conn()
+    canonical=c.execute("""SELECT ls.label,s.candle_ts,s.instrument,s.signal,s.features_json,
+                                  'CANONICAL' source,NULL variant
+                           FROM learning_samples ls JOIN signals s ON s.id=ls.signal_id
+                           WHERE ls.label IN (0,1) ORDER BY s.id""").fetchall()
+    shadow=c.execute("""SELECT st.label,s.candle_ts,s.instrument,s.signal,s.features_json,
+                               'SHADOW' source,st.variant variant
+                        FROM shadow_trials st JOIN signals s ON s.id=st.signal_id
+                        WHERE st.label IN (0,1) ORDER BY st.id""").fetchall()
+    c.close()
+    out=[]
+    for row in list(canonical)+list(shadow):
+        try:f=json.loads(row["features_json"] or "{}")
+        except Exception:f={}
+        out.append({"label":int(row["label"]),"features":f,"signal":row["signal"],
+                    "instrument":row["instrument"],"candle_ts":row["candle_ts"],
+                    "source":row["source"],"variant":row["variant"],
+                    "weight":1.0 if row["source"]=="CANONICAL" else AUTONOMOUS_SHADOW_WEIGHT})
+    return out
+
+def _auto_feature_names(rows):
+    ranked=[]
+    for name in AUTONOMOUS_NUMERIC_FEATURES:
+        vals=[]
+        for r in rows:
+            try:
+                v=float(r["features"].get(name))
+                if math.isfinite(v):vals.append(v)
+            except Exception:pass
+        if len(vals)>=max(20,int(len(rows)*.45)) and len(set(round(v,10) for v in vals))>=4:
+            ranked.append((_auto_variance(vals),name))
+    ranked.sort(reverse=True)
+    return [n for _,n in ranked[:AUTONOMOUS_DISCOVERY_MAX_FEATURES]]
+
+def _auto_rule_passes(rule,r):
+    conditions=rule.get("conditions") or []
+    if not conditions:return None
+    f=r.get("features") or {}
+    for c in conditions:
+        try:
+            x=float(f.get(c["feature"])); t=float(c["value"])
+        except Exception:return None
+        if not math.isfinite(x) or not math.isfinite(t):return None
+        if c["op"]=="<=" and not x<=t:return False
+        if c["op"]==">=" and not x>=t:return False
+    return True
+
+def evaluate_autonomous_rule(rule_key,r):
+    c=conn(); row=c.execute("SELECT rule_json FROM autonomous_hypotheses WHERE hypothesis_key=?",(rule_key,)).fetchone(); c.close()
+    if not row:return None
+    try:rule=json.loads(row["rule_json"])
+    except Exception:return None
+    return _auto_rule_passes(rule,r)
+
+def _auto_eval(rule,rows):
+    p=[];f=[];cp=sp=0
+    for row in rows:
+        ok=_auto_rule_passes(rule,{"features":row["features"]})
+        if ok is None:continue
+        if ok:
+            p.append(row); cp+=int(row["source"]=="CANONICAL"); sp+=int(row["source"]=="SHADOW")
+        else:f.append(row)
+    def cnt(x):return sum(float(r["weight"]) for r in x)
+    def wr(x):
+        den=cnt(x)
+        return sum(float(r["label"])*float(r["weight"]) for r in x)/den if den else None
+    pn,fn=cnt(p),cnt(f); pwr,fwr=wr(p),wr(f)
+    total=pn+fn
+    return {"pn":pn,"fn":fn,"pwr":pwr,"fwr":fwr,
+            "edge":(pwr-fwr) if pwr is not None and fwr is not None else None,
+            "coverage":pn/total if total else 0.0,"total":total,
+            "canonical_pass":cp,"shadow_pass":sp}
+
+def _auto_key(rule):
+    return "auto::"+"&".join(f"{c['feature']}{c['op']}{float(c['value']):.8g}" for c in rule["conditions"])
+
+def _auto_desc(rule):
+    return " AND ".join(f"{c['feature']} {c['op']} {float(c['value']):.4g}" for c in rule["conditions"])
+
+def refresh_research_family_stats():
+    c=conn(); rows=c.execute("SELECT family,stage,COALESCE(edge,0) edge FROM autonomous_hypotheses").fetchall()
+    groups={}
+    for r in rows:
+        g=groups.setdefault(r["family"],{"tested":0,"validated":0,"rejected":0,"edges":[]})
+        g["tested"]+=1;g["validated"]+=int(r["stage"]=="VALIDATED");g["rejected"]+=int(r["stage"]=="REJECTED");g["edges"].append(float(r["edge"] or 0))
+    for fam,g in groups.items():
+        avg=sum(abs(x) for x in g["edges"])/len(g["edges"]) if g["edges"] else 0
+        best=max(g["edges"]) if g["edges"] else 0
+        success=(g["validated"]+1)/(g["tested"]+3)
+        priority=clamp(.5+1.5*success+2*max(0,best),.5,3.0)
+        c.execute("""INSERT INTO research_family_stats(family,hypotheses_tested,validated,rejected,avg_abs_edge,best_edge,priority_score,updated_ts)
+                     VALUES(?,?,?,?,?,?,?,?)
+                     ON CONFLICT(family) DO UPDATE SET hypotheses_tested=excluded.hypotheses_tested,
+                     validated=excluded.validated,rejected=excluded.rejected,avg_abs_edge=excluded.avg_abs_edge,
+                     best_edge=excluded.best_edge,priority_score=excluded.priority_score,updated_ts=excluded.updated_ts""",
+                  (fam,g["tested"],g["validated"],g["rejected"],avg,best,priority,now_iso()))
+    c.commit();c.close()
+    return {"families":len(groups)}
+
+def autonomous_discovery_refresh():
+    """
+    Generates thresholds from observed data and validates them on a later holdout.
+    It does not rely on a hand-written threshold list.
+    """
+    if not AUTONOMOUS_DISCOVERY_ENABLED:return {"enabled":False}
+    rows=_auto_dataset()
+    if len(rows)<AUTONOMOUS_DISCOVERY_MIN_ROWS:
+        return {"enabled":True,"rows":len(rows),"reason":"not_enough_rows"}
+
+    split=max(30,int(len(rows)*(1-AUTONOMOUS_DISCOVERY_HOLDOUT)))
+    discovery,validation=rows[:split],rows[split:]
+    if len(validation)<30:return {"enabled":True,"rows":len(rows),"reason":"not_enough_holdout"}
+
+    names=_auto_feature_names(discovery)
+    singles=[]
+    for name in names:
+        vals=[]
+        for r in discovery:
+            try:
+                v=float(r["features"].get(name))
+                if math.isfinite(v):vals.append(v)
+            except Exception:pass
+        for q in (.25,.50,.75):
+            t=_auto_quantile(vals,q)
+            if t is None:continue
+            singles.extend([
+                {"family":"AUTO_SINGLE","generation":1,"conditions":[{"feature":name,"op":"<=","value":t}]},
+                {"family":"AUTO_SINGLE","generation":1,"conditions":[{"feature":name,"op":">=","value":t}]}
+            ])
+
+    ranked=[]
+    for rule in singles:
+        e=_auto_eval(rule,discovery)
+        if e["edge"] is not None and AUTONOMOUS_DISCOVERY_MIN_COVERAGE<=e["coverage"]<=AUTONOMOUS_DISCOVERY_MAX_COVERAGE:
+            ranked.append((abs(e["edge"])*math.sqrt(max(1,e["total"])),rule))
+    ranked.sort(key=lambda x:x[0],reverse=True)
+
+    top=[];used=set()
+    for _,rule in ranked:
+        feat=rule["conditions"][0]["feature"]
+        if feat in used:continue
+        used.add(feat);top.append(rule)
+        if len(top)>=10:break
+
+    pairs=[]
+    for i in range(len(top)):
+        for j in range(i+1,len(top)):
+            pairs.append({"family":"AUTO_PAIR","generation":2,
+                          "conditions":[dict(top[i]["conditions"][0]),dict(top[j]["conditions"][0])]})
+            if len(pairs)>=AUTONOMOUS_DISCOVERY_MAX_PAIRWISE:break
+        if len(pairs)>=AUTONOMOUS_DISCOVERY_MAX_PAIRWISE:break
+
+    c=conn();saved=0;counts={k:0 for k in ("EXPERIMENTAL","EVALUATING","VALIDATED","REJECTED")}
+    for rule in singles+pairs:
+        de=_auto_eval(rule,discovery);ve=_auto_eval(rule,validation)
+        if ve["edge"] is None or not (AUTONOMOUS_DISCOVERY_MIN_COVERAGE<=ve["coverage"]<=AUTONOMOUS_DISCOVERY_MAX_COVERAGE):continue
+        if ve["total"]<RESEARCH_EVAL_MIN_SAMPLES:stage="EXPERIMENTAL"
+        elif ve["total"]<AUTO_PROMOTE_MIN_SAMPLES:stage="EVALUATING"
+        elif ve["edge"]>=AUTONOMOUS_DISCOVERY_MIN_EDGE and ve["pn"]>=20 and ve["fn"]>=20:stage="VALIDATED"
+        elif ve["edge"]<=.02 and ve["pn"]>=20 and ve["fn"]>=20:stage="REJECTED"
+        else:stage="EVALUATING"
+        key=_auto_key(rule);desc=_auto_desc(rule)
+        score=max(0,ve["edge"])*math.sqrt(max(1,ve["total"]))
+        rec="AUTO_PROMOTION_CANDIDATE" if stage=="VALIDATED" else "DO_NOT_USE" if stage=="REJECTED" else "KEEP_TESTING"
+        c.execute("""INSERT INTO autonomous_hypotheses(
+                     hypothesis_key,description,rule_json,family,stage,discovery_samples,validation_samples,
+                     canonical_validation_samples,shadow_validation_samples,pass_samples,pass_wins,pass_win_rate,
+                     fail_samples,fail_wins,fail_win_rate,edge,coverage,score,recommendation,generation,updated_ts)
+                     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                     ON CONFLICT(hypothesis_key) DO UPDATE SET description=excluded.description,rule_json=excluded.rule_json,
+                     family=excluded.family,stage=excluded.stage,discovery_samples=excluded.discovery_samples,
+                     validation_samples=excluded.validation_samples,canonical_validation_samples=excluded.canonical_validation_samples,
+                     shadow_validation_samples=excluded.shadow_validation_samples,pass_samples=excluded.pass_samples,
+                     pass_wins=excluded.pass_wins,pass_win_rate=excluded.pass_win_rate,fail_samples=excluded.fail_samples,
+                     fail_wins=excluded.fail_wins,fail_win_rate=excluded.fail_win_rate,edge=excluded.edge,
+                     coverage=excluded.coverage,score=excluded.score,recommendation=excluded.recommendation,
+                     generation=excluded.generation,updated_ts=excluded.updated_ts""",
+                  (key,desc,json.dumps(rule,separators=(",",":")),rule["family"],stage,de["total"],ve["total"],
+                   ve["canonical_pass"],ve["shadow_pass"],ve["pn"],(ve["pwr"] or 0)*ve["pn"],ve["pwr"],
+                   ve["fn"],(ve["fwr"] or 0)*ve["fn"],ve["fwr"],ve["edge"],ve["coverage"],score,rec,rule["generation"],now_iso()))
+        counts[stage]+=1;saved+=1
+        if stage=="VALIDATED":
+            c.execute("""INSERT OR IGNORE INTO research_knowledge(ts,hypothesis_key,finding,evidence_json)
+                         VALUES(?,?,?,?)""",
+                      (now_iso(),key,"Autonomous discovery validated: "+desc,
+                       json.dumps({"validation_samples":ve["total"],"edge":ve["edge"],"coverage":ve["coverage"],
+                                   "canonical_pass":ve["canonical_pass"],"shadow_pass":ve["shadow_pass"],
+                                   "holdout":AUTONOMOUS_DISCOVERY_HOLDOUT},separators=(",",":"))))
+    c.commit();c.close()
+    meta=refresh_research_family_stats()
+    return {"enabled":True,"rows":len(rows),"discovery_rows":len(discovery),"validation_rows":len(validation),
+            "features_considered":names,"rules_generated":len(singles)+len(pairs),"rules_saved":saved,
+            **{k.lower():v for k,v in counts.items()},"meta_learning":meta}
+
+
+
+def get_active_research_rules() -> List[Dict[str, Any]]:
+    c=conn()
+    rows=c.execute("""SELECT * FROM active_research_rules
+                      WHERE status IN ('ACTIVE','CONFIRMED')
+                      ORDER BY id ASC""").fetchall()
+    c.close()
+    return [dict(x) for x in rows]
+
+def get_active_research_rule() -> Optional[Dict[str, Any]]:
+    rules=get_active_research_rules()
+    return rules[0] if rules else None
+
+def _audit_research_rule(action,source,rule_key,details):
+    c=conn()
+    c.execute("""INSERT INTO research_rule_audit(ts,action,source,rule_key,details_json)
+                 VALUES(?,?,?,?,?)""",
+              (now_iso(),action,source,rule_key,json.dumps(details or {},separators=(",",":"))))
+    c.commit();c.close()
+
+def _rule_last_reverted_evidence(source,rule_key):
+    c=conn()
+    row=c.execute("""SELECT evidence_samples FROM active_research_rules
+                     WHERE source=? AND rule_key=? AND status='REVERTED'
+                     ORDER BY id DESC LIMIT 1""",(source,rule_key)).fetchone()
+    c.close()
+    return int(row["evidence_samples"]) if row else None
+
+def _candidate_rule_definition(source,rule_key):
+    if source=="AUTONOMOUS":
+        c=conn();row=c.execute("SELECT rule_json FROM autonomous_hypotheses WHERE hypothesis_key=?",(rule_key,)).fetchone();c.close()
+        if row:
+            try:return json.loads(row["rule_json"])
+            except Exception:return None
+    if source=="EXTERNAL":
+        parts=rule_key.split("::")
+        if len(parts)>=3 and parts[0]=="cross_asset":
+            return {"external_asset":parts[1],"external_mode":parts[2]}
+    return None
+
+def _logical_rules_compatible(source_a,key_a,source_b,key_b):
+    if source_a==source_b and key_a==key_b:return False
+    a=_candidate_rule_definition(source_a,key_a); b=_candidate_rule_definition(source_b,key_b)
+    if a and b and "external_asset" in a and "external_asset" in b:
+        if a["external_asset"]==b["external_asset"]:
+            modes={a.get("external_mode"),b.get("external_mode")}
+            if "same_direction" in modes and "inverse_direction" in modes:return False
+    if a and b and a.get("conditions") and b.get("conditions"):
+        bounds={}
+        for rule in (a,b):
+            for cond in rule.get("conditions",[]):
+                try:v=float(cond.get("value"))
+                except Exception:continue
+                z=bounds.setdefault(cond.get("feature"),{"lo":-math.inf,"hi":math.inf})
+                if cond.get("op")==">=":z["lo"]=max(z["lo"],v)
+                if cond.get("op")=="<=":z["hi"]=min(z["hi"],v)
+        if any(z["lo"]>z["hi"] for z in bounds.values()):return False
+    return True
+
+def _rule_match_for_dict(source,rule_key,r):
+    if source=="INTERNAL":
+        cand=experimental_filter_candidates(r).get(rule_key)
+        return bool(cand["pass"]) if cand is not None else None
+    if source=="AUTONOMOUS":
+        return evaluate_autonomous_rule(rule_key,r)
+    c=conn()
+    obs=c.execute("""SELECT * FROM external_research_observations
+                     WHERE instrument=? AND candle_ts=?""",(r.get("instrument"),r.get("candle_ts"))).fetchall()
+    c.close()
+    cand=external_research_candidates(r,[dict(x) for x in obs]).get(rule_key)
+    return bool(cand["aligned"]) if cand is not None else None
+
+def _canonical_rule_rows(limit=1000):
+    c=conn()
+    rows=c.execute("""SELECT ls.label,s.signal,s.features_json,s.filters_json,s.instrument,s.candle_ts,s.ts
+                      FROM learning_samples ls JOIN signals s ON s.id=ls.signal_id
+                      WHERE ls.label IN (0,1) ORDER BY s.id DESC LIMIT ?""",(limit,)).fetchall()
+    c.close()
+    return list(reversed(rows))
+
+def _row_as_rule_context(row):
+    return {"signal":row["signal"],"features":json.loads(row["features_json"] or "{}"),
+            "filters":json.loads(row["filters_json"] or "{}"),"instrument":row["instrument"],
+            "candle_ts":row["candle_ts"]}
+
+def assess_rule_compatibility(candidate,active_rules=None):
+    active_rules=active_rules if active_rules is not None else get_active_research_rules()
+    if not active_rules or not MULTI_FILTER_COMPAT_ENABLED:
+        return {"compatible":True,"reason":"no_active_rules_or_check_disabled","joint_samples":None,
+                "joint_win_rate":None,"joint_coverage":None}
+    for ar in active_rules:
+        if not _logical_rules_compatible(candidate["source"],candidate["rule_key"],ar["source"],ar["rule_key"]):
+            return {"compatible":False,"reason":f"logical_conflict_with:{ar['source']}:{ar['rule_key']}",
+                    "joint_samples":0,"joint_win_rate":None,"joint_coverage":0.0}
+
+    rows=_canonical_rule_rows(1000)
+    candidate_pass=0;candidate_wins=0;joint=[]
+    for row in rows:
+        ctx=_row_as_rule_context(row)
+        cp=_rule_match_for_dict(candidate["source"],candidate["rule_key"],ctx)
+        if cp is not True:continue
+        candidate_pass+=1;candidate_wins+=int(row["label"])
+        all_ok=True
+        for ar in active_rules:
+            ap=_rule_match_for_dict(ar["source"],ar["rule_key"],ctx)
+            if ap is False:
+                all_ok=False;break
+        if all_ok:joint.append(row)
+
+    if not candidate_pass:
+        return {"compatible":False,"reason":"candidate_has_no_historical_passes",
+                "joint_samples":0,"joint_win_rate":None,"joint_coverage":0.0}
+    jn=len(joint);jwr=sum(int(x["label"]) for x in joint)/jn if jn else None
+    cwr=candidate_wins/candidate_pass
+    jcov=jn/max(1,len(rows))
+    ok=(jn>=MULTI_FILTER_MIN_JOINT_SAMPLES and jcov>=MULTI_FILTER_MIN_JOINT_COVERAGE
+        and jwr is not None and jwr>=cwr-MULTI_FILTER_MAX_WR_DROP)
+    reason="historically_compatible" if ok else f"weak_joint_history:n={jn},coverage={jcov:.3f}"
+
+    c=conn()
+    for ar in active_rules:
+        sa,ka=candidate["source"],candidate["rule_key"];sb,kb=ar["source"],ar["rule_key"]
+        if (sa,ka)>(sb,kb):sa,ka,sb,kb=sb,kb,sa,ka
+        c.execute("""INSERT INTO research_rule_compatibility(
+          source_a,rule_a,source_b,rule_b,checked_ts,samples,joint_pass,joint_win_rate,joint_coverage,compatible,reason)
+          VALUES(?,?,?,?,?,?,?,?,?,?,?)
+          ON CONFLICT(source_a,rule_a,source_b,rule_b) DO UPDATE SET checked_ts=excluded.checked_ts,
+          samples=excluded.samples,joint_pass=excluded.joint_pass,joint_win_rate=excluded.joint_win_rate,
+          joint_coverage=excluded.joint_coverage,compatible=excluded.compatible,reason=excluded.reason""",
+          (sa,ka,sb,kb,now_iso(),len(rows),jn,jwr,jcov,int(ok),reason))
+    c.commit();c.close()
+    return {"compatible":ok,"reason":reason,"joint_samples":jn,"joint_win_rate":jwr,
+            "candidate_win_rate":cwr,"joint_coverage":jcov}
+
+def _validated_promotion_candidates():
+    c=conn();out=[]
+    for r in c.execute("""SELECT filter_key rule_key,description,total_samples,edge,pass_win_rate FROM filter_hypotheses
+                          WHERE stage='VALIDATED' AND total_samples>=? AND edge>=?""",
+                       (AUTO_PROMOTE_MIN_SAMPLES,AUTO_PROMOTE_MIN_EDGE)).fetchall():
+        out.append({"source":"INTERNAL","rule_key":r["rule_key"],"description":r["description"],
+                    "samples":float(r["total_samples"]),"effective_samples":float(r["total_samples"]),
+                    "edge":float(r["edge"] or 0),"baseline":float(r["pass_win_rate"]) if r["pass_win_rate"] is not None else None})
+    for r in c.execute("""SELECT hypothesis_key rule_key,description,effective_samples,canonical_samples,shadow_samples,
+                                 edge,aligned_win_rate FROM external_hypotheses
+                          WHERE stage='VALIDATED' AND effective_samples>=? AND canonical_samples>=? AND edge>=?""",
+                       (AUTO_PROMOTE_MIN_SAMPLES,EXTERNAL_PROMOTION_MIN_CANONICAL,AUTO_PROMOTE_MIN_EDGE)).fetchall():
+        out.append({"source":"EXTERNAL","rule_key":r["rule_key"],"description":r["description"],
+                    "samples":float(r["effective_samples"] or 0),"effective_samples":float(r["effective_samples"] or 0),
+                    "canonical_samples":int(r["canonical_samples"] or 0),"shadow_samples":int(r["shadow_samples"] or 0),
+                    "edge":float(r["edge"] or 0),"baseline":float(r["aligned_win_rate"]) if r["aligned_win_rate"] is not None else None})
+    for r in c.execute("""SELECT hypothesis_key rule_key,description,validation_samples,canonical_validation_samples,
+                                 shadow_validation_samples,edge,pass_win_rate,score FROM autonomous_hypotheses
+                          WHERE stage='VALIDATED' AND validation_samples>=? AND canonical_validation_samples>=? AND edge>=?""",
+                       (AUTO_PROMOTE_MIN_SAMPLES,AUTONOMOUS_PROMOTION_MIN_CANONICAL,AUTO_PROMOTE_MIN_EDGE)).fetchall():
+        out.append({"source":"AUTONOMOUS","rule_key":r["rule_key"],"description":r["description"],
+                    "samples":float(r["validation_samples"] or 0),"effective_samples":float(r["validation_samples"] or 0),
+                    "canonical_samples":int(r["canonical_validation_samples"] or 0),
+                    "shadow_samples":int(r["shadow_validation_samples"] or 0),"edge":float(r["edge"] or 0),
+                    "score":float(r["score"] or 0),"baseline":float(r["pass_win_rate"]) if r["pass_win_rate"] is not None else None})
+    c.close();return out
+
+def promote_validated_research_rules():
+    if not AUTO_PROMOTE_RESEARCH:return {"promoted":[],"skipped":[],"reason":"disabled"}
+    active=get_active_research_rules();active_keys={(x["source"],x["rule_key"]) for x in active}
+    eligible=[]
+    for x in _validated_promotion_candidates():
+        if (x["source"],x["rule_key"]) in active_keys:continue
+        prior=_rule_last_reverted_evidence(x["source"],x["rule_key"])
+        if prior is not None and x["samples"]<prior+AUTO_PROMOTE_RETRY_NEW_SAMPLES:continue
+        eligible.append(x)
+    eligible.sort(key=lambda x:(x["edge"]*math.log1p(float(x.get("effective_samples",x["samples"]))),
+                                float(x.get("effective_samples",x["samples"]))),reverse=True)
+    promoted=[];skipped=[]
+    for x in eligible:
+        compat=assess_rule_compatibility(x,active)
+        if not compat["compatible"]:
+            skipped.append({"candidate":x,"compatibility":compat});continue
+        c=conn()
+        c.execute("""INSERT INTO active_research_rules(
+          source,rule_key,description,status,activated_ts,evidence_samples,evidence_edge,baseline_win_rate,
+          review_after_samples,post_samples,post_wins,reviewed_matches,reason)
+          VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+          (x["source"],x["rule_key"],x["description"],"ACTIVE",now_iso(),x["samples"],x["edge"],x["baseline"],
+           AUTO_PROMOTE_REVIEW_SAMPLES,0,0,0,"Auto-promoted; multi-filter compatible"))
+        c.commit();c.close()
+        _audit_research_rule("PROMOTED",x["source"],x["rule_key"],{**x,"compatibility":compat})
+        promoted.append({"rule":x,"compatibility":compat})
+        active=get_active_research_rules()
+    return {"promoted":promoted,"skipped":skipped,"active_count":len(get_active_research_rules())}
+
+def promote_validated_research_rule():
+    x=promote_validated_research_rules()
+    return {"promoted":bool(x["promoted"]),"promoted_rules":x["promoted"],"skipped":x["skipped"],"active_count":x["active_count"]}
+
+def evaluate_active_research_rules(r):
+    rules=get_active_research_rules()
+    if not rules:return {"ok":True,"active":False,"rules":[],"vetoes":[]}
+    results=[];vetoes=[]
+    for rule in rules:
+        passed=_rule_match_for_dict(rule["source"],rule["rule_key"],r)
+        item={"source":rule["source"],"rule_key":rule["rule_key"],"status":rule["status"],"passed":passed}
+        results.append(item)
+        if passed is False:vetoes.append(item)
+    return {"ok":not vetoes,"active":True,"rules":results,"vetoes":vetoes}
+
+def evaluate_active_research_rule(r):
+    out=evaluate_active_research_rules(r)
+    if out["ok"]:return out
+    return {"ok":False,"active":True,"reason":"one or more learned filters vetoed","vetoes":out["vetoes"]}
+
+def _signal_passes_rule_for_review(source,rule_key,row):
+    return _rule_match_for_dict(source,rule_key,_row_as_rule_context(row))
+
+def _matching_rows_since(rule):
+    c=conn()
+    rows=c.execute("""SELECT ls.label,s.signal,s.features_json,s.filters_json,s.instrument,s.candle_ts,s.ts
+                      FROM learning_samples ls JOIN signals s ON s.id=ls.signal_id
+                      WHERE ls.label IN (0,1) AND s.ts>=? ORDER BY s.id""",(rule["activated_ts"],)).fetchall()
+    c.close()
+    return [r for r in rows if _signal_passes_rule_for_review(rule["source"],rule["rule_key"],r) is True]
+
+def review_one_active_research_rule(rule):
+    matched=_matching_rows_since(rule);total=len(matched);reviewed=int(rule.get("reviewed_matches") or 0)
+    if total<reviewed+ACTIVE_RULE_HEALTH_BLOCK:
+        return {"reviewed":False,"source":rule["source"],"rule_key":rule["rule_key"],
+                "status":rule["status"],"matches":total,"next_review_at":reviewed+ACTIVE_RULE_HEALTH_BLOCK}
+    block=matched[reviewed:reviewed+ACTIVE_RULE_HEALTH_BLOCK]
+    n=len(block);w=sum(int(x["label"]) for x in block);wr=w/n if n else None
+    allwr=sum(int(x["label"]) for x in matched)/total if total else None
+    c=conn()
+    c.execute("""UPDATE active_research_rules SET post_samples=?,post_wins=?,post_win_rate=?,
+                 reviewed_matches=?,last_health_block_wr=?,last_review_ts=? WHERE id=?""",
+              (total,sum(int(x["label"]) for x in matched),allwr,reviewed+n,wr,now_iso(),rule["id"]))
+    c.commit();c.close()
+    baseline=rule.get("baseline_win_rate")
+    if baseline is not None and wr is not None and wr<float(baseline):
+        c=conn()
+        c.execute("""UPDATE active_research_rules SET status='REVERTED',deactivated_ts=?,reason=? WHERE id=?""",
+                  (now_iso(),f"Independent health rollback: {wr:.3f} < baseline {float(baseline):.3f}",rule["id"]))
+        c.commit();c.close()
+        d={"block_samples":n,"block_win_rate":wr,"baseline_win_rate":baseline,
+           "reviewed_matches":reviewed+n,"phase":"initial" if reviewed==0 else "ongoing_health"}
+        _audit_research_rule("REVERTED",rule["source"],rule["rule_key"],d)
+        return {"reviewed":True,"status":"REVERTED","source":rule["source"],"rule_key":rule["rule_key"],**d}
+    if rule["status"]=="ACTIVE":
+        c=conn()
+        c.execute("UPDATE active_research_rules SET status='CONFIRMED',confirmed_ts=?,reason=? WHERE id=?",
+                  (now_iso(),"Passed first independent 50-evidence block",rule["id"]))
+        c.commit();c.close();action="CONFIRMED"
+    else:action="HEALTH_CONFIRMED"
+    d={"block_samples":n,"block_win_rate":wr,"baseline_win_rate":baseline,
+       "reviewed_matches":reviewed+n,"phase":"initial" if reviewed==0 else "ongoing_health"}
+    _audit_research_rule(action,rule["source"],rule["rule_key"],d)
+    return {"reviewed":True,"status":"CONFIRMED","source":rule["source"],"rule_key":rule["rule_key"],**d}
+
+def review_active_research_rules():
+    results=[review_one_active_research_rule(r) for r in get_active_research_rules()]
+    return {"reviewed_rules":results,"reverted":[x for x in results if x.get("status")=="REVERTED"],
+            "active_after":len(get_active_research_rules())}
+
+def review_active_research_rule():
+    return review_active_research_rules()
+
+
+
+def create_shadow_trials(signal_id: int, r: Dict[str, Any]) -> int:
+    """Research only. Simulates each signal and variants; never places an extra order."""
+    if not RESEARCH_LAB_ENABLED or r.get("signal") not in ("BUY","SELL"): return 0
+    entry=float(r["entry"]); stop=float(r["stop"]); target=float(r["target"]); risk=abs(entry-stop)
+    if risk<=0:return 0
+    pip=pip_size(r["instrument"]); direction=r["signal"]
+    def tp_for(rr,rk):
+        d=max(MIN_TAKE_PROFIT_PIPS*pip,rr*rk); return entry+d if direction=="BUY" else entry-d
+    variants=[("BASELINE",stop,target),("WIDER_STOP_125",entry-risk*1.25 if direction=="BUY" else entry+risk*1.25,tp_for(MIN_RR,risk*1.25)),("WIDER_STOP_150",entry-risk*1.5 if direction=="BUY" else entry+risk*1.5,tp_for(MIN_RR,risk*1.5)),("TARGET_2R",stop,tp_for(2.0,risk))][:SHADOW_MAX_VARIANTS_PER_SIGNAL]
+    c=conn(); made=0
+    for name,st,tp in variants:
+        before=c.total_changes
+        c.execute("""INSERT OR IGNORE INTO shadow_trials(signal_id,created_ts,candle_ts,instrument,direction,variant,entry,stop,target,risk,status) VALUES(?,?,?,?,?,?,?,?,?,?, 'PENDING')""",(signal_id,now_iso(),r.get("candle_ts"),r["instrument"],direction,name,entry,float(st),float(tp),abs(entry-float(st))))
+        made += int(c.total_changes>before)
+    c.commit();c.close();return made
+
+def resolve_shadow_trials(inst: str,m1: List[Dict[str,Any]])->int:
+    if not RESEARCH_LAB_ENABLED:return 0
+    c=conn();rows=c.execute("SELECT * FROM shadow_trials WHERE status='PENDING' AND instrument=? ORDER BY id",(inst,)).fetchall();n=0
+    for row in rows:
+        fake={"candle_ts":row["candle_ts"],"created_ts":row["created_ts"],"direction":row["direction"],"entry":row["entry"],"stop":row["stop"],"target":row["target"]}
+        out=resolve_one(fake,m1)
+        if out:
+            c.execute("UPDATE shadow_trials SET status=?,label=?,resolved_ts=?,bars_to_resolution=?,mfe_r=?,mae_r=?,note=? WHERE id=?",(out["status"],out["label"],now_iso(),out["bars"],out["mfe_r"],out["mae_r"],out["note"],row["id"]));n+=1
+    c.commit();c.close();return n
+
+def experimental_filter_candidates(r: Dict[str,Any])->Dict[str,Dict[str,Any]]:
+    f=r.get("features",{});flt=r.get("filters",{});ext=float(f.get("extension_atr",0) or 0);vol=float(f.get("volatility_ratio",0) or 0);slope=abs(float(f.get("m15_slope_atr",0) or 0));bar=float(f.get("barrier_score",0) or 0);edge=float(f.get("direction_edge",0) or 0)
+    confs=sum(1 for k in ("m5_structure","second_pullback","m1_confirmation","not_extended","volatility_ok") if flt.get(k));m5=float(f.get("m5_momentum",0) or 0);m1=float(f.get("m1_momentum",0) or 0);aligned=(r.get("signal")=="BUY" and m5>0 and m1>0) or (r.get("signal")=="SELL" and m5<0 and m1<0)
+    return {"ext_le_0_8":{"pass":ext<=.8,"description":"Extensión <= 0.8 ATR"},"ext_le_1_0":{"pass":ext<=1.0,"description":"Extensión <= 1.0 ATR"},"vol_normal":{"pass":.75<=vol<=1.35,"description":"Volatilidad 0.75–1.35"},"trend_abs_ge_0_30":{"pass":slope>=.30,"description":"Pendiente M15 >= 0.30 ATR"},"momentum_aligned":{"pass":aligned,"description":"Momentum M5 y M1 alineado"},"confirmations_ge_3":{"pass":confs>=3,"description":"Al menos 3 confirmaciones"},"barrier_score_lt_0_75":{"pass":bar<.75,"description":"Barrera estructural < 0.75"},"direction_edge_ge_15":{"pass":edge>=15,"description":"Ventaja BUY/SELL >= 15"}}
+
+def refresh_filter_hypotheses()->Dict[str,Any]:
+    c=conn();rows=c.execute("SELECT ls.label,s.signal,s.features_json,s.filters_json FROM learning_samples ls JOIN signals s ON s.id=ls.signal_id WHERE ls.label IN (0,1) ORDER BY ls.id").fetchall()
+    if not rows:c.close();return {"samples":0,"experimental":0,"evaluating":0,"validated":0,"rejected":0}
+    stats={}
+    for row in rows:
+        rr={"signal":row["signal"],"features":json.loads(row["features_json"] or "{}"),"filters":json.loads(row["filters_json"] or "{}")}
+        for key,h in experimental_filter_candidates(rr).items():
+            x=stats.setdefault(key,{"description":h["description"],"pn":0,"pw":0,"fn":0,"fw":0})
+            if h["pass"]:x["pn"]+=1;x["pw"]+=int(row["label"])
+            else:x["fn"]+=1;x["fw"]+=int(row["label"])
+    counts={k:0 for k in ("EXPERIMENTAL","EVALUATING","VALIDATED","REJECTED")}
+    for key,x in stats.items():
+        total=x["pn"]+x["fn"];pwr=x["pw"]/x["pn"] if x["pn"] else None;fwr=x["fw"]/x["fn"] if x["fn"] else None;edge=(pwr-fwr) if pwr is not None and fwr is not None else None;cov=x["pn"]/total if total else 0
+        if total<RESEARCH_EVAL_MIN_SAMPLES:stage="EXPERIMENTAL"
+        elif total<RESEARCH_VALIDATE_MIN_SAMPLES:stage="EVALUATING"
+        elif x["pn"]>=20 and x["fn"]>=20 and edge is not None and edge>=RESEARCH_MIN_EDGE and .15<=cov<=.85:stage="VALIDATED"
+        elif x["pn"]>=20 and x["fn"]>=20 and edge is not None and edge<=.02:stage="REJECTED"
+        else:stage="EVALUATING"
+        counts[stage]+=1;rec="CANDIDATE_FOR_FUTURE_VERSION" if stage=="VALIDATED" else "DO_NOT_USE" if stage=="REJECTED" else "KEEP_TESTING"
+        c.execute("""INSERT INTO filter_hypotheses(filter_key,description,stage,total_samples,pass_samples,pass_wins,pass_win_rate,fail_samples,fail_wins,fail_win_rate,edge,coverage,recommendation,updated_ts) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(filter_key) DO UPDATE SET description=excluded.description,stage=excluded.stage,total_samples=excluded.total_samples,pass_samples=excluded.pass_samples,pass_wins=excluded.pass_wins,pass_win_rate=excluded.pass_win_rate,fail_samples=excluded.fail_samples,fail_wins=excluded.fail_wins,fail_win_rate=excluded.fail_win_rate,edge=excluded.edge,coverage=excluded.coverage,recommendation=excluded.recommendation,updated_ts=excluded.updated_ts""",(key,x["description"],stage,total,x["pn"],x["pw"],pwr,x["fn"],x["fw"],fwr,edge,cov,rec,now_iso()))
+    c.commit();c.close();return {"samples":len(rows),"experimental":counts["EXPERIMENTAL"],"evaluating":counts["EVALUATING"],"validated":counts["VALIDATED"],"rejected":counts["REJECTED"]}
+
+def should_retrain_model()->Dict[str,Any]:
+    c=conn();labeled=c.execute("SELECT COUNT(*) n FROM learning_samples WHERE label IN (0,1)").fetchone()["n"];last=c.execute("SELECT samples FROM model_runs WHERE accepted=1 ORDER BY id DESC LIMIT 1").fetchone();c.close();last_n=int(last["samples"]) if last else 0;threshold=ML_MIN_SAMPLES if not last else last_n+MODEL_MIN_NEW_LABELS;return {"ready":labeled>=threshold,"labeled":labeled,"last_model_samples":last_n,"next_training_at":threshold}
 
 def resolve_one(sample: sqlite3.Row, m1: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     start = datetime.fromisoformat(sample["candle_ts"]) if sample["candle_ts"] else datetime.fromisoformat(sample["created_ts"])
@@ -1555,7 +2584,12 @@ def learning_stats() -> Dict[str, Any]:
     ambiguous = c.execute("SELECT COUNT(*) n FROM learning_samples WHERE status='AMBIGUOUS'").fetchone()["n"]
     timeouts = c.execute("SELECT COUNT(*) n FROM learning_samples WHERE status='TIMEOUT'").fetchone()["n"]
     run = c.execute("SELECT * FROM model_runs ORDER BY id DESC LIMIT 1").fetchone()
+    shadow_total=c.execute("SELECT COUNT(*) n FROM shadow_trials").fetchone()["n"]
+    shadow_resolved=c.execute("SELECT COUNT(*) n FROM shadow_trials WHERE label IN (0,1)").fetchone()["n"]
+    shadow_pending=c.execute("SELECT COUNT(*) n FROM shadow_trials WHERE status='PENDING'").fetchone()["n"]
+    stages={x["stage"]:x["n"] for x in c.execute("SELECT stage,COUNT(*) n FROM filter_hypotheses GROUP BY stage").fetchall()}
     c.close()
+    retrain_policy=should_retrain_model()
     return {
         "samples_total": total, "resolved_labeled": resolved, "pending_or_unlabeled": total - resolved,
         "pending": pending, "ambiguous": ambiguous, "timeouts": timeouts,
@@ -1564,7 +2598,13 @@ def learning_stats() -> Dict[str, Any]:
         "executed_resolved": executed_resolved, "win_rate_executed": (executed_wins / executed_resolved) if executed_resolved else None,
         "blocked_resolved": blocked_resolved, "counterfactual_win_rate_blocked": (blocked_wins / blocked_resolved) if blocked_resolved else None,
         "ml_min_samples": ML_MIN_SAMPLES, "model_ready": Path(MODEL_PATH).exists(), "last_model_run": dict(run) if run else None,
-        "mode": "ADAPTIVE_DISCOVERY", "changes_execution": ADAPTIVE_CONFIDENCE, "ml_role": "secondary_refinement", "discovery_min_samples": DISCOVERY_MIN_SAMPLES
+        "mode":"CONTINUOUS_RESEARCH","changes_execution":ADAPTIVE_CONFIDENCE,"ml_role":"secondary_refinement","discovery_min_samples":DISCOVERY_MIN_SAMPLES,
+        "shadow_lab":{"enabled":RESEARCH_LAB_ENABLED,"trials_total":shadow_total,"resolved_labeled":shadow_resolved,"pending":shadow_pending},
+        "filter_research":{"experimental":stages.get("EXPERIMENTAL",0),"evaluating":stages.get("EVALUATING",0),"validated":stages.get("VALIDATED",0),"rejected":stages.get("REJECTED",0),"automatic_live_activation":False},
+        "external_research":{"enabled":EXTERNAL_RESEARCH_ENABLED,"symbols":EXTERNAL_RESEARCH_SYMBOLS,
+                             "granularity":EXTERNAL_RESEARCH_GRANULARITY,"news_research":EXTERNAL_NEWS_RESEARCH,
+                             "automatic_live_activation":False},
+        "retrain_policy":retrain_policy
     }
 
 
@@ -1663,21 +2703,32 @@ async def scan(client: httpx.AsyncClient, inst: str) -> Dict[str, Any]:
     current_price=float(m1[-1]["c"]) if m1 else 0.0
     managed_changes=await manage_open_trades(client,inst,current_price) if current_price else 0
     resolved = resolve_pending(inst, m1)
-    if resolved:
+    shadow_resolved = resolve_shadow_trials(inst, m1)
+    if resolved or shadow_resolved:
         refresh_discovered_patterns()
+        refresh_filter_hypotheses()
+        refresh_external_hypotheses()
+        autonomous_discovery_refresh()
+        review_active_research_rules()
+        promote_validated_research_rules()
         # Close the learning loop as soon as enough labeled outcomes exist instead
         # of waiting for the hourly maintenance tick. Training still enforces its
         # own minimum sample and temporal-validation requirements.
-        ctmp = conn()
-        labeled_now = ctmp.execute("SELECT COUNT(*) n FROM learning_samples WHERE label IN (0,1)").fetchone()["n"]
-        ctmp.close()
-        if labeled_now >= ML_MIN_SAMPLES:
-            try:
-                state["learning"] = {**train_shadow_model(force=False), "last_train": now_iso(), "model_ready": Path(MODEL_PATH).exists()}
-            except Exception as e:
-                log.exception("immediate learning refresh failed: %s", e)
+        retrain=should_retrain_model()
+        if retrain["ready"]:
+            try: state["learning"]={**train_shadow_model(force=False),"last_train":now_iso(),"model_ready":Path(MODEL_PATH).exists(),"retrain_policy":retrain}
+            except Exception as e: log.exception("evidence-gated learning refresh failed: %s",e)
+    if AUTO_PROMOTE_RESEARCH:
+        promote_validated_research_rules()
+
     r = analyze(h1, m15, m5, m1, inst)
+
+    # Research brain runs independently of order execution.
+    r["external_research_collection"] = await collect_cross_asset_research(client, inst, r.get("candle_ts"))
+
     r = await news(client, r) if r["signal"] != "WAIT" and r["technical"] >= 50 else {**r, "alignment": "N/A"}
+    if r.get("news_articles") is not None:
+        record_news_research(r)
     target_plan=desired_target_for_trade(r) if r["signal"]!="WAIT" else {"target":r.get("target"),"runner":False,"trend_score":0.0}
     if r["signal"]!="WAIT":
         r["managed_target"]=target_plan["target"]
@@ -1688,6 +2739,17 @@ async def scan(client: httpx.AsyncClient, inst: str) -> Dict[str, Any]:
         "probability": None, "source": "WAIT", "samples": 0, "local_samples": 0,
         "variant": "WAIT", "mature": False, "recent_win_rate": None,
         "performance_penalty": 0.0, "required_confidence": EXECUTION_MIN_CONFIDENCE
+    }
+    r["research_governance"]={
+        "auto_promote":AUTO_PROMOTE_RESEARCH,
+        "min_samples":AUTO_PROMOTE_MIN_SAMPLES,
+        "review_next":AUTO_PROMOTE_REVIEW_SAMPLES,
+        "min_edge":AUTO_PROMOTE_MIN_EDGE,
+        "max_active":None,
+        "active_rules":get_active_research_rules(),
+        "active_count":len(get_active_research_rules()),
+        "compatibility_required":MULTI_FILTER_COMPAT_ENABLED,
+        "autonomous_discovery":AUTONOMOUS_DISCOVERY_ENABLED
     }
     decision = execution_decision(r, conf)
     executed, oid = 0, ""
@@ -1734,7 +2796,8 @@ async def scan(client: httpx.AsyncClient, inst: str) -> Dict[str, Any]:
         "trend_runner": r.get("trend_runner",False),
         "trend_score": r.get("trend_score",0.0),
         "managed_target": r.get("managed_target",r.get("target")),
-        "learning_resolved_this_cycle": resolved
+        "learning_resolved_this_cycle": resolved,
+        "shadow_resolved_this_cycle": shadow_resolved
     }
 
 
@@ -1794,8 +2857,9 @@ async def worker():
                 state["last_error"] = None
             if datetime.now(timezone.utc) - last_train_check >= timedelta(hours=1):
                 try:
-                    result = train_shadow_model(force=False)
-                    state["learning"] = {**result, "last_train": now_iso(), "model_ready": Path(MODEL_PATH).exists()}
+                    retrain=should_retrain_model()
+                    result=train_shadow_model(force=False) if retrain["ready"] else {"trained":False,"reason":f"waiting for evidence: {retrain['labeled']}/{retrain['next_training_at']}","samples":retrain["labeled"]}
+                    state["learning"]={**result,"last_train":now_iso(),"model_ready":Path(MODEL_PATH).exists(),"retrain_policy":retrain}
                 except Exception as e:
                     log.exception("learning cycle failed")
                     state["learning"] = {"trained": False, "last_train": now_iso(), "model_ready": Path(MODEL_PATH).exists(), "error": str(e)}
@@ -1944,6 +3008,131 @@ async def export_csv():
         row.update({k:f.get(k) for k in FEATURE_COLUMNS}); w.writerow(row)
     return buf.getvalue()
 
+
+
+@app.get("/api/research/shadow")
+async def research_shadow(limit:int=100,status:Optional[str]=None):
+    c=conn();rows=c.execute("SELECT * FROM shadow_trials WHERE status=? ORDER BY id DESC LIMIT ?",(status.upper(),min(max(limit,1),500))).fetchall() if status else c.execute("SELECT * FROM shadow_trials ORDER BY id DESC LIMIT ?",(min(max(limit,1),500),)).fetchall();c.close();return {"execution_effect":"NONE_RESEARCH_ONLY","trials":[dict(x) for x in rows]}
+
+@app.get("/api/research/filters")
+async def research_filters():
+    c=conn();rows=c.execute("SELECT * FROM filter_hypotheses ORDER BY CASE stage WHEN 'VALIDATED' THEN 1 WHEN 'EVALUATING' THEN 2 WHEN 'EXPERIMENTAL' THEN 3 ELSE 4 END,ABS(COALESCE(edge,0)) DESC,total_samples DESC").fetchall();c.close();return {"automatic_live_activation":False,"evaluation_min_samples":RESEARCH_EVAL_MIN_SAMPLES,"validation_min_samples":RESEARCH_VALIDATE_MIN_SAMPLES,"minimum_edge":RESEARCH_MIN_EDGE,"filters":[dict(x) for x in rows]}
+
+
+@app.post("/api/research/external/observation")
+async def research_external_observation(payload: Dict[str, Any]):
+    instrument=str(payload.get("instrument") or "EUR_USD").upper()
+    source_type=str(payload.get("source_type") or "").upper()
+    source_key=str(payload.get("source_key") or "").upper()
+    if not source_type or not source_key:
+        raise HTTPException(status_code=400,detail="source_type and source_key are required")
+    record_external_observation(instrument,source_type,source_key,payload.get("value_num"),
+                                payload.get("value_text"),payload.get("metadata") or {},
+                                payload.get("candle_ts"))
+    return {"ok":True,"research_only":True,"automatic_live_activation":False}
+
+
+@app.get("/api/research/external/hypotheses")
+async def research_external_hypotheses():
+    c=conn()
+    rows=c.execute("""SELECT * FROM external_hypotheses ORDER BY
+                      CASE stage WHEN 'VALIDATED' THEN 1 WHEN 'EVALUATING' THEN 2
+                      WHEN 'EXPERIMENTAL' THEN 3 ELSE 4 END,
+                      ABS(COALESCE(edge,0)) DESC,total_samples DESC""").fetchall()
+    c.close()
+    return {"enabled":EXTERNAL_RESEARCH_ENABLED,"automatic_live_activation":False,
+            "min_evaluation_samples":EXTERNAL_RESEARCH_MIN_SAMPLES,
+            "min_validation_samples":EXTERNAL_RESEARCH_VALIDATE_SAMPLES,
+            "shadow_included":EXTERNAL_INCLUDE_SHADOW,
+            "shadow_baseline_weight":EXTERNAL_SHADOW_BASELINE_WEIGHT,
+            "shadow_variant_weight":EXTERNAL_SHADOW_VARIANT_WEIGHT,
+            "promotion_min_canonical":EXTERNAL_PROMOTION_MIN_CANONICAL,
+            "hypotheses":[dict(x) for x in rows]}
+
+
+@app.get("/api/research/knowledge")
+async def research_knowledge(limit: int = 100):
+    c=conn()
+    rows=c.execute("SELECT * FROM research_knowledge ORDER BY id DESC LIMIT ?",
+                   (min(max(limit,1),500),)).fetchall()
+    c.close()
+    return {"research_only":True,"findings":[dict(x) for x in rows]}
+
+
+
+
+@app.get("/api/research/autonomous")
+async def research_autonomous(limit: int = 100):
+    c=conn()
+    rows=c.execute("""SELECT * FROM autonomous_hypotheses
+                      ORDER BY CASE stage WHEN 'VALIDATED' THEN 1 WHEN 'EVALUATING' THEN 2
+                      WHEN 'EXPERIMENTAL' THEN 3 ELSE 4 END,score DESC,validation_samples DESC
+                      LIMIT ?""",(min(max(limit,1),500),)).fetchall()
+    fam=c.execute("SELECT * FROM research_family_stats ORDER BY priority_score DESC").fetchall()
+    c.close()
+    return {"enabled":AUTONOMOUS_DISCOVERY_ENABLED,"holdout":AUTONOMOUS_DISCOVERY_HOLDOUT,
+            "promotion_at":AUTO_PROMOTE_MIN_SAMPLES,"promotion_min_canonical":AUTONOMOUS_PROMOTION_MIN_CANONICAL,
+            "hypotheses":[dict(x) for x in rows],"research_priorities":[dict(x) for x in fam]}
+
+@app.post("/api/research/autonomous/refresh")
+async def research_autonomous_refresh():
+    return autonomous_discovery_refresh()
+
+
+@app.get("/api/research/active-rule")
+async def research_active_rule():
+    c=conn()
+    history=c.execute("SELECT * FROM active_research_rules ORDER BY id DESC LIMIT 20").fetchall()
+    c.close()
+    c2=conn()
+    comp=c2.execute("SELECT * FROM research_rule_compatibility ORDER BY checked_ts DESC LIMIT 100").fetchall()
+    c2.close()
+    return {"auto_promote":AUTO_PROMOTE_RESEARCH,"min_samples":AUTO_PROMOTE_MIN_SAMPLES,
+            "min_edge":AUTO_PROMOTE_MIN_EDGE,"parallel_research":True,
+            "multiple_active_if_compatible":True,"fixed_active_limit":None,"veto_only":True,
+            "active":get_active_research_rules(),"history":[dict(x) for x in history],
+            "compatibility":[dict(x) for x in comp]}
+
+
+@app.get("/api/research/compatibility")
+async def research_compatibility(limit: int = 200):
+    c=conn()
+    rows=c.execute("SELECT * FROM research_rule_compatibility ORDER BY checked_ts DESC LIMIT ?",
+                   (min(max(limit,1),1000),)).fetchall()
+    c.close()
+    return {"min_joint_samples":MULTI_FILTER_MIN_JOINT_SAMPLES,
+            "min_joint_coverage":MULTI_FILTER_MIN_JOINT_COVERAGE,
+            "max_joint_wr_drop":MULTI_FILTER_MAX_WR_DROP,
+            "checks":[dict(x) for x in rows]}
+
+
+@app.get("/api/research/rule-audit")
+async def research_rule_audit(limit: int = 100):
+    c=conn()
+    rows=c.execute("SELECT * FROM research_rule_audit ORDER BY id DESC LIMIT ?",
+                   (min(max(limit,1),500),)).fetchall()
+    c.close()
+    return {"events":[dict(x) for x in rows]}
+
+
+@app.post("/api/research/promote")
+async def research_promote():
+    return promote_validated_research_rules()
+
+
+@app.post("/api/research/review-active")
+async def research_review_active():
+    return review_active_research_rules()
+
+
+@app.post("/api/research/refresh")
+async def research_refresh():
+    external_research = refresh_external_hypotheses()
+    autonomous=autonomous_discovery_refresh()
+    return {"external":external_research,"autonomous":autonomous,
+            "patterns":refresh_discovered_patterns(),"filters":refresh_filter_hypotheses(),
+            "retrain_policy":should_retrain_model(),
+            "note":"Autonomous rules are discovered on older data and validated on a later holdout before the 100/50 cycle."}
 
 @app.post("/api/learning/train")
 async def train_now():
