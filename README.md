@@ -1,15 +1,26 @@
-# Market Alert V2.5 — Structural Room
+# Market Alert V2.6 — Contextual Structure
 
-Correcciones sobre V2.4:
+La estructura deja de ser una regla binaria.
 
-- R:R mínimo real **1.5:1**.
-- Ejemplo: stop de 5 pips => el mercado debe ofrecer al menos 7.5 pips de recorrido útil.
-- Antes de ejecutar, busca la resistencia/soporte confirmado más cercano usando **H1 y M15**.
-- Si esa barrera aparece antes de completar 1.5R, **no ejecuta**.
-- El Take Profit nunca se coloca detrás de una barrera estructural conocida; queda ligeramente antes.
-- Se conserva el filtro anti-entrada-tardía de V2.4.
-- No existe espera fija de 15/30 minutos.
-- Se corrigió Trend Runner: el `managed_target` es ahora el Take Profit que realmente se envía a OANDA Practice.
-- Incluso Trend Runner respeta la resistencia/soporte estructural y no extiende el TP más allá de ella.
-- Break-even, profit lock y trailing siguen activos.
-- **OANDA PRACTICE ONLY.**
+## Soporte y resistencia
+- Cada nivel recibe un **score de importancia** según temporalidad, número de reacciones y proximidad.
+- Nivel débil: no bloquea; solo resta un poco de confianza.
+- Nivel medio: tampoco bloquea; resta más confianza.
+- Nivel fuerte: puede bloquear si no deja al menos 1.5R de recorrido real.
+- Un nivel roto no se considera barrera activa cuando la ruptura tiene cierre suficiente y confirmación posterior.
+- Si una resistencia/soporte ya fue rota con confirmación, el bot busca la **siguiente barrera relevante**.
+
+## Breakout
+- Una mecha aislada no cuenta como ruptura.
+- Se requiere cierre más allá del nivel por un margen escalado con ATR.
+- La continuación y el retest exitoso aumentan la validez de la ruptura.
+
+## Entrada
+- Se mantiene R:R mínimo 1.5R frente a barreras fuertes.
+- Se mantiene el filtro anti-entrada-tardía.
+- No hay cooldown fijo.
+
+## Gestión
+- Break-even, profit lock, trailing y Trend Runner continúan activos.
+- Trend Runner solo se limita por una barrera realmente fuerte y no rota.
+- OANDA PRACTICE ONLY.

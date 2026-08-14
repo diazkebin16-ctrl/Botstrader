@@ -61,7 +61,7 @@ TREND_RUNNER_MIN_SCORE = max(0.0, float(os.getenv("TREND_RUNNER_MIN_SCORE", "0.6
 TREND_RUNNER_TP_R = max(2.0, float(os.getenv("TREND_RUNNER_TP_R", "3.0")))
 TREND_RUNNER_TRAIL_START_R = max(1.5, float(os.getenv("TREND_RUNNER_TRAIL_START_R", "1.75")))
 TREND_RUNNER_TRAIL_DISTANCE_R = max(0.40, float(os.getenv("TREND_RUNNER_TRAIL_DISTANCE_R", "0.90")))
-VERSION_TAG = "2.5"
+VERSION_TAG = "2.6"
 ENTRY_TIMING_ENABLED = os.getenv("ENTRY_TIMING_ENABLED", "true").lower() == "true"
 MAX_ENTRY_EXTENSION_ATR = max(0.5, float(os.getenv("MAX_ENTRY_EXTENSION_ATR", "1.20")))
 MIN_ROOM_TO_BARRIER_R = max(1.0, float(os.getenv("MIN_ROOM_TO_BARRIER_R", "1.50")))
@@ -69,12 +69,18 @@ REENTRY_REQUIRE_NEW_CANDLE = os.getenv("REENTRY_REQUIRE_NEW_CANDLE", "true").low
 REENTRY_REQUIRE_STRUCTURE_CHANGE = os.getenv("REENTRY_REQUIRE_STRUCTURE_CHANGE", "true").lower() == "true"
 STRUCTURAL_ROOM_ENABLED = os.getenv("STRUCTURAL_ROOM_ENABLED", "true").lower() == "true"
 STRUCTURAL_BARRIER_BUFFER_R = max(0.0, float(os.getenv("STRUCTURAL_BARRIER_BUFFER_R", "0.05")))
+STRUCTURE_STRONG_SCORE = max(0.50, min(0.95, float(os.getenv("STRUCTURE_STRONG_SCORE", "0.72"))))
+STRUCTURE_BLOCK_SCORE = max(STRUCTURE_STRONG_SCORE, min(0.99, float(os.getenv("STRUCTURE_BLOCK_SCORE", "0.82"))))
+BREAKOUT_CONFIRM_ATR = max(0.05, float(os.getenv("BREAKOUT_CONFIRM_ATR", "0.18")))
+BREAKOUT_RETEST_TOLERANCE_ATR = max(0.05, float(os.getenv("BREAKOUT_RETEST_TOLERANCE_ATR", "0.20")))
+WEAK_BARRIER_CONFIDENCE_PENALTY = max(0.0, min(0.20, float(os.getenv("WEAK_BARRIER_CONFIDENCE_PENALTY", "0.04"))))
+MEDIUM_BARRIER_CONFIDENCE_PENALTY = max(WEAK_BARRIER_CONFIDENCE_PENALTY, min(0.25, float(os.getenv("MEDIUM_BARRIER_CONFIDENCE_PENALTY", "0.08"))))
 EXECUTION_MIN_CONFIDENCE = max(0.50, min(0.95, float(os.getenv("EXECUTION_MIN_CONFIDENCE", "0.65"))))
 NY = ZoneInfo("America/New_York")
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("market-alert")
-app = FastAPI(title="Market Alert V2.5 — Structural Room / OANDA Practice Only")
+app = FastAPI(title="Market Alert V2.6 — Contextual Structure / OANDA Practice Only")
 state: Dict[str, Any] = {
     "started": datetime.now(timezone.utc).isoformat(),
     "last_scan": None,
@@ -398,29 +404,176 @@ async def candles(client: httpx.AsyncClient, inst: str, granularity: str, count:
 
 
 
-def pivot_levels(candles_: List[Dict[str, Any]], left: int = 2, right: int = 2) -> Dict[str, List[float]]:
-    """Confirmed local highs/lows only; no future candles beyond the supplied history."""
+
+def pivot_levels(candles_: List[Dict[str, Any]], left: int = 2, right: int = 2) -> Dict[str, List[Dict[str, Any]]]:
+    """Confirmed local pivots with metadata; no lookahead beyond supplied history."""
     highs, lows = [], []
     n = len(candles_)
     for i in range(left, n-right):
         h = float(candles_[i]["h"]); l = float(candles_[i]["l"])
         if all(h >= float(candles_[j]["h"]) for j in range(i-left, i+right+1) if j != i):
-            highs.append(h)
+            highs.append({"price": h, "index": i, "ts": candles_[i].get("t")})
         if all(l <= float(candles_[j]["l"]) for j in range(i-left, i+right+1) if j != i):
-            lows.append(l)
+            lows.append({"price": l, "index": i, "ts": candles_[i].get("t")})
     return {"highs": highs, "lows": lows}
 
-def structural_barrier(h1, m15, entry: float, signal: str) -> Optional[float]:
-    """Nearest confirmed H1/M15 support or resistance in the trade direction."""
-    h1p = pivot_levels(h1[:-1], 2, 2)
-    m15p = pivot_levels(m15[:-1], 3, 3)
-    if signal == "BUY":
-        levels = [x for x in (h1p["highs"] + m15p["highs"]) if x > entry]
-        return min(levels) if levels else None
-    if signal == "SELL":
-        levels = [x for x in (h1p["lows"] + m15p["lows"]) if x < entry]
-        return max(levels) if levels else None
-    return None
+
+def _atr_value(candles_: List[Dict[str, Any]], n: int = 14) -> float:
+    if len(candles_) < 2:
+        return 0.0
+    trs = []
+    prev = float(candles_[0]["c"])
+    for x in candles_[1:]:
+        h,l,c = float(x["h"]),float(x["l"]),float(x["c"])
+        trs.append(max(h-l, abs(h-prev), abs(l-prev)))
+        prev = c
+    if not trs:
+        return 0.0
+    return sum(trs[-n:]) / min(n, len(trs))
+
+
+def _touch_count(candles_: List[Dict[str, Any]], level: float, atr: float) -> int:
+    """Count distinct reactions near a level; used as importance evidence."""
+    tol = max(atr * 0.18, 0.00005)
+    touches = 0
+    last_i = -99
+    for i,x in enumerate(candles_):
+        if float(x["l"]) - tol <= level <= float(x["h"]) + tol and i-last_i >= 2:
+            touches += 1
+            last_i = i
+    return touches
+
+
+def _level_strength(level: float, timeframe: str, candles_: List[Dict[str, Any]], atr: float, current_price: float) -> Dict[str, Any]:
+    touches = _touch_count(candles_, level, atr)
+    tf_weight = 0.28 if timeframe == "H1" else 0.16
+    touch_weight = min(0.42, max(0, touches-1) * 0.11)
+    recency = 0.12  # pivots are already recent-history candidates
+    distance_atr = abs(level-current_price) / max(atr, 1e-12)
+    proximity = 0.08 if distance_atr <= 1.5 else 0.03 if distance_atr <= 3 else 0.0
+    score = clamp(tf_weight + touch_weight + recency + proximity, 0.0, 1.0)
+    return {
+        "score": score,
+        "touches": touches,
+        "timeframe": timeframe,
+        "distance_atr": distance_atr,
+    }
+
+
+def _breakout_status(level: float, signal: str, m15: List[Dict[str, Any]], atr15: float) -> Dict[str, Any]:
+    """
+    A barrier is considered broken only after a close beyond it by a volatility-scaled margin.
+    A successful retest adds confidence. We do not treat a single wick as a breakout.
+    """
+    if len(m15) < 4:
+        return {"broken": False, "confirmed": False, "retested": False, "break_strength": 0.0}
+    margin = atr15 * BREAKOUT_CONFIRM_ATR
+    retest_tol = atr15 * BREAKOUT_RETEST_TOLERANCE_ATR
+    recent = m15[-5:]
+    broken_idx = None
+    for i,x in enumerate(recent):
+        close = float(x["c"])
+        if (signal=="BUY" and close > level + margin) or (signal=="SELL" and close < level - margin):
+            broken_idx = i
+            break
+    if broken_idx is None:
+        return {"broken": False, "confirmed": False, "retested": False, "break_strength": 0.0}
+
+    subsequent = recent[broken_idx+1:]
+    confirmed = bool(subsequent) and (
+        any(float(x["c"]) > level for x in subsequent) if signal=="BUY"
+        else any(float(x["c"]) < level for x in subsequent)
+    )
+    retested = False
+    for x in subsequent:
+        lo,hi,cl = float(x["l"]),float(x["h"]),float(x["c"])
+        if signal=="BUY":
+            if lo <= level + retest_tol and cl >= level:
+                retested = True
+        else:
+            if hi >= level - retest_tol and cl <= level:
+                retested = True
+    break_strength = 0.55 + (0.20 if confirmed else 0.0) + (0.20 if retested else 0.0)
+    return {
+        "broken": True,
+        "confirmed": confirmed,
+        "retested": retested,
+        "break_strength": min(1.0, break_strength),
+    }
+
+
+def structural_context(h1, m15, entry: float, signal: str) -> Dict[str, Any]:
+    """
+    Contextual support/resistance:
+    - weak/medium levels reduce confidence;
+    - only strong, unbroken barriers can veto for lack of room;
+    - broken/confirmed barriers are skipped and the next relevant barrier is evaluated.
+    """
+    if signal not in ("BUY","SELL"):
+        return {"active_barrier": None, "room_to_barrier_r": None, "levels": [], "broken_levels": []}
+
+    h1_hist = h1[:-1]
+    m15_hist = m15[:-1]
+    atr15 = _atr_value(m15_hist, 14)
+    atr1h = _atr_value(h1_hist, 14)
+
+    hp = pivot_levels(h1_hist, 2, 2)
+    mp = pivot_levels(m15_hist, 3, 3)
+    candidates = []
+
+    sidekey = "highs" if signal=="BUY" else "lows"
+    for p in hp[sidekey]:
+        px=float(p["price"])
+        if (signal=="BUY" and px>entry) or (signal=="SELL" and px<entry):
+            st=_level_strength(px,"H1",h1_hist,max(atr1h,atr15),entry)
+            br=_breakout_status(px,signal,m15_hist,atr15)
+            candidates.append({"price":px, **st, **br})
+    for p in mp[sidekey]:
+        px=float(p["price"])
+        if (signal=="BUY" and px>entry) or (signal=="SELL" and px<entry):
+            st=_level_strength(px,"M15",m15_hist,atr15,entry)
+            br=_breakout_status(px,signal,m15_hist,atr15)
+            candidates.append({"price":px, **st, **br})
+
+    # Deduplicate close levels, keeping the stronger representation.
+    candidates.sort(key=lambda x: x["price"])
+    dedup=[]
+    tol=max(atr15*0.12,0.00005)
+    for c in candidates:
+        if dedup and abs(c["price"]-dedup[-1]["price"]) <= tol:
+            if c["score"] > dedup[-1]["score"]:
+                dedup[-1]=c
+        else:
+            dedup.append(c)
+
+    broken=[x for x in dedup if x["broken"] and x["confirmed"]]
+    active_candidates=[x for x in dedup if not (x["broken"] and x["confirmed"])]
+
+    if signal=="BUY":
+        active_candidates.sort(key=lambda x:x["price"])
+    else:
+        active_candidates.sort(key=lambda x:x["price"], reverse=True)
+
+    active = active_candidates[0] if active_candidates else None
+    return {
+        "active_barrier": active,
+        "levels": dedup,
+        "broken_levels": broken,
+        "atr15": atr15,
+    }
+
+
+def structural_confidence_adjustment(ctx: Dict[str, Any]) -> Dict[str, Any]:
+    active=ctx.get("active_barrier")
+    if not active:
+        return {"adjustment":0.0,"classification":"NONE","reason":"sin barrera activa relevante"}
+    score=float(active["score"])
+    if score >= STRUCTURE_BLOCK_SCORE:
+        return {"adjustment":0.0,"classification":"STRONG","reason":f"barrera fuerte score={score:.2f}"}
+    if score >= STRUCTURE_STRONG_SCORE:
+        return {"adjustment":-MEDIUM_BARRIER_CONFIDENCE_PENALTY,"classification":"MEDIUM","reason":f"barrera media score={score:.2f}"}
+    return {"adjustment":-WEAK_BARRIER_CONFIDENCE_PENALTY,"classification":"WEAK","reason":f"barrera débil score={score:.2f}"}
+
 
 def analyze(h1, m15, m5, m1, inst) -> Dict[str, Any]:
     c15, c5, c1 = [x["c"] for x in m15], [x["c"] for x in m5], [x["c"] for x in m1]
@@ -448,29 +601,29 @@ def analyze(h1, m15, m5, m1, inst) -> Dict[str, Any]:
     astop = entry - a1 * 1.25 if sig == "BUY" else entry + a1 * 1.25
     stop = min(ss, astop) if sig == "BUY" else max(ss, astop) if sig == "SELL" else entry
     risk = abs(entry - stop) or max(a1 * 1.25, entry * .00045)
-    # Minimum target is always 1.5R. A known H1/M15 barrier must leave at least
-    # that much real room; we never invent extra room beyond resistance/support.
-    barrier = structural_barrier(h1, m15, entry, sig) if STRUCTURAL_ROOM_ENABLED and sig != "WAIT" else None
+    ctx = structural_context(h1,m15,entry,sig) if STRUCTURAL_ROOM_ENABLED and sig!="WAIT" else {"active_barrier":None,"levels":[],"broken_levels":[]}
+    active_barrier = ctx.get("active_barrier")
+    barrier = float(active_barrier["price"]) if active_barrier else None
     room = ((barrier-entry) if sig=="BUY" else (entry-barrier) if sig=="SELL" else 0.0) if barrier is not None else None
-    room_to_barrier_r = (room / risk) if room is not None and risk > 0 else None
+    room_to_barrier_r = (room/risk) if room is not None and risk>0 else None
+    barrier_score = float(active_barrier["score"]) if active_barrier else 0.0
+    barrier_class = ("STRONG" if barrier_score>=STRUCTURE_BLOCK_SCORE else
+                     "MEDIUM" if barrier_score>=STRUCTURE_STRONG_SCORE else
+                     "WEAK" if active_barrier else "NONE")
 
     st = swing(m5[:-2], "h" if sig == "BUY" else "l", 28)
     structural_reward = (st-entry) if sig=="BUY" else (entry-st) if sig=="SELL" else 0.0
-    # rr_raw represents genuinely available structural room when a barrier is known.
-    if room_to_barrier_r is not None:
-        rr_raw = room_to_barrier_r
-    elif structural_reward > 0:
-        rr_raw = structural_reward / risk
-    else:
-        rr_raw = MIN_RR
+    rr_raw = structural_reward/risk if structural_reward>0 else MIN_RR
 
     rr = MIN_RR
     target = entry + risk*rr if sig=="BUY" else entry - risk*rr if sig=="SELL" else entry
-    # Keep TP on the safe side of a known important level.
-    if barrier is not None and sig in ("BUY","SELL"):
-        buffer = risk * STRUCTURAL_BARRIER_BUFFER_R
+
+    # Only a STRONG, unbroken barrier can cap the target and become a hard room veto.
+    if active_barrier and barrier_class=="STRONG":
+        buffer = risk*STRUCTURAL_BARRIER_BUFFER_R
         cap = barrier-buffer if sig=="BUY" else barrier+buffer
-        target = min(target, cap) if sig=="BUY" else max(target, cap)
+        target = min(target,cap) if sig=="BUY" else max(target,cap)
+        rr_raw = min(rr_raw, max(0.0, room_to_barrier_r if room_to_barrier_r is not None else rr_raw))
     sess = session_info(last["t"])
     tech = min(85,
         (12 if sig != "WAIT" else 0) + (10 if aligned else 0) + (8 if confirm else 0) +
@@ -505,6 +658,9 @@ def analyze(h1, m15, m5, m1, inst) -> Dict[str, Any]:
         "volatility_ratio": float(vol),
         "rr_raw": float(rr_raw),
         "room_to_barrier_r": float(room_to_barrier_r) if room_to_barrier_r is not None else None,
+        "barrier_score": barrier_score,
+        "barrier_class": barrier_class,
+        "broken_barriers": len(ctx.get("broken_levels", [])),
         "session_ok": 1 if sess["ok"] else 0,
         "news_confirm": 0,
         "news_contradict": 0,
@@ -516,13 +672,15 @@ def analyze(h1, m15, m5, m1, inst) -> Dict[str, Any]:
         "valid_direction": sig in ("BUY", "SELL"),
         "finite_prices": all(math.isfinite(float(x)) for x in (entry, stop, target)),
         "positive_risk": abs(entry - stop) > 0,
-        "minimum_rr": rr_raw >= MIN_RR and (abs(target-entry)/max(risk,1e-12)) >= MIN_RR-1e-9,
+        "minimum_rr": (barrier_class!="STRONG") or (rr_raw >= MIN_RR and (abs(target-entry)/max(risk,1e-12)) >= MIN_RR-1e-9),
         "volatility_sane": 0.35 <= vol <= 3.5,
     }
     return {
         "instrument": inst, "signal": sig, "technical": int(tech), "score": int(tech),
         "entry": entry, "stop": stop, "target": target, "rr": rr, "rr_raw": rr_raw,
         "structural_barrier": barrier, "room_to_barrier_r": room_to_barrier_r,
+        "barrier_score": barrier_score, "barrier_class": barrier_class,
+        "structure_context": ctx,
         "blocked": not all(safety_checks.values()), "pullbacks": pc, "filters": checks,
         "safety_checks": safety_checks,
         "features": features, "candle_ts": last["t"].isoformat(), "alignment": "N/A"
@@ -894,6 +1052,8 @@ def dynamic_confidence(r: Dict[str, Any], mlp: Optional[float]) -> Dict[str, Any
 
     discovery = discovery_adjustment(r)
     p += float(discovery["adjustment"])
+    structure_adj = structural_confidence_adjustment(r.get("structure_context", {}))
+    p += float(structure_adj["adjustment"])
     if discovery["matches"]:
         source += "+DISCOVERY"
 
@@ -917,6 +1077,9 @@ def dynamic_confidence(r: Dict[str, Any], mlp: Optional[float]) -> Dict[str, Any
         "required_confidence": required,
         "discovery_adjustment": discovery["adjustment"],
         "validated_pattern_matches": discovery["matches"],
+        "structure_adjustment": structure_adj["adjustment"],
+        "structure_classification": structure_adj["classification"],
+        "structure_reason": structure_adj["reason"],
         "candidate_patterns": discovery["candidate_patterns"],
     }
 
@@ -1006,63 +1169,43 @@ def trend_runner_score(r: Dict[str, Any]) -> float:
     return clamp(score, 0.0, 1.0)
 
 def desired_target_for_trade(r: Dict[str, Any]) -> Dict[str, Any]:
-    entry, stop = float(r["entry"]), float(r["stop"])
-    risk = abs(entry-stop)
-    base_target = float(r["target"])
-    tscore = trend_runner_score(r)
-    if not TREND_RUNNER_ENABLED or tscore < TREND_RUNNER_MIN_SCORE or risk <= 0:
-        return {"target": base_target, "runner": False, "trend_score": tscore}
+    entry,stop=float(r["entry"]),float(r["stop"])
+    risk=abs(entry-stop)
+    base_target=float(r["target"])
+    tscore=trend_runner_score(r)
+    if not TREND_RUNNER_ENABLED or tscore<TREND_RUNNER_MIN_SCORE or risk<=0:
+        return {"target":base_target,"runner":False,"trend_score":tscore}
 
-    desired = entry + TREND_RUNNER_TP_R*risk if r["signal"]=="BUY" else entry - TREND_RUNNER_TP_R*risk
-    barrier = r.get("structural_barrier")
-    if barrier is not None:
-        buffer = risk * STRUCTURAL_BARRIER_BUFFER_R
-        cap = float(barrier)-buffer if r["signal"]=="BUY" else float(barrier)+buffer
-        desired = min(desired, cap) if r["signal"]=="BUY" else max(desired, cap)
+    desired=entry+TREND_RUNNER_TP_R*risk if r["signal"]=="BUY" else entry-TREND_RUNNER_TP_R*risk
+    barrier=r.get("structural_barrier")
+    if barrier is not None and r.get("barrier_class")=="STRONG":
+        buffer=risk*STRUCTURAL_BARRIER_BUFFER_R
+        cap=float(barrier)-buffer if r["signal"]=="BUY" else float(barrier)+buffer
+        desired=min(desired,cap) if r["signal"]=="BUY" else max(desired,cap)
 
-    # Never call it a runner if the barrier prevents an extension beyond the base target.
-    extends = desired > base_target + 1e-9 if r["signal"]=="BUY" else desired < base_target - 1e-9
-    return {"target": desired if extends else base_target, "runner": bool(extends), "trend_score": tscore}
+    extends=desired>base_target+1e-9 if r["signal"]=="BUY" else desired<base_target-1e-9
+    return {"target":desired if extends else base_target,"runner":bool(extends),"trend_score":tscore}
 
 
 def quality_entry_gate(r: Dict[str, Any], conf: Dict[str, Any]) -> Dict[str, Any]:
-    """Reject low-RR and late/chasing entries without imposing a clock-based cooldown."""
-    rr = float(r.get("rr_raw", 0) or 0)
-    if rr < 1.5:
-        return {"ok": False, "reason": f"RR insuficiente: {rr:.2f} < 1.50"}
+    rr = float(r.get("rr_raw",0) or 0)
+    if rr < 1.5 and r.get("barrier_class")=="STRONG":
+        return {"ok":False,"reason":f"barrera fuerte deja solo {rr:.2f}R < 1.50R"}
 
     if not ENTRY_TIMING_ENABLED:
-        return {"ok": True, "reason": "quality_ok"}
+        return {"ok":True,"reason":"quality_ok"}
 
-    f = r.get("features") or {}
-    ext = float(f.get("extension_atr", 0) or 0)
-    p = float(conf.get("probability") or 0)
+    f=r.get("features") or {}
+    ext=float(f.get("extension_atr",0) or 0)
+    p=float(conf.get("probability") or 0)
 
-    # Strong anti-chase rule: after a large impulse, wait for price/structure to reset.
     if ext > MAX_ENTRY_EXTENSION_ATR:
-        return {
-            "ok": False,
-            "reason": f"Entrada tardía/chasing: extensión {ext:.2f} ATR > {MAX_ENTRY_EXTENSION_ATR:.2f}; esperar retroceso o nueva estructura"
-        }
+        return {"ok":False,"reason":f"entrada tardía/chasing: {ext:.2f} ATR > {MAX_ENTRY_EXTENSION_ATR:.2f}"}
 
-    # Optional room-to-barrier value can be supplied by the analyzer when H1/M15
-    # support/resistance is available. If absent, it does not fabricate a barrier.
-    room_r = r.get("room_to_barrier_r")
-    if room_r is not None and float(room_r) < MIN_ROOM_TO_BARRIER_R:
-        return {
-            "ok": False,
-            "reason": f"Poco recorrido disponible: {float(room_r):.2f}R < {MIN_ROOM_TO_BARRIER_R:.2f}R antes de soporte/resistencia"
-        }
-
-    # Borderline extension requires stronger evidence.
     if ext > 0.90 and p < 0.72:
-        return {
-            "ok": False,
-            "reason": f"Entrada adelantada/tardía dudosa: extensión {ext:.2f} ATR y confianza {p:.1%}; esperar mejor precio"
-        }
+        return {"ok":False,"reason":f"extensión {ext:.2f} ATR con confianza {p:.1%}; esperar mejor precio"}
 
-    return {"ok": True, "reason": "quality_timing_ok"}
-
+    return {"ok":True,"reason":"quality_context_ok"}
 
 
 def reentry_guard(r: Dict[str, Any]) -> Dict[str, Any]:
@@ -1671,7 +1814,7 @@ async def discovery():
 async def home():
     return """<!doctype html><html lang='es'><meta name='viewport' content='width=device-width'><title>Market Alert V1.7</title>
 <style>body{font-family:system-ui;background:#0b1020;color:#eef2ff;max-width:1050px;margin:auto;padding:24px}.c{background:#151c32;border:1px solid #2c3656;border-radius:16px;padding:18px;margin:12px 0}pre{white-space:pre-wrap;word-break:break-word;background:#080c17;padding:14px;border-radius:12px}.tag{display:inline-block;padding:5px 9px;border-radius:999px;background:#25304f;margin-right:6px}</style>
-<h1>Market Alert V2.5 · Structural Room</h1><div class=c><span class=tag>OANDA PRACTICE ONLY</span><span class=tag>24/7</span><span class=tag>Sin límite diario</span><span class=tag>Confianza calibrada</span>
+<h1>Market Alert V2.6 · Contextual Structure</h1><div class=c><span class=tag>OANDA PRACTICE ONLY</span><span class=tag>24/7</span><span class=tag>Sin límite diario</span><span class=tag>Confianza calibrada</span>
 <p><b>Quality Score ≠ probabilidad.</b> La confianza dinámica se calibra con resultados reales. Con poca muestra se limita deliberadamente y el 90% requiere evidencia sustancial.</p></div>
 <div class=c><h2>Estado</h2><pre id=s>Cargando…</pre></div><div class=c><h2>Aprendizaje</h2><pre id=l>Cargando…</pre></div><div class=c><h2>Última decisión</h2><pre id=d>Cargando…</pre></div><div class=c><h2>Últimas señales</h2><pre id=h>Cargando…</pre></div>
 <script>async function u(){s.textContent=JSON.stringify(await fetch('/api/status').then(r=>r.json()),null,2);l.textContent=JSON.stringify(await fetch('/api/learning').then(r=>r.json()),null,2);d.textContent=JSON.stringify(await fetch('/api/decisions?limit=5').then(r=>r.json()),null,2);h.textContent=JSON.stringify(await fetch('/api/signals?limit=15').then(r=>r.json()),null,2)}u();setInterval(u,15000)</script></html>"""
