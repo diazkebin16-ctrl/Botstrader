@@ -26,3 +26,13 @@ Se conserva V2.6:
 
 ## Diagnóstico
 El estado ahora expone `buy_score`, `sell_score`, `direction_edge`, `direction_state` e `hypotheses` para poder ver qué estaba pensando en ambos sentidos.
+
+
+## V2.7.1 — Corrección crítica
+Se corrige el error `no such table: decisions`.
+
+El filtro de reentrada estaba consultando una tabla inexistente llamada `decisions`.
+La tabla real creada por el proyecto es `decision_log`.
+
+No se cambió ninguna regla de trading, confianza, BUY/SELL, estructura, R:R,
+Trend Runner, break-even ni trailing. Esta versión solo corrige ese bug.
