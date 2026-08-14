@@ -61,7 +61,7 @@ TREND_RUNNER_MIN_SCORE = max(0.0, float(os.getenv("TREND_RUNNER_MIN_SCORE", "0.6
 TREND_RUNNER_TP_R = max(2.0, float(os.getenv("TREND_RUNNER_TP_R", "3.0")))
 TREND_RUNNER_TRAIL_START_R = max(1.5, float(os.getenv("TREND_RUNNER_TRAIL_START_R", "1.75")))
 TREND_RUNNER_TRAIL_DISTANCE_R = max(0.40, float(os.getenv("TREND_RUNNER_TRAIL_DISTANCE_R", "0.90")))
-VERSION_TAG = "2.6"
+VERSION_TAG = "2.7"
 ENTRY_TIMING_ENABLED = os.getenv("ENTRY_TIMING_ENABLED", "true").lower() == "true"
 MAX_ENTRY_EXTENSION_ATR = max(0.5, float(os.getenv("MAX_ENTRY_EXTENSION_ATR", "1.20")))
 MIN_ROOM_TO_BARRIER_R = max(1.0, float(os.getenv("MIN_ROOM_TO_BARRIER_R", "1.50")))
@@ -75,12 +75,15 @@ BREAKOUT_CONFIRM_ATR = max(0.05, float(os.getenv("BREAKOUT_CONFIRM_ATR", "0.18")
 BREAKOUT_RETEST_TOLERANCE_ATR = max(0.05, float(os.getenv("BREAKOUT_RETEST_TOLERANCE_ATR", "0.20")))
 WEAK_BARRIER_CONFIDENCE_PENALTY = max(0.0, min(0.20, float(os.getenv("WEAK_BARRIER_CONFIDENCE_PENALTY", "0.04"))))
 MEDIUM_BARRIER_CONFIDENCE_PENALTY = max(WEAK_BARRIER_CONFIDENCE_PENALTY, min(0.25, float(os.getenv("MEDIUM_BARRIER_CONFIDENCE_PENALTY", "0.08"))))
+DIRECTION_MIN_SCORE = max(0.0, min(100.0, float(os.getenv("DIRECTION_MIN_SCORE", "30"))))
+DIRECTION_MIN_EDGE = max(0.0, min(50.0, float(os.getenv("DIRECTION_MIN_EDGE", "6"))))
+COUNTERTREND_EXECUTION_MIN_SCORE = max(0.0, min(100.0, float(os.getenv("COUNTERTREND_EXECUTION_MIN_SCORE", "82"))))
 EXECUTION_MIN_CONFIDENCE = max(0.50, min(0.95, float(os.getenv("EXECUTION_MIN_CONFIDENCE", "0.65"))))
 NY = ZoneInfo("America/New_York")
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("market-alert")
-app = FastAPI(title="Market Alert V2.6 — Contextual Structure / OANDA Practice Only")
+app = FastAPI(title="Market Alert V2.7 — Dual Hypothesis / OANDA Practice Only")
 state: Dict[str, Any] = {
     "started": datetime.now(timezone.utc).isoformat(),
     "last_scan": None,
@@ -575,115 +578,195 @@ def structural_confidence_adjustment(ctx: Dict[str, Any]) -> Dict[str, Any]:
     return {"adjustment":-WEAK_BARRIER_CONFIDENCE_PENALTY,"classification":"WEAK","reason":f"barrera débil score={score:.2f}"}
 
 
-def analyze(h1, m15, m5, m1, inst) -> Dict[str, Any]:
-    c15, c5, c1 = [x["c"] for x in m15], [x["c"] for x in m5], [x["c"] for x in m1]
-    e20, e50, e5, e9, e1 = ema(c15, 20), ema(c15, 50), ema(c5, 20), ema(c1, 9), ema(c1, 20)
-    a15, a1 = atr(m15), atr(m1)
-    gap = (e20[-1] - e50[-1]) / max(a15, 1e-9)
-    slope = (e20[-1] - e20[-5]) / max(a15, 1e-9)
-    buy, sell = gap > .1 and slope > .05, gap < -.1 and slope < -.05
-    sig = "BUY" if buy else "SELL" if sell else "WAIT"
-    mb, ms = structure(m5)
-    m5m = mom(m5, 6)
-    aligned = (mb and m5m > 0) if sig == "BUY" else (ms and m5m < 0) if sig == "SELL" else False
-    pc, pr = pullbacks(m5, e5, sig) if sig != "WAIT" else (0, False)
-    second = pc >= 2 and pr
-    last = m1[-1]
-    ph, pl, mm = swing(m1[:-1], "h", 7), swing(m1[:-1], "l", 7), mom(m1, 4)
-    cb = e9[-1] > e1[-1] and mm > 0 and last["c"] > last["o"]
-    cs = e9[-1] < e1[-1] and mm < 0 and last["c"] < last["o"]
-    confirm = (cb and (last["c"] > ph or mm > .00012)) if sig == "BUY" else (cs and (last["c"] < pl or mm < -.00012)) if sig == "SELL" else False
-    ext = abs(last["c"] - e1[-1]) / max(a1, 1e-9)
-    vols = [atr(m1[:len(m1)-i]) for i in range(18) if len(m1)-i > 15]
-    vol = a1 / max(mean(vols), 1e-9)
-    entry = last["c"]
-    ss = swing(m1, "l" if sig == "BUY" else "h", 12)
-    astop = entry - a1 * 1.25 if sig == "BUY" else entry + a1 * 1.25
-    stop = min(ss, astop) if sig == "BUY" else max(ss, astop) if sig == "SELL" else entry
-    risk = abs(entry - stop) or max(a1 * 1.25, entry * .00045)
-    ctx = structural_context(h1,m15,entry,sig) if STRUCTURAL_ROOM_ENABLED and sig!="WAIT" else {"active_barrier":None,"levels":[],"broken_levels":[]}
-    active_barrier = ctx.get("active_barrier")
-    barrier = float(active_barrier["price"]) if active_barrier else None
-    room = ((barrier-entry) if sig=="BUY" else (entry-barrier) if sig=="SELL" else 0.0) if barrier is not None else None
-    room_to_barrier_r = (room/risk) if room is not None and risk>0 else None
-    barrier_score = float(active_barrier["score"]) if active_barrier else 0.0
-    barrier_class = ("STRONG" if barrier_score>=STRUCTURE_BLOCK_SCORE else
-                     "MEDIUM" if barrier_score>=STRUCTURE_STRONG_SCORE else
-                     "WEAK" if active_barrier else "NONE")
+def _direction_hypothesis(h1, m15, m5, m1, inst: str, sig: str) -> Dict[str, Any]:
+    """Evaluate BUY or SELL independently. Higher timeframes are evidence, not a direction lock."""
+    c60, c15, c5, c1 = ([x["c"] for x in h1], [x["c"] for x in m15],
+                         [x["c"] for x in m5], [x["c"] for x in m1])
+    h20,h50 = ema(c60,20),ema(c60,50)
+    e20,e50,e5,e9,e1 = ema(c15,20),ema(c15,50),ema(c5,20),ema(c1,9),ema(c1,20)
+    a60,a15,a1 = atr(h1),atr(m15),atr(m1)
 
-    st = swing(m5[:-2], "h" if sig == "BUY" else "l", 28)
-    structural_reward = (st-entry) if sig=="BUY" else (entry-st) if sig=="SELL" else 0.0
-    rr_raw = structural_reward/risk if structural_reward>0 else MIN_RR
+    hgap=(h20[-1]-h50[-1])/max(a60,1e-9)
+    hslope=(h20[-1]-h20[-5])/max(a60,1e-9)
+    gap=(e20[-1]-e50[-1])/max(a15,1e-9)
+    slope=(e20[-1]-e20[-5])/max(a15,1e-9)
 
-    rr = MIN_RR
-    target = entry + risk*rr if sig=="BUY" else entry - risk*rr if sig=="SELL" else entry
+    sign = 1.0 if sig=="BUY" else -1.0
+    h1_support = sign*hgap > .08 and sign*hslope > .03
+    m15_support = sign*gap > .10 and sign*slope > .05
+    h1_opposes = -sign*hgap > .12 and -sign*hslope > .05
+    m15_opposes = -sign*gap > .15 and -sign*slope > .07
 
-    # Only a STRONG, unbroken barrier can cap the target and become a hard room veto.
-    if active_barrier and barrier_class=="STRONG":
-        buffer = risk*STRUCTURAL_BARRIER_BUFFER_R
-        cap = barrier-buffer if sig=="BUY" else barrier+buffer
-        target = min(target,cap) if sig=="BUY" else max(target,cap)
-        rr_raw = min(rr_raw, max(0.0, room_to_barrier_r if room_to_barrier_r is not None else rr_raw))
-    sess = session_info(last["t"])
-    tech = min(85,
-        (12 if sig != "WAIT" else 0) + (10 if aligned else 0) + (8 if confirm else 0) +
-        (7 if pc >= 1 and pr else 0) + (10 if second else 5 if pc >= 1 and pr else 0) +
-        (8 if confirm else 0) + (10 if rr_raw >= 2 else 7 if rr_raw >= MIN_RR else 0) +
-        (5 if risk <= a1 * 2.2 else 0) + (5 if ext <= 1.35 else 0) +
-        (5 if sess["ok"] else 0) + (5 if sess["ok"] and second else 0)
-    )
-    checks = {
-        "m15_context": sig != "WAIT",
-        "m5_structure": aligned,
+    mb,ms=structure(m5)
+    m5m=mom(m5,6)
+    m5_structure = (mb and m5m>0) if sig=="BUY" else (ms and m5m<0)
+    m5_momentum = sign*m5m > 0
+
+    pc,pr=pullbacks(m5,e5,sig)
+    second=pc>=2 and pr
+
+    last=m1[-1]
+    ph,pl,mm=swing(m1[:-1],"h",7),swing(m1[:-1],"l",7),mom(m1,4)
+    cb=e9[-1]>e1[-1] and mm>0 and last["c"]>last["o"]
+    cs=e9[-1]<e1[-1] and mm<0 and last["c"]<last["o"]
+    confirm=(cb and (last["c"]>ph or mm>.00012)) if sig=="BUY" else (cs and (last["c"]<pl or mm<-.00012))
+    m1_momentum = sign*mm > 0
+
+    ext=abs(last["c"]-e1[-1])/max(a1,1e-9)
+    vols=[atr(m1[:len(m1)-i]) for i in range(18) if len(m1)-i>15]
+    vol=a1/max(mean(vols),1e-9)
+    entry=last["c"]
+
+    ss=swing(m1,"l" if sig=="BUY" else "h",12)
+    astop=entry-a1*1.25 if sig=="BUY" else entry+a1*1.25
+    stop=min(ss,astop) if sig=="BUY" else max(ss,astop)
+    risk=abs(entry-stop) or max(a1*1.25,entry*.00045)
+
+    ctx=structural_context(h1,m15,entry,sig) if STRUCTURAL_ROOM_ENABLED else {"active_barrier":None,"levels":[],"broken_levels":[]}
+    active=ctx.get("active_barrier")
+    barrier=float(active["price"]) if active else None
+    room=((barrier-entry) if sig=="BUY" else (entry-barrier)) if barrier is not None else None
+    room_r=room/risk if room is not None and risk>0 else None
+    barrier_score=float(active["score"]) if active else 0.0
+    barrier_class=("STRONG" if barrier_score>=STRUCTURE_BLOCK_SCORE else
+                   "MEDIUM" if barrier_score>=STRUCTURE_STRONG_SCORE else
+                   "WEAK" if active else "NONE")
+
+    st=swing(m5[:-2],"h" if sig=="BUY" else "l",28)
+    structural_reward=(st-entry) if sig=="BUY" else (entry-st)
+    rr_raw=structural_reward/risk if structural_reward>0 else MIN_RR
+    rr=MIN_RR
+    target=entry+risk*rr if sig=="BUY" else entry-risk*rr
+    if active and barrier_class=="STRONG":
+        buffer=risk*STRUCTURAL_BARRIER_BUFFER_R
+        cap=barrier-buffer if sig=="BUY" else barrier+buffer
+        target=min(target,cap) if sig=="BUY" else max(target,cap)
+        rr_raw=min(rr_raw,max(0.0,room_r if room_r is not None else rr_raw))
+
+    sess=session_info(last["t"])
+
+    # Independent directional score. H1/M15 matter, but M5/M1 can build a reversal hypothesis.
+    dscore=0.0
+    dscore += 16 if h1_support else (-10 if h1_opposes else 3)
+    dscore += 20 if m15_support else (-12 if m15_opposes else 4)
+    dscore += 18 if m5_structure else (7 if m5_momentum else 0)
+    dscore += 16 if confirm else (6 if m1_momentum else 0)
+    dscore += 8 if second else 4 if pc>=1 and pr else 0
+    dscore += 8 if rr_raw>=2 else 6 if rr_raw>=MIN_RR else 0
+    dscore += 5 if .65<=vol<=2 else 0
+    dscore += 5 if ext<=1.20 else 2 if ext<=1.60 else 0
+    dscore += 4 if sess["ok"] else 0
+    # Confirmed broken barriers in the trade direction are positive structural evidence.
+    dscore += min(6, 2*len(ctx.get("broken_levels",[])))
+    dscore=clamp(dscore,0,100)
+
+    countertrend = (h1_opposes and m15_opposes)
+    transition = (h1_opposes or m15_opposes) and (m5_structure or confirm)
+
+    checks={
+        "h1_context": h1_support,
+        "m15_context": m15_support,
+        "m5_structure": m5_structure,
         "second_pullback": second,
         "m1_confirmation": confirm,
-        "minimum_rr": rr_raw >= MIN_RR,
-        "not_extended": ext <= 1.35,
-        "volatility_ok": .65 <= vol <= 2,
+        "minimum_rr": rr_raw>=MIN_RR,
+        "not_extended": ext<=1.35,
+        "volatility_ok": .65<=vol<=2,
     }
     if SESSION:
-        checks["ny_session"] = sess["ok"]
-    features = {
-        "direction_buy": 1 if sig == "BUY" else 0,
-        "technical_score": int(tech),
-        "final_score": int(tech),
-        "m15_gap_atr": float(gap),
-        "m15_slope_atr": float(slope),
-        "m5_momentum": float(m5m),
-        "pullbacks": int(pc),
-        "second_pullback": 1 if second else 0,
-        "m1_momentum": float(mm),
-        "m1_confirm": 1 if confirm else 0,
-        "extension_atr": float(ext),
-        "volatility_ratio": float(vol),
-        "rr_raw": float(rr_raw),
-        "room_to_barrier_r": float(room_to_barrier_r) if room_to_barrier_r is not None else None,
-        "barrier_score": barrier_score,
-        "barrier_class": barrier_class,
-        "broken_barriers": len(ctx.get("broken_levels", [])),
-        "session_ok": 1 if sess["ok"] else 0,
-        "news_confirm": 0,
-        "news_contradict": 0,
-        # "blocked" is retained as a historical feature only. In V2 market filters are soft evidence.
-        "blocked": 0,
-        "hour_ny": float(sess["hour"]),
+        checks["ny_session"]=sess["ok"]
+
+    safety={
+        "valid_direction": True,
+        "finite_prices": all(math.isfinite(float(x)) for x in (entry,stop,target)),
+        "positive_risk": abs(entry-stop)>0,
+        "minimum_rr": (barrier_class!="STRONG") or (rr_raw>=MIN_RR and abs(target-entry)/max(risk,1e-12)>=MIN_RR-1e-9),
+        "volatility_sane": .35<=vol<=3.5,
     }
-    safety_checks = {
-        "valid_direction": sig in ("BUY", "SELL"),
-        "finite_prices": all(math.isfinite(float(x)) for x in (entry, stop, target)),
-        "positive_risk": abs(entry - stop) > 0,
-        "minimum_rr": (barrier_class!="STRONG") or (rr_raw >= MIN_RR and (abs(target-entry)/max(risk,1e-12)) >= MIN_RR-1e-9),
-        "volatility_sane": 0.35 <= vol <= 3.5,
-    }
+
     return {
-        "instrument": inst, "signal": sig, "technical": int(tech), "score": int(tech),
-        "entry": entry, "stop": stop, "target": target, "rr": rr, "rr_raw": rr_raw,
-        "structural_barrier": barrier, "room_to_barrier_r": room_to_barrier_r,
-        "barrier_score": barrier_score, "barrier_class": barrier_class,
-        "structure_context": ctx,
-        "blocked": not all(safety_checks.values()), "pullbacks": pc, "filters": checks,
-        "safety_checks": safety_checks,
-        "features": features, "candle_ts": last["t"].isoformat(), "alignment": "N/A"
+        "signal":sig,"direction_score":float(dscore),"entry":entry,"stop":stop,"target":target,
+        "rr":rr,"rr_raw":rr_raw,"risk":risk,"structural_barrier":barrier,
+        "room_to_barrier_r":room_r,"barrier_score":barrier_score,"barrier_class":barrier_class,
+        "structure_context":ctx,"pullbacks":pc,"filters":checks,"safety_checks":safety,
+        "countertrend":countertrend,"transition":transition,
+        "metrics":{
+            "h1_gap_atr":float(hgap),"h1_slope_atr":float(hslope),
+            "m15_gap_atr":float(gap),"m15_slope_atr":float(slope),
+            "m5_momentum":float(m5m),"m1_momentum":float(mm),
+            "extension_atr":float(ext),"volatility_ratio":float(vol),
+            "second_pullback":second,"m1_confirm":confirm,"session":sess,
+        }
+    }
+
+
+def analyze(h1, m15, m5, m1, inst) -> Dict[str, Any]:
+    buy=_direction_hypothesis(h1,m15,m5,m1,inst,"BUY")
+    sell=_direction_hypothesis(h1,m15,m5,m1,inst,"SELL")
+
+    buy_score=float(buy["direction_score"])
+    sell_score=float(sell["direction_score"])
+    edge=abs(buy_score-sell_score)
+
+    if max(buy_score,sell_score)<DIRECTION_MIN_SCORE or edge<DIRECTION_MIN_EDGE:
+        chosen=buy if buy_score>=sell_score else sell
+        sig="WAIT"
+    else:
+        chosen=buy if buy_score>sell_score else sell
+        sig=chosen["signal"]
+
+    # A fully countertrend trade needs exceptional evidence; a transition is allowed to develop
+    # without being suppressed merely because H1/M15 have not flipped yet.
+    if sig!="WAIT" and chosen["countertrend"] and chosen["direction_score"]<COUNTERTREND_EXECUTION_MIN_SCORE:
+        sig="WAIT"
+
+    mt=chosen["metrics"]
+    sess=mt["session"]
+    tech=int(round(chosen["direction_score"])) if sig!="WAIT" else int(round(max(buy_score,sell_score)))
+    checks=dict(chosen["filters"])
+    checks["direction_edge_ok"]=edge>=DIRECTION_MIN_EDGE
+    checks["countertrend_strength_ok"]=not chosen["countertrend"] or chosen["direction_score"]>=COUNTERTREND_EXECUTION_MIN_SCORE
+
+    features={
+        "direction_buy":1 if sig=="BUY" else 0,
+        "technical_score":tech,"final_score":tech,
+        "m15_gap_atr":mt["m15_gap_atr"],"m15_slope_atr":mt["m15_slope_atr"],
+        "m5_momentum":mt["m5_momentum"],"pullbacks":int(chosen["pullbacks"]),
+        "second_pullback":1 if mt["second_pullback"] else 0,
+        "m1_momentum":mt["m1_momentum"],"m1_confirm":1 if mt["m1_confirm"] else 0,
+        "extension_atr":mt["extension_atr"],"volatility_ratio":mt["volatility_ratio"],
+        "rr_raw":float(chosen["rr_raw"]),
+        "room_to_barrier_r":float(chosen["room_to_barrier_r"]) if chosen["room_to_barrier_r"] is not None else None,
+        "barrier_score":chosen["barrier_score"],"barrier_class":chosen["barrier_class"],
+        "broken_barriers":len(chosen["structure_context"].get("broken_levels",[])),
+        "session_ok":1 if sess["ok"] else 0,"news_confirm":0,"news_contradict":0,
+        "blocked":0,"hour_ny":float(sess["hour"]),
+        # Diagnostic fields for both hypotheses:
+        "buy_score":buy_score,"sell_score":sell_score,"direction_edge":edge,
+        "h1_gap_atr":mt["h1_gap_atr"],"h1_slope_atr":mt["h1_slope_atr"],
+        "transition_state":1 if chosen["transition"] else 0,
+    }
+
+    safety=dict(chosen["safety_checks"])
+    safety["valid_direction"]=sig in ("BUY","SELL")
+
+    return {
+        "instrument":inst,"signal":sig,"technical":tech,"score":tech,
+        "buy_score":buy_score,"sell_score":sell_score,"direction_edge":edge,
+        "direction_state":"TRANSITION" if chosen["transition"] else "COUNTERTREND" if chosen["countertrend"] else "TREND",
+        "entry":chosen["entry"],"stop":chosen["stop"],"target":chosen["target"],
+        "rr":chosen["rr"],"rr_raw":chosen["rr_raw"],
+        "structural_barrier":chosen["structural_barrier"],
+        "room_to_barrier_r":chosen["room_to_barrier_r"],
+        "barrier_score":chosen["barrier_score"],"barrier_class":chosen["barrier_class"],
+        "structure_context":chosen["structure_context"],
+        "blocked":sig=="WAIT" or not all(safety.values()),
+        "pullbacks":chosen["pullbacks"],"filters":checks,"safety_checks":safety,
+        "features":features,"candle_ts":m1[-1]["t"].isoformat(),"alignment":"N/A",
+        "hypotheses":{
+            "BUY":{"score":buy_score,"countertrend":buy["countertrend"],"transition":buy["transition"]},
+            "SELL":{"score":sell_score,"countertrend":sell["countertrend"],"transition":sell["transition"]},
+        }
     }
 
 
@@ -1814,7 +1897,7 @@ async def discovery():
 async def home():
     return """<!doctype html><html lang='es'><meta name='viewport' content='width=device-width'><title>Market Alert V1.7</title>
 <style>body{font-family:system-ui;background:#0b1020;color:#eef2ff;max-width:1050px;margin:auto;padding:24px}.c{background:#151c32;border:1px solid #2c3656;border-radius:16px;padding:18px;margin:12px 0}pre{white-space:pre-wrap;word-break:break-word;background:#080c17;padding:14px;border-radius:12px}.tag{display:inline-block;padding:5px 9px;border-radius:999px;background:#25304f;margin-right:6px}</style>
-<h1>Market Alert V2.6 · Contextual Structure</h1><div class=c><span class=tag>OANDA PRACTICE ONLY</span><span class=tag>24/7</span><span class=tag>Sin límite diario</span><span class=tag>Confianza calibrada</span>
+<h1>Market Alert V2.7 · Dual Hypothesis</h1><div class=c><span class=tag>OANDA PRACTICE ONLY</span><span class=tag>24/7</span><span class=tag>Sin límite diario</span><span class=tag>Confianza calibrada</span>
 <p><b>Quality Score ≠ probabilidad.</b> La confianza dinámica se calibra con resultados reales. Con poca muestra se limita deliberadamente y el 90% requiere evidencia sustancial.</p></div>
 <div class=c><h2>Estado</h2><pre id=s>Cargando…</pre></div><div class=c><h2>Aprendizaje</h2><pre id=l>Cargando…</pre></div><div class=c><h2>Última decisión</h2><pre id=d>Cargando…</pre></div><div class=c><h2>Últimas señales</h2><pre id=h>Cargando…</pre></div>
 <script>async function u(){s.textContent=JSON.stringify(await fetch('/api/status').then(r=>r.json()),null,2);l.textContent=JSON.stringify(await fetch('/api/learning').then(r=>r.json()),null,2);d.textContent=JSON.stringify(await fetch('/api/decisions?limit=5').then(r=>r.json()),null,2);h.textContent=JSON.stringify(await fetch('/api/signals?limit=15').then(r=>r.json()),null,2)}u();setInterval(u,15000)</script></html>"""
