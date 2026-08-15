@@ -4,10 +4,28 @@ import sqlite3
 import json
 import logging
 import math
+import hashlib
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 from typing import Dict, Any, List, Optional
+from deployment_runtime import DeploymentManager
+from adaptive_learning import (
+    dataset_fingerprint as al_dataset_fingerprint,
+    candidate_uses_entry_only as al_candidate_uses_entry_only,
+    candidate_passes as al_candidate_passes,
+    metrics as al_metrics,
+    validate_candidate as al_validate_candidate,
+    candidate_score as al_candidate_score,
+    concept_drift as al_concept_drift,
+)
+from validation_pipeline import (
+    run_historical_validation as vp_run_historical_validation,
+    strict_temporal_split as vp_strict_temporal_split,
+    candidate_passes as vp_candidate_passes,
+    extended_metrics as vp_metrics,
+    dataset_fingerprint as vp_dataset_fingerprint,
+)
 
 import httpx
 from fastapi import FastAPI, HTTPException
@@ -15,6 +33,11 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 
 # PRACTICE ONLY. There is intentionally no OANDA live endpoint or environment switch.
 OANDA = "https://api-fxpractice.oanda.com"
+CANARY_OANDA_ENV = os.getenv("CANARY_OANDA_ENV","practice").strip().lower()
+CANARY_OANDA = "https://api-fxtrade.oanda.com" if CANARY_OANDA_ENV=="live" else "https://api-fxpractice.oanda.com"
+CANARY_ACCOUNT = os.getenv("OANDA_CANARY_ACCOUNT_ID","").strip()
+CANARY_TOKEN = os.getenv("OANDA_CANARY_TOKEN",os.getenv("OANDA_TOKEN","")).strip()
+DEPLOYMENT_LIVE_EXECUTION_ENABLED = os.getenv("DEPLOYMENT_LIVE_EXECUTION_ENABLED","false").lower()=="true"
 GDELT = "https://api.gdeltproject.org/api/v2/doc/doc"
 ACCOUNT = os.getenv("OANDA_ACCOUNT_ID", "").strip()
 TOKEN = os.getenv("OANDA_TOKEN", "").strip()
@@ -61,7 +84,7 @@ TREND_RUNNER_MIN_SCORE = max(0.0, float(os.getenv("TREND_RUNNER_MIN_SCORE", "0.6
 TREND_RUNNER_TP_R = max(2.0, float(os.getenv("TREND_RUNNER_TP_R", "3.0")))
 TREND_RUNNER_TRAIL_START_R = max(1.5, float(os.getenv("TREND_RUNNER_TRAIL_START_R", "1.75")))
 TREND_RUNNER_TRAIL_DISTANCE_R = max(0.40, float(os.getenv("TREND_RUNNER_TRAIL_DISTANCE_R", "0.90")))
-VERSION_TAG = "3.8"
+VERSION_TAG = "3.16"
 ENTRY_TIMING_ENABLED = os.getenv("ENTRY_TIMING_ENABLED", "true").lower() == "true"
 MAX_ENTRY_EXTENSION_ATR = max(0.5, float(os.getenv("MAX_ENTRY_EXTENSION_ATR", "1.20")))
 MIN_ROOM_TO_BARRIER_R = max(1.0, float(os.getenv("MIN_ROOM_TO_BARRIER_R", "1.50")))
@@ -129,6 +152,94 @@ WEEKEND_RESEARCH_ENABLED = os.getenv("WEEKEND_RESEARCH_ENABLED", "true").lower()
 WEEKEND_NEWS_INTERVAL_MIN = max(30, int(os.getenv("WEEKEND_NEWS_INTERVAL_MIN", "60")))
 WEEKEND_SIGNAL_CONTEXT_HOURS = max(1, min(48, int(os.getenv("WEEKEND_SIGNAL_CONTEXT_HOURS", "24"))))
 WEEKEND_REACTION_HORIZONS = (1, 4, 12, 24)
+STRATEGY_SELF_EVAL_ENABLED = os.getenv("STRATEGY_SELF_EVAL_ENABLED", "true").lower() == "true"
+STRATEGY_AUTO_PAUSE = os.getenv("STRATEGY_AUTO_PAUSE", "true").lower() == "true"
+STRATEGY_BASELINE_WINDOW = max(40, int(os.getenv("STRATEGY_BASELINE_WINDOW", "100")))
+STRATEGY_RECENT_WINDOW = max(20, int(os.getenv("STRATEGY_RECENT_WINDOW", "30")))
+STRATEGY_MIN_EXECUTED_TOTAL = max(20, int(os.getenv("STRATEGY_MIN_EXECUTED_TOTAL", "50")))
+STRATEGY_WATCH_DROP = max(0.03, min(0.25, float(os.getenv("STRATEGY_WATCH_DROP", "0.08"))))
+STRATEGY_DEGRADED_DROP = max(0.08, min(0.35, float(os.getenv("STRATEGY_DEGRADED_DROP", "0.15"))))
+STRATEGY_DEGRADED_MAX_WR = max(0.25, min(0.65, float(os.getenv("STRATEGY_DEGRADED_MAX_WR", "0.50"))))
+STRATEGY_RECOVERY_SAMPLES = max(20, int(os.getenv("STRATEGY_RECOVERY_SAMPLES", "30")))
+STRATEGY_RECOVERY_TOLERANCE = max(0.00, min(0.20, float(os.getenv("STRATEGY_RECOVERY_TOLERANCE", "0.05"))))
+STRATEGY_MAX_LOSS_STREAK_WATCH = max(3, int(os.getenv("STRATEGY_MAX_LOSS_STREAK_WATCH", "5")))
+AI_DIRECTOR_ENABLED = os.getenv("AI_DIRECTOR_ENABLED", "true").lower() == "true"
+AI_DIRECTOR_OBSERVATION_ONLY = True
+AI_DIRECTOR_MIN_HISTORY = max(10, int(os.getenv("AI_DIRECTOR_MIN_HISTORY", "20")))
+AI_DIRECTOR_RECENT_WINDOW = max(10, int(os.getenv("AI_DIRECTOR_RECENT_WINDOW", "30")))
+AI_DIRECTOR_REDUCED_THRESHOLD = max(0.30, min(0.80, float(os.getenv("AI_DIRECTOR_REDUCED_THRESHOLD", "0.58"))))
+AI_DIRECTOR_ACTIVE_THRESHOLD = max(AI_DIRECTOR_REDUCED_THRESHOLD, min(0.95, float(os.getenv("AI_DIRECTOR_ACTIVE_THRESHOLD", "0.72"))))
+AI_DIRECTOR_LOG_CHANGES_ONLY = os.getenv("AI_DIRECTOR_LOG_CHANGES_ONLY", "true").lower() == "true"
+RISK_ENGINE_ENABLED = os.getenv("RISK_ENGINE_ENABLED", "true").lower() == "true"
+RISK_ENGINE_SHADOW_MODE = True
+RISK_BASE_FRACTION = max(0.001, min(0.03, float(os.getenv("RISK_BASE_FRACTION", "0.005"))))
+RISK_MAX_TRADE_FRACTION = max(RISK_BASE_FRACTION, min(0.03, float(os.getenv("RISK_MAX_TRADE_FRACTION", "0.01"))))
+RISK_MAX_STRATEGY_FRACTION = max(RISK_MAX_TRADE_FRACTION, min(0.10, float(os.getenv("RISK_MAX_STRATEGY_FRACTION", "0.03"))))
+RISK_MAX_PORTFOLIO_FRACTION = max(RISK_MAX_STRATEGY_FRACTION, min(0.20, float(os.getenv("RISK_MAX_PORTFOLIO_FRACTION", "0.06"))))
+RISK_MAX_MARGIN_USAGE = max(0.10, min(0.90, float(os.getenv("RISK_MAX_MARGIN_USAGE", "0.50"))))
+RISK_DRAWDOWN_WARN = max(0.01, min(0.25, float(os.getenv("RISK_DRAWDOWN_WARN", "0.05"))))
+RISK_DRAWDOWN_STOP = max(RISK_DRAWDOWN_WARN, min(0.50, float(os.getenv("RISK_DRAWDOWN_STOP", "0.10"))))
+RISK_MAX_CONSECUTIVE_LOSSES = max(3, int(os.getenv("RISK_MAX_CONSECUTIVE_LOSSES", "6")))
+RISK_MAX_CORRELATED_POSITIONS = max(1, int(os.getenv("RISK_MAX_CORRELATED_POSITIONS", "2")))
+RISK_DATA_STALE_SECONDS = max(60, int(os.getenv("RISK_DATA_STALE_SECONDS", "300")))
+RISK_MIN_MULTIPLIER = max(0.05, min(0.60, float(os.getenv("RISK_MIN_MULTIPLIER", "0.25"))))
+RISK_ABNORMAL_ERROR_COUNT = max(1, int(os.getenv("RISK_ABNORMAL_ERROR_COUNT", "3")))
+TRADE_MEMORY_ENABLED = os.getenv("TRADE_MEMORY_ENABLED", "true").lower() == "true"
+TRADE_MEMORY_MIN_SAMPLE_SIZE = max(5, int(os.getenv("TRADE_MEMORY_MIN_SAMPLE_SIZE", "20")))
+TRADE_MEMORY_DEGRADATION_RECENT = max(10, int(os.getenv("TRADE_MEMORY_DEGRADATION_RECENT", "20")))
+TRADE_MEMORY_DEGRADATION_MIN_HISTORY = max(20, int(os.getenv("TRADE_MEMORY_DEGRADATION_MIN_HISTORY", "30")))
+TRADE_MEMORY_DEGRADATION_PF_FLOOR = max(0.50, min(1.20, float(os.getenv("TRADE_MEMORY_DEGRADATION_PF_FLOOR", "1.00"))))
+TRADE_MEMORY_DEGRADATION_MIN_PF_DROP = max(0.10, min(2.00, float(os.getenv("TRADE_MEMORY_DEGRADATION_MIN_PF_DROP", "0.30"))))
+TRADE_MEMORY_RECONCILE_LIMIT = max(5, min(100, int(os.getenv("TRADE_MEMORY_RECONCILE_LIMIT", "25"))))
+ADAPTIVE_LEARNING_ENABLED = os.getenv("ADAPTIVE_LEARNING_ENABLED", "true").lower() == "true"
+ADAPTIVE_LEARNING_MIN_TRADES = max(20, int(os.getenv("ADAPTIVE_LEARNING_MIN_TRADES", "60")))
+ADAPTIVE_LEARNING_MIN_OBSERVATION_DAYS = max(7, int(os.getenv("ADAPTIVE_LEARNING_MIN_OBSERVATION_DAYS", "14")))
+ADAPTIVE_LEARNING_MIN_OOS_TRADES = max(10, int(os.getenv("ADAPTIVE_LEARNING_MIN_OOS_TRADES", "20")))
+ADAPTIVE_LEARNING_WALK_FORWARD_FOLDS = max(2, min(5, int(os.getenv("ADAPTIVE_LEARNING_WALK_FORWARD_FOLDS", "3"))))
+ADAPTIVE_LEARNING_EMBARGO_MINUTES = max(0, int(os.getenv("ADAPTIVE_LEARNING_EMBARGO_MINUTES", "30")))
+ADAPTIVE_LEARNING_COOLDOWN_HOURS = max(24, int(os.getenv("ADAPTIVE_LEARNING_COOLDOWN_HOURS", "168")))
+ADAPTIVE_LEARNING_MIN_NEW_TRADES = max(10, int(os.getenv("ADAPTIVE_LEARNING_MIN_NEW_TRADES", "20")))
+ADAPTIVE_LEARNING_MAX_CONFIDENCE_STEP = max(0.01, min(0.10, float(os.getenv("ADAPTIVE_LEARNING_MAX_CONFIDENCE_STEP", "0.05"))))
+ADAPTIVE_LEARNING_ACCEPT_SCORE = max(0.50, min(0.90, float(os.getenv("ADAPTIVE_LEARNING_ACCEPT_SCORE", "0.62"))))
+ADAPTIVE_LEARNING_OBSERVATION_ONLY = True
+VALIDATION_PIPELINE_ENABLED = os.getenv("VALIDATION_PIPELINE_ENABLED", "true").lower() == "true"
+VALIDATION_TRAIN_WINDOW = max(30, int(os.getenv("VALIDATION_TRAIN_WINDOW", "60")))
+VALIDATION_TEST_WINDOW = max(10, int(os.getenv("VALIDATION_TEST_WINDOW", "20")))
+VALIDATION_STEP_SIZE = max(5, int(os.getenv("VALIDATION_STEP_SIZE", "20")))
+VALIDATION_MIN_WINDOWS = max(2, int(os.getenv("VALIDATION_MIN_WINDOWS", "3")))
+VALIDATION_MIN_OOS_TRADES = max(10, int(os.getenv("VALIDATION_MIN_OOS_TRADES", "20")))
+VALIDATION_MONTE_CARLO_SIMS = max(100, min(2000, int(os.getenv("VALIDATION_MONTE_CARLO_SIMS", "300"))))
+VALIDATION_PAPER_MIN_TRADES = max(10, int(os.getenv("VALIDATION_PAPER_MIN_TRADES", "30")))
+VALIDATION_PAPER_MIN_DAYS = max(7, int(os.getenv("VALIDATION_PAPER_MIN_DAYS", "14")))
+VALIDATION_PAPER_MIN_REGIMES = max(1, int(os.getenv("VALIDATION_PAPER_MIN_REGIMES", "2")))
+VALIDATION_PAPER_MAX_ENTRY_DEVIATION_R = max(0.10, min(1.50, float(os.getenv("VALIDATION_PAPER_MAX_ENTRY_DEVIATION_R", "0.50"))))
+VALIDATION_BACKTEST_LIVE_EXPECTANCY_TOL = max(0.10, min(1.00, float(os.getenv("VALIDATION_BACKTEST_LIVE_EXPECTANCY_TOL", "0.50"))))
+VALIDATION_MAX_STATE = "READY_FOR_REVIEW"
+VALIDATION_AUTO_DEPLOY = False
+DEPLOYMENT_MANAGER_ENABLED = os.getenv("DEPLOYMENT_MANAGER_ENABLED","true").lower()=="true"
+DEPLOYMENT_MIN_VALIDATION_SCORE = max(.50,min(.95,float(os.getenv("DEPLOYMENT_MIN_VALIDATION_SCORE",".75"))))
+DEPLOYMENT_CANARY_MIN_TRADES = max(5,int(os.getenv("DEPLOYMENT_CANARY_MIN_TRADES","10")))
+DEPLOYMENT_LIMITED_MIN_TRADES = max(10,int(os.getenv("DEPLOYMENT_LIMITED_MIN_TRADES","25")))
+DEPLOYMENT_MIN_LIVE_DAYS = max(1,int(os.getenv("DEPLOYMENT_MIN_LIVE_DAYS","3")))
+DEPLOYMENT_MIN_LIVE_REGIMES = max(1,int(os.getenv("DEPLOYMENT_MIN_LIVE_REGIMES","1")))
+DEPLOYMENT_PROMOTION_COOLDOWN_HOURS = max(12,int(os.getenv("DEPLOYMENT_PROMOTION_COOLDOWN_HOURS","72")))
+DEPLOYMENT_MAX_PROMOTIONS_PER_7D = max(1,int(os.getenv("DEPLOYMENT_MAX_PROMOTIONS_PER_7D","2")))
+DEPLOYMENT_MAX_EXPOSURE_INCREASE = max(.05,min(.25,float(os.getenv("DEPLOYMENT_MAX_EXPOSURE_INCREASE",".25"))))
+DEPLOYMENT_CANARY_MAX_DAILY_RISK = max(.001,min(.02,float(os.getenv("DEPLOYMENT_CANARY_MAX_DAILY_RISK",".005"))))
+DEPLOYMENT_CANARY_MAX_DRAWDOWN = max(.005,min(.10,float(os.getenv("DEPLOYMENT_CANARY_MAX_DRAWDOWN",".02"))))
+DEPLOYMENT_CANARY_MAX_CONSECUTIVE_LOSSES = max(2,int(os.getenv("DEPLOYMENT_CANARY_MAX_CONSECUTIVE_LOSSES","3")))
+DEPLOYMENT_CANARY_MAX_STAGE_DAYS = max(3,int(os.getenv("DEPLOYMENT_CANARY_MAX_STAGE_DAYS","30")))
+DEPLOYMENT_MAX_SLIPPAGE_PIPS = max(.5,float(os.getenv("DEPLOYMENT_MAX_SLIPPAGE_PIPS","2.5")))
+DEPLOYMENT_MAX_LATENCY_SECONDS = max(.5,float(os.getenv("DEPLOYMENT_MAX_LATENCY_SECONDS","4.0")))
+DEPLOYMENT_AUTO_PROMOTION = False
+MARKET_REGIME_ENABLED = os.getenv("MARKET_REGIME_ENABLED", "true").lower() == "true"
+MARKET_REGIME_LOG_CHANGES_ONLY = os.getenv("MARKET_REGIME_LOG_CHANGES_ONLY", "true").lower() == "true"
+MARKET_REGIME_MIN_CANDLES = max(40, int(os.getenv("MARKET_REGIME_MIN_CANDLES", "60")))
+MARKET_REGIME_HIGH_VOL_RATIO = max(1.20, float(os.getenv("MARKET_REGIME_HIGH_VOL_RATIO", "1.45")))
+MARKET_REGIME_LOW_VOL_RATIO = min(0.90, max(0.30, float(os.getenv("MARKET_REGIME_LOW_VOL_RATIO", "0.70"))))
+MARKET_REGIME_ABNORMAL_VOL_RATIO = max(MARKET_REGIME_HIGH_VOL_RATIO + 0.5, float(os.getenv("MARKET_REGIME_ABNORMAL_VOL_RATIO", "2.60")))
+MARKET_REGIME_TREND_THRESHOLD = max(0.25, min(0.80, float(os.getenv("MARKET_REGIME_TREND_THRESHOLD", "0.48"))))
+MARKET_REGIME_RANGE_THRESHOLD = max(0.15, min(0.60, float(os.getenv("MARKET_REGIME_RANGE_THRESHOLD", "0.34"))))
 MARKET_TZ = ZoneInfo("America/New_York")
 EXTERNAL_INCLUDE_SHADOW = os.getenv("EXTERNAL_INCLUDE_SHADOW", "true").lower() == "true"
 EXTERNAL_SHADOW_BASELINE_WEIGHT = max(0.10, min(1.0, float(os.getenv("EXTERNAL_SHADOW_BASELINE_WEIGHT", "0.50"))))
@@ -139,7 +250,7 @@ NY = ZoneInfo("America/New_York")
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("market-alert")
-app = FastAPI(title="Market Alert V3.8 — Weekend Context Research / OANDA Practice Only")
+app = FastAPI(title="Market Alert V3.16 — Controlled Canary Deployment / OANDA Practice Only")
 state: Dict[str, Any] = {
     "started": datetime.now(timezone.utc).isoformat(),
     "last_scan": None,
@@ -167,6 +278,31 @@ FEATURE_COLUMNS = [
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
+
+deployment_manager = DeploymentManager(
+    DB,CANARY_OANDA,CANARY_ACCOUNT,CANARY_TOKEN,
+    live_enabled=bool(DEPLOYMENT_LIVE_EXECUTION_ENABLED and CANARY_OANDA_ENV=="live"),
+    allowed_symbols=INSTRUMENTS,
+    allowed_regimes=("BULL_TREND","BEAR_TREND","RANGE"),
+    min_validation_score=DEPLOYMENT_MIN_VALIDATION_SCORE,
+    min_paper_trades=VALIDATION_PAPER_MIN_TRADES,
+    min_paper_days=VALIDATION_PAPER_MIN_DAYS,
+    min_paper_regimes=VALIDATION_PAPER_MIN_REGIMES,
+    min_live_trades=DEPLOYMENT_CANARY_MIN_TRADES,
+    min_limited_trades=DEPLOYMENT_LIMITED_MIN_TRADES,
+    min_live_days=DEPLOYMENT_MIN_LIVE_DAYS,
+    min_live_regimes=DEPLOYMENT_MIN_LIVE_REGIMES,
+    promotion_cooldown_hours=DEPLOYMENT_PROMOTION_COOLDOWN_HOURS,
+    max_promotions_7d=DEPLOYMENT_MAX_PROMOTIONS_PER_7D,
+    max_exposure_increase=DEPLOYMENT_MAX_EXPOSURE_INCREASE,
+    max_daily_risk=DEPLOYMENT_CANARY_MAX_DAILY_RISK,
+    max_drawdown=DEPLOYMENT_CANARY_MAX_DRAWDOWN,
+    max_consecutive_losses=DEPLOYMENT_CANARY_MAX_CONSECUTIVE_LOSSES,
+    max_stage_days=DEPLOYMENT_CANARY_MAX_STAGE_DAYS,
+    max_slippage_pips=DEPLOYMENT_MAX_SLIPPAGE_PIPS,
+    max_latency_seconds=DEPLOYMENT_MAX_LATENCY_SECONDS,
+    base_risk_fraction=RISK_BASE_FRACTION
+)
 
 def conn() -> sqlite3.Connection:
     c = sqlite3.connect(DB)
@@ -315,6 +451,397 @@ def conn() -> sqlite3.Connection:
             weight REAL NOT NULL,
             validated INTEGER NOT NULL,
             updated_ts TEXT NOT NULL
+        )
+    """)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS market_regime_history(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts TEXT NOT NULL,
+            candle_ts TEXT NOT NULL,
+            instrument TEXT NOT NULL,
+            market_regime TEXT NOT NULL,
+            confidence REAL NOT NULL,
+            volatility_state TEXT NOT NULL,
+            trend_strength REAL NOT NULL,
+            abnormality_score REAL NOT NULL,
+            supporting_metrics_json TEXT NOT NULL DEFAULT '{}',
+            UNIQUE(instrument,candle_ts)
+        )
+    """)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS validation_datasets(
+            dataset_version TEXT PRIMARY KEY,
+            created_ts TEXT NOT NULL,
+            strategy_id TEXT NOT NULL,
+            dataset_hash TEXT NOT NULL,
+            trade_count INTEGER NOT NULL,
+            period_start TEXT,
+            period_end TEXT,
+            training_start TEXT, training_end TEXT,
+            validation_start TEXT, validation_end TEXT,
+            test_start TEXT, test_end TEXT,
+            sealed INTEGER NOT NULL DEFAULT 1,
+            details_json TEXT NOT NULL DEFAULT '{}'
+        )
+    """)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS validation_dataset_members(
+            dataset_version TEXT NOT NULL,
+            trade_id TEXT NOT NULL,
+            partition TEXT NOT NULL,
+            position INTEGER NOT NULL,
+            PRIMARY KEY(dataset_version,trade_id),
+            FOREIGN KEY(dataset_version) REFERENCES validation_datasets(dataset_version)
+        )
+    """)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS candidate_registry(
+            candidate_id TEXT PRIMARY KEY,
+            strategy_id TEXT NOT NULL,
+            candidate_version TEXT NOT NULL,
+            current_state TEXT NOT NULL,
+            historical_validation_status TEXT,
+            validation_score REAL,
+            dataset_version TEXT,
+            paper_started_ts TEXT,
+            paper_updated_ts TEXT,
+            paper_trade_count INTEGER NOT NULL DEFAULT 0,
+            paper_regime_count INTEGER NOT NULL DEFAULT 0,
+            paper_days REAL NOT NULL DEFAULT 0,
+            divergence_status TEXT,
+            final_reason TEXT,
+            latest_validation_id TEXT,
+            auto_deploy INTEGER NOT NULL DEFAULT 0,
+            created_ts TEXT NOT NULL,
+            updated_ts TEXT NOT NULL
+        )
+    """)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS candidate_validation_runs(
+            validation_id TEXT PRIMARY KEY,
+            candidate_id TEXT NOT NULL,
+            strategy_id TEXT NOT NULL,
+            candidate_version TEXT NOT NULL,
+            code_version TEXT NOT NULL,
+            code_hash TEXT NOT NULL,
+            dataset_version TEXT NOT NULL,
+            started_ts TEXT NOT NULL,
+            completed_ts TEXT,
+            state TEXT NOT NULL,
+            training_period_json TEXT NOT NULL DEFAULT '{}',
+            validation_period_json TEXT NOT NULL DEFAULT '{}',
+            test_period_json TEXT NOT NULL DEFAULT '{}',
+            walk_forward_config_json TEXT NOT NULL DEFAULT '{}',
+            backtest_results_json TEXT NOT NULL DEFAULT '{}',
+            oos_results_json TEXT NOT NULL DEFAULT '{}',
+            walk_forward_results_json TEXT NOT NULL DEFAULT '{}',
+            stress_results_json TEXT NOT NULL DEFAULT '{}',
+            sensitivity_results_json TEXT NOT NULL DEFAULT '{}',
+            regime_results_json TEXT NOT NULL DEFAULT '{}',
+            monte_carlo_results_json TEXT NOT NULL DEFAULT '{}',
+            paper_results_json TEXT NOT NULL DEFAULT '{}',
+            validation_score REAL,
+            final_status TEXT NOT NULL,
+            final_reason TEXT NOT NULL,
+            reproducibility_json TEXT NOT NULL DEFAULT '{}',
+            auto_deploy INTEGER NOT NULL DEFAULT 0,
+            FOREIGN KEY(candidate_id) REFERENCES candidate_strategies(candidate_id)
+        )
+    """)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS validation_walk_forward_windows(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            validation_id TEXT NOT NULL,
+            window_no INTEGER NOT NULL,
+            train_start TEXT, train_end TEXT, test_start TEXT, test_end TEXT,
+            production_metrics_json TEXT NOT NULL DEFAULT '{}',
+            candidate_metrics_json TEXT NOT NULL DEFAULT '{}',
+            comparison_json TEXT NOT NULL DEFAULT '{}',
+            UNIQUE(validation_id,window_no)
+        )
+    """)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS candidate_paper_trades(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            candidate_id TEXT NOT NULL,
+            signal_id INTEGER NOT NULL,
+            created_ts TEXT NOT NULL,
+            candle_ts TEXT,
+            instrument TEXT NOT NULL,
+            direction TEXT NOT NULL,
+            entry REAL NOT NULL, stop REAL NOT NULL, target REAL NOT NULL, risk REAL NOT NULL,
+            observed_entry REAL, simulated_exit REAL, entry_deviation_r REAL, latency_seconds REAL,
+            executable INTEGER NOT NULL DEFAULT 1,
+            status TEXT NOT NULL DEFAULT 'PENDING',
+            label INTEGER, resolved_ts TEXT, bars_to_resolution INTEGER,
+            mfe_r REAL, mae_r REAL, realized_r REAL, note TEXT,
+            market_regime TEXT, volatility_state TEXT, strategy_confidence REAL,
+            director_confidence REAL, risk_multiplier REAL,
+            UNIQUE(candidate_id,signal_id),
+            FOREIGN KEY(candidate_id) REFERENCES candidate_strategies(candidate_id),
+            FOREIGN KEY(signal_id) REFERENCES signals(id)
+        )
+    """)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS validation_events(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts TEXT NOT NULL, candidate_id TEXT NOT NULL, validation_id TEXT,
+            stage TEXT NOT NULL, status TEXT NOT NULL, details_json TEXT NOT NULL DEFAULT '{}'
+        )
+    """)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS adaptive_learning_runs(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id TEXT NOT NULL UNIQUE,
+            started_ts TEXT NOT NULL,
+            completed_ts TEXT,
+            code_version TEXT NOT NULL,
+            dataset_hash TEXT,
+            period_start TEXT,
+            period_end TEXT,
+            trade_count INTEGER NOT NULL DEFAULT 0,
+            status TEXT NOT NULL,
+            config_json TEXT NOT NULL DEFAULT '{}',
+            summary_json TEXT NOT NULL DEFAULT '{}'
+        )
+    """)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS candidate_strategies(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            candidate_id TEXT NOT NULL UNIQUE,
+            run_id TEXT NOT NULL,
+            strategy_id TEXT NOT NULL,
+            production_version TEXT NOT NULL,
+            candidate_version TEXT NOT NULL UNIQUE,
+            status TEXT NOT NULL,
+            change_type TEXT NOT NULL,
+            parameter_name TEXT NOT NULL,
+            current_value_json TEXT NOT NULL,
+            proposed_value_json TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            supporting_evidence_json TEXT NOT NULL DEFAULT '{}',
+            sample_size INTEGER NOT NULL DEFAULT 0,
+            expected_improvement REAL,
+            confidence REAL,
+            risks_json TEXT NOT NULL DEFAULT '[]',
+            original_parameters_json TEXT NOT NULL DEFAULT '{}',
+            candidate_parameters_json TEXT NOT NULL DEFAULT '{}',
+            validation_json TEXT NOT NULL DEFAULT '{}',
+            candidate_score REAL,
+            dataset_hash TEXT NOT NULL,
+            period_start TEXT,
+            period_end TEXT,
+            generated_at TEXT NOT NULL,
+            validated_at TEXT,
+            cooldown_until TEXT,
+            auto_deploy INTEGER NOT NULL DEFAULT 0,
+            FOREIGN KEY(run_id) REFERENCES adaptive_learning_runs(run_id)
+        )
+    """)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS adaptive_learning_events(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id TEXT NOT NULL,
+            ts TEXT NOT NULL,
+            stage TEXT NOT NULL,
+            strategy_id TEXT,
+            candidate_id TEXT,
+            status TEXT NOT NULL,
+            details_json TEXT NOT NULL DEFAULT '{}'
+        )
+    """)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS concept_drift_alerts(
+            scope_key TEXT PRIMARY KEY,
+            ts TEXT NOT NULL,
+            strategy_id TEXT NOT NULL,
+            market_regime TEXT,
+            status TEXT NOT NULL,
+            confidence REAL,
+            historical_metrics_json TEXT NOT NULL DEFAULT '{}',
+            previous_metrics_json TEXT NOT NULL DEFAULT '{}',
+            recent_metrics_json TEXT NOT NULL DEFAULT '{}',
+            reason TEXT NOT NULL,
+            auto_action INTEGER NOT NULL DEFAULT 0
+        )
+    """)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS trade_memory(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            trade_id TEXT NOT NULL UNIQUE,
+            signal_id INTEGER,
+            order_id TEXT,
+            strategy TEXT NOT NULL,
+            symbol TEXT NOT NULL,
+            direction TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'OPEN',
+            entry_ts TEXT NOT NULL,
+            exit_ts TEXT,
+            entry_price REAL NOT NULL,
+            exit_price REAL,
+            position_size REAL NOT NULL,
+            stop_loss REAL,
+            take_profit REAL,
+            gross_result REAL,
+            net_result REAL,
+            realized_pl REAL,
+            financing REAL,
+            dividend_adjustment REAL,
+            guaranteed_execution_fees REAL,
+            commission REAL,
+            fees_total REAL,
+            entry_slippage_pips REAL,
+            exit_slippage_pips REAL,
+            duration_seconds REAL,
+            market_regime_entry TEXT,
+            regime_confidence_entry REAL,
+            volatility_state_entry TEXT,
+            trend_strength_entry REAL,
+            strategy_confidence_entry REAL,
+            director_state_entry TEXT,
+            director_confidence_entry REAL,
+            risk_multiplier_entry REAL,
+            risk_allow_new_trades_shadow INTEGER,
+            requested_risk REAL,
+            approved_risk REAL,
+            entry_drawdown REAL,
+            mfe_r REAL NOT NULL DEFAULT 0,
+            mae_r REAL NOT NULL DEFAULT 0,
+            max_drawdown_during_trade_r REAL NOT NULL DEFAULT 0,
+            realized_r REAL,
+            entry_session TEXT,
+            confidence_bucket TEXT,
+            entry_reasons_json TEXT NOT NULL DEFAULT '[]',
+            exit_reasons_json TEXT NOT NULL DEFAULT '[]',
+            entry_context_json TEXT NOT NULL DEFAULT '{}',
+            execution_context_json TEXT NOT NULL DEFAULT '{}',
+            exit_context_json TEXT NOT NULL DEFAULT '{}',
+            risk_recommendation_json TEXT NOT NULL DEFAULT '{}',
+            data_quality_json TEXT NOT NULL DEFAULT '{}',
+            created_ts TEXT NOT NULL,
+            updated_ts TEXT NOT NULL,
+            FOREIGN KEY(signal_id) REFERENCES signals(id)
+        )
+    """)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS trade_memory_degradation(
+            scope_key TEXT PRIMARY KEY,
+            ts TEXT NOT NULL,
+            scope_type TEXT NOT NULL,
+            strategy TEXT NOT NULL,
+            market_regime TEXT,
+            status TEXT NOT NULL,
+            historical_samples INTEGER NOT NULL,
+            recent_samples INTEGER NOT NULL,
+            historical_profit_factor REAL,
+            recent_profit_factor REAL,
+            historical_expectancy REAL,
+            recent_expectancy REAL,
+            historical_win_rate REAL,
+            recent_win_rate REAL,
+            change_score REAL,
+            reason TEXT NOT NULL,
+            details_json TEXT NOT NULL DEFAULT '{}'
+        )
+    """)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS adaptive_risk_decisions(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts TEXT NOT NULL,
+            instrument TEXT NOT NULL,
+            setup_variant TEXT NOT NULL,
+            market_regime TEXT,
+            volatility_state TEXT,
+            strategy_confidence REAL,
+            recent_win_rate REAL,
+            current_drawdown REAL,
+            nav REAL,
+            margin_usage REAL,
+            portfolio_open_risk REAL,
+            strategy_open_risk REAL,
+            requested_risk REAL,
+            approved_risk REAL,
+            requested_units REAL,
+            shadow_max_position_size REAL,
+            risk_multiplier REAL NOT NULL,
+            max_exposure REAL,
+            allow_new_trades INTEGER NOT NULL,
+            reduce_existing_positions INTEGER NOT NULL,
+            emergency_stop INTEGER NOT NULL,
+            hard_limit_triggered INTEGER NOT NULL,
+            reason TEXT NOT NULL,
+            metrics_json TEXT NOT NULL DEFAULT '{}',
+            shadow_mode INTEGER NOT NULL DEFAULT 1
+        )
+    """)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS portfolio_risk_state(
+            id INTEGER PRIMARY KEY CHECK(id=1),
+            ts TEXT NOT NULL,
+            balance REAL,
+            nav REAL,
+            peak_nav REAL,
+            current_drawdown REAL,
+            margin_used REAL,
+            margin_usage REAL,
+            open_positions INTEGER NOT NULL DEFAULT 0,
+            portfolio_open_risk REAL,
+            consecutive_losses INTEGER NOT NULL DEFAULT 0,
+            data_stale INTEGER NOT NULL DEFAULT 0,
+            system_abnormal INTEGER NOT NULL DEFAULT 0,
+            details_json TEXT NOT NULL DEFAULT '{}'
+        )
+    """)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS ai_strategy_director_decisions(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts TEXT NOT NULL,
+            instrument TEXT NOT NULL,
+            setup_variant TEXT NOT NULL,
+            recommended_state TEXT NOT NULL,
+            confidence REAL NOT NULL,
+            market_regime TEXT,
+            regime_confidence REAL,
+            volatility_state TEXT,
+            strategy_health_status TEXT,
+            historical_win_rate REAL,
+            recent_win_rate REAL,
+            historical_samples INTEGER NOT NULL DEFAULT 0,
+            recent_samples INTEGER NOT NULL DEFAULT 0,
+            signal_confidence REAL,
+            score_components_json TEXT NOT NULL DEFAULT '{}',
+            reasons_json TEXT NOT NULL DEFAULT '[]',
+            observation_only INTEGER NOT NULL DEFAULT 1
+        )
+    """)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS ai_strategy_director_outcomes(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            director_decision_id INTEGER NOT NULL,
+            signal_id INTEGER,
+            resolved_label INTEGER,
+            executed INTEGER,
+            blocked INTEGER,
+            resolved_ts TEXT,
+            FOREIGN KEY(director_decision_id) REFERENCES ai_strategy_director_decisions(id)
+        )
+    """)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS strategy_health(
+            setup_variant TEXT PRIMARY KEY, status TEXT NOT NULL, evidence_mode TEXT NOT NULL DEFAULT 'CANONICAL',
+            total_resolved INTEGER NOT NULL DEFAULT 0, executed_resolved INTEGER NOT NULL DEFAULT 0,
+            baseline_samples INTEGER NOT NULL DEFAULT 0, baseline_win_rate REAL,
+            recent_samples INTEGER NOT NULL DEFAULT 0, recent_win_rate REAL, recent_drop REAL,
+            recent_loss_streak INTEGER NOT NULL DEFAULT 0, paused_ts TEXT, pause_baseline_win_rate REAL,
+            recovery_samples INTEGER NOT NULL DEFAULT 0, recovery_win_rate REAL,
+            last_transition TEXT, reason TEXT, updated_ts TEXT NOT NULL
+        )
+    """)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS strategy_health_audit(
+            id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL, setup_variant TEXT NOT NULL,
+            old_status TEXT, new_status TEXT NOT NULL, evidence_mode TEXT, baseline_win_rate REAL,
+            recent_win_rate REAL, recent_drop REAL, loss_streak INTEGER, details_json TEXT NOT NULL DEFAULT '{}'
         )
     """)
     c.execute("""
@@ -525,6 +1052,27 @@ def conn() -> sqlite3.Connection:
     c.execute("CREATE INDEX IF NOT EXISTS idx_autonomous_stage ON autonomous_hypotheses(stage,validation_samples)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_autonomous_score ON autonomous_hypotheses(score,edge)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_rule_compat ON research_rule_compatibility(compatible,checked_ts)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_market_regime_history ON market_regime_history(instrument,candle_ts)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_strategy_health_status ON strategy_health(status,updated_ts)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_strategy_health_audit ON strategy_health_audit(setup_variant,ts)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_ai_director_variant_ts ON ai_strategy_director_decisions(setup_variant,ts)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_ai_director_state ON ai_strategy_director_decisions(recommended_state,ts)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_ai_director_outcomes_decision ON ai_strategy_director_outcomes(director_decision_id)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_adaptive_risk_variant_ts ON adaptive_risk_decisions(setup_variant,ts)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_adaptive_risk_blocks ON adaptive_risk_decisions(emergency_stop,allow_new_trades,ts)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_trade_memory_strategy ON trade_memory(strategy,status,exit_ts)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_trade_memory_regime ON trade_memory(market_regime_entry,status,exit_ts)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_trade_memory_symbol ON trade_memory(symbol,status,exit_ts)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_trade_memory_entry_ts ON trade_memory(entry_ts)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_trade_memory_degradation_status ON trade_memory_degradation(status,ts)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_candidate_strategy_status ON candidate_strategies(status,generated_at)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_candidate_strategy_parent ON candidate_strategies(strategy_id,parameter_name,generated_at)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_adaptive_events_run ON adaptive_learning_events(run_id,stage,ts)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_concept_drift_status ON concept_drift_alerts(status,ts)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_candidate_registry_state ON candidate_registry(current_state,updated_ts)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_validation_candidate ON candidate_validation_runs(candidate_id,started_ts)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_paper_candidate_status ON candidate_paper_trades(candidate_id,status,created_ts)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_validation_events_candidate ON validation_events(candidate_id,ts)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_samples_pending ON learning_samples(status,instrument)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_signals_ts ON signals(ts)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_decision_ts ON decision_log(ts)")
@@ -945,7 +1493,239 @@ def _direction_hypothesis(h1, m15, m5, m1, inst: str, sig: str) -> Dict[str, Any
     }
 
 
+
+def _regime_closes(candles_: List[Dict[str, Any]]) -> List[float]:
+    return [float(x["c"]) for x in candles_ if x.get("c") is not None]
+
+
+def _regime_returns(candles_: List[Dict[str, Any]]) -> List[float]:
+    closes=_regime_closes(candles_)
+    out=[]
+    for i in range(1,len(closes)):
+        if closes[i-1] != 0:
+            out.append((closes[i]-closes[i-1])/closes[i-1])
+    return out
+
+
+def _regime_efficiency_ratio(candles_: List[Dict[str, Any]], period: int = 30) -> float:
+    closes=_regime_closes(candles_[-(period+1):])
+    if len(closes)<3:
+        return 0.0
+    net=abs(closes[-1]-closes[0])
+    path=sum(abs(closes[i]-closes[i-1]) for i in range(1,len(closes)))
+    return float(net/path) if path>0 else 0.0
+
+
+def _regime_directional_slope(candles_: List[Dict[str, Any]], period: int = 30) -> float:
+    cs=candles_[-max(8,period):]
+    closes=_regime_closes(cs)
+    if len(closes)<8:
+        return 0.0
+    a=atr(cs)
+    if a<=0:
+        return 0.0
+    fast=ema(closes,min(8,len(closes)))[-1]
+    slow=ema(closes,min(21,len(closes)))[-1]
+    return float((fast-slow)/a)
+
+
+def _regime_return_zscore(candles_: List[Dict[str, Any]], lookback: int = 60) -> float:
+    rs=_regime_returns(candles_[-(lookback+2):])
+    if len(rs)<12:
+        return 0.0
+    last=rs[-1]
+    hist=rs[:-1]
+    mean=sum(hist)/len(hist)
+    var=sum((x-mean)*(x-mean) for x in hist)/len(hist)
+    sd=math.sqrt(var)
+    return float((last-mean)/sd) if sd>1e-12 else 0.0
+
+
+def _regime_range_compression(candles_: List[Dict[str, Any]], short: int = 12, long: int = 50) -> float:
+    if len(candles_)<long:
+        return 1.0
+    def span(xs):
+        return max(float(x["h"]) for x in xs)-min(float(x["l"]) for x in xs)
+    s=span(candles_[-short:])
+    l=span(candles_[-long:])
+    return float(s/l) if l>1e-12 else 1.0
+
+
+def detect_market_regime(h1: List[Dict[str, Any]], m15: List[Dict[str, Any]],
+                         m5: List[Dict[str, Any]], m1: List[Dict[str, Any]],
+                         instrument: str) -> Dict[str, Any]:
+    """
+    Multi-metric regime classifier. Observation only: it does NOT alter execution,
+    confidence, strategy activation, or learned filters.
+
+    Uses trend agreement across H1/M15/M5, efficiency ratio, ATR-normalized EMA
+    slopes, realized volatility, range compression, short-term shock z-score and
+    cross-timeframe disagreement.
+    """
+    ts=(m1[-1]["t"].isoformat() if m1 and hasattr(m1[-1].get("t"),"isoformat")
+        else str(m1[-1].get("t")) if m1 else now_iso())
+
+    if not MARKET_REGIME_ENABLED:
+        return {"market_regime":"DISABLED","confidence":0.0,"volatility_state":"UNKNOWN",
+                "trend_strength":0.0,"supporting_metrics":{},"timestamp":ts}
+
+    if min(len(h1),len(m15),len(m5),len(m1)) < MARKET_REGIME_MIN_CANDLES:
+        return {"market_regime":"UNCERTAIN","confidence":0.15,"volatility_state":"UNKNOWN",
+                "trend_strength":0.0,
+                "supporting_metrics":{"reason":"insufficient_candles",
+                                      "counts":{"H1":len(h1),"M15":len(m15),"M5":len(m5),"M1":len(m1)}},
+                "timestamp":ts}
+
+    slopes={
+        "h1":_regime_directional_slope(h1,30),
+        "m15":_regime_directional_slope(m15,35),
+        "m5":_regime_directional_slope(m5,40),
+    }
+    efficiencies={
+        "h1":_regime_efficiency_ratio(h1,24),
+        "m15":_regime_efficiency_ratio(m15,32),
+        "m5":_regime_efficiency_ratio(m5,40),
+    }
+
+    # Volatility ratio: current ATR vs longer rolling ATR proxy on M15 and M5.
+    atr15_now=atr(m15[-20:])
+    atr15_base=atr(m15[-80:-20]) if len(m15)>=80 else atr(m15[:-20] or m15)
+    atr5_now=atr(m5[-30:])
+    atr5_base=atr(m5[-120:-30]) if len(m5)>=120 else atr(m5[:-30] or m5)
+    v15=atr15_now/max(atr15_base,1e-12)
+    v5=atr5_now/max(atr5_base,1e-12)
+
+    # Current M1 realized volatility relative to its previous window.
+    m1_now=atr(m1[-20:])
+    m1_base=atr(m1[-80:-20]) if len(m1)>=80 else atr(m1)
+    v1=m1_now/max(m1_base,1e-12)
+    vol_ratio=float(0.50*v15 + 0.30*v5 + 0.20*v1)
+
+    if vol_ratio>=MARKET_REGIME_ABNORMAL_VOL_RATIO:
+        volatility_state="ABNORMAL"
+    elif vol_ratio>=MARKET_REGIME_HIGH_VOL_RATIO:
+        volatility_state="HIGH"
+    elif vol_ratio<=MARKET_REGIME_LOW_VOL_RATIO:
+        volatility_state="LOW"
+    else:
+        volatility_state="NORMAL"
+
+    weights={"h1":0.45,"m15":0.35,"m5":0.20}
+    signed_trend=sum(weights[k]*math.tanh(slopes[k]/1.25) for k in weights)
+    efficiency=sum(weights[k]*efficiencies[k] for k in weights)
+    trend_strength=float(clamp(abs(signed_trend)*0.62 + efficiency*0.38,0.0,1.0))
+
+    signs=[]
+    for k in ("h1","m15","m5"):
+        signs.append(1 if slopes[k]>0.12 else -1 if slopes[k]<-0.12 else 0)
+    nonzero=[x for x in signs if x]
+    agreement=(abs(sum(nonzero))/len(nonzero)) if nonzero else 0.0
+    disagreement=1.0-agreement
+
+    compression=_regime_range_compression(m15,12,50)
+    shock_z=abs(_regime_return_zscore(m1,80))
+    extreme_candle=abs(float(m1[-1]["c"])-float(m1[-1]["o"]))/max(atr(m1[-30:]),1e-12)
+
+    abnormality=float(clamp(
+        0.38*min(1.0,shock_z/4.0) +
+        0.27*min(1.0,extreme_candle/2.5) +
+        0.20*min(1.0,max(0.0,vol_ratio-1.5)/1.5) +
+        0.15*disagreement,
+        0.0,1.0))
+
+    # Separate regime candidates. Range is a positive diagnosis, not merely no-trend.
+    bullish_score=float(clamp(max(0.0,signed_trend)*0.58 + trend_strength*0.27 + agreement*0.15,0,1))
+    bearish_score=float(clamp(max(0.0,-signed_trend)*0.58 + trend_strength*0.27 + agreement*0.15,0,1))
+    range_score=float(clamp((1.0-trend_strength)*0.55 + (1.0-efficiency)*0.25 +
+                            max(0.0,0.45-compression)/0.45*0.20,0,1))
+
+    if abnormality>=0.66 or volatility_state=="ABNORMAL":
+        regime="ABNORMAL_UNCERTAIN"
+        winning=max(abnormality,0.66)
+        margin=winning-max(bullish_score,bearish_score,range_score)*0.35
+    else:
+        candidates={"BULL_TREND":bullish_score,"BEAR_TREND":bearish_score,"RANGE":range_score}
+        ordered=sorted(candidates.items(),key=lambda x:x[1],reverse=True)
+        regime,winning=ordered[0]
+        margin=winning-ordered[1][1]
+        if regime in ("BULL_TREND","BEAR_TREND") and trend_strength<MARKET_REGIME_TREND_THRESHOLD:
+            regime="RANGE" if range_score>=MARKET_REGIME_RANGE_THRESHOLD else "UNCERTAIN"
+        elif regime=="RANGE" and range_score<MARKET_REGIME_RANGE_THRESHOLD:
+            regime="UNCERTAIN"
+
+    # Confidence combines score margin, timeframe agreement, data sufficiency and anomaly penalty.
+    data_factor=min(1.0,min(len(h1),len(m15),len(m5),len(m1))/max(1.0,MARKET_REGIME_MIN_CANDLES))
+    base_conf=0.38*max(0.0,min(1.0,winning)) + 0.27*agreement + 0.20*min(1.0,max(0.0,margin)*2.5) + 0.15*data_factor
+    if regime=="RANGE":
+        base_conf=0.50*range_score+0.20*(1.0-trend_strength)+0.15*data_factor+0.15*(1.0-abnormality)
+    elif regime=="ABNORMAL_UNCERTAIN":
+        base_conf=0.55*abnormality+0.20*min(1.0,shock_z/4.0)+0.15*disagreement+0.10*data_factor
+    elif regime=="UNCERTAIN":
+        base_conf=0.30+0.25*disagreement+0.20*abnormality
+    confidence=float(clamp(base_conf,0.0,0.99))
+
+    metrics={
+        "signed_trend":float(signed_trend),
+        "timeframe_agreement":float(agreement),
+        "timeframe_disagreement":float(disagreement),
+        "efficiency_ratio":float(efficiency),
+        "slopes_atr":{k:float(v) for k,v in slopes.items()},
+        "efficiency_by_tf":{k:float(v) for k,v in efficiencies.items()},
+        "atr_ratio":{"m15":float(v15),"m5":float(v5),"m1":float(v1),"composite":float(vol_ratio)},
+        "range_compression":float(compression),
+        "return_shock_z":float(shock_z),
+        "extreme_candle_atr":float(extreme_candle),
+        "abnormality_score":float(abnormality),
+        "candidate_scores":{"bull":bullish_score,"bear":bearish_score,"range":range_score},
+        "candles":{"H1":len(h1),"M15":len(m15),"M5":len(m5),"M1":len(m1)},
+    }
+
+    return {
+        "market_regime":regime,
+        "confidence":confidence,
+        "volatility_state":volatility_state,
+        "trend_strength":trend_strength,
+        "supporting_metrics":metrics,
+        "timestamp":ts,
+    }
+
+
+def record_market_regime(instrument: str, candle_ts: str, regime: Dict[str, Any]) -> None:
+    if not MARKET_REGIME_ENABLED or not candle_ts:
+        return
+    c=conn()
+    c.execute("""INSERT INTO market_regime_history(
+        ts,candle_ts,instrument,market_regime,confidence,volatility_state,
+        trend_strength,abnormality_score,supporting_metrics_json)
+        VALUES(?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(instrument,candle_ts) DO UPDATE SET
+        ts=excluded.ts,market_regime=excluded.market_regime,confidence=excluded.confidence,
+        volatility_state=excluded.volatility_state,trend_strength=excluded.trend_strength,
+        abnormality_score=excluded.abnormality_score,
+        supporting_metrics_json=excluded.supporting_metrics_json""",
+      (now_iso(),candle_ts,instrument,regime.get("market_regime","UNCERTAIN"),
+       float(regime.get("confidence") or 0),regime.get("volatility_state","UNKNOWN"),
+       float(regime.get("trend_strength") or 0),
+       float((regime.get("supporting_metrics") or {}).get("abnormality_score") or 0),
+       json.dumps(regime.get("supporting_metrics") or {},separators=(",",":"))))
+    c.commit();c.close()
+
+
+def log_market_regime(instrument: str, regime: Dict[str, Any]) -> None:
+    previous=(state.get("market_regimes") or {}).get(instrument)
+    changed=(not previous or previous.get("market_regime")!=regime.get("market_regime") or
+             previous.get("volatility_state")!=regime.get("volatility_state"))
+    if changed or not MARKET_REGIME_LOG_CHANGES_ONLY:
+        m=regime.get("supporting_metrics") or {}
+        log.info("REGIME %s regime=%s conf=%.3f vol=%s trend=%.3f agreement=%.3f shock_z=%.2f abnormal=%.3f",
+                 instrument,regime.get("market_regime"),float(regime.get("confidence") or 0),
+                 regime.get("volatility_state"),float(regime.get("trend_strength") or 0),
+                 float(m.get("timeframe_agreement") or 0),float(m.get("return_shock_z") or 0),
+                 float(m.get("abnormality_score") or 0))
+
+
 def analyze(h1, m15, m5, m1, inst) -> Dict[str, Any]:
+    regime=detect_market_regime(h1,m15,m5,m1,inst)
     buy=_direction_hypothesis(h1,m15,m5,m1,inst,"BUY")
     sell=_direction_hypothesis(h1,m15,m5,m1,inst,"SELL")
 
@@ -1009,6 +1789,7 @@ def analyze(h1, m15, m5, m1, inst) -> Dict[str, Any]:
         "blocked":sig=="WAIT" or not all(safety.values()),
         "pullbacks":chosen["pullbacks"],"filters":checks,"safety_checks":safety,
         "features":features,"candle_ts":m1[-1]["t"].isoformat(),"alignment":"N/A",
+        "market_regime":regime,
         "hypotheses":{
             "BUY":{"score":buy_score,"countertrend":buy["countertrend"],"transition":buy["transition"]},
             "SELL":{"score":sell_score,"countertrend":sell["countertrend"],"transition":sell["transition"]},
@@ -1562,6 +2343,2316 @@ def reentry_guard(r: Dict[str, Any]) -> Dict[str, Any]:
         return {"ok": False, "reason": "misma vela que la operación anterior; esperar una señal nueva"}
     return {"ok": True, "reason": "new_opportunity"}
 
+
+def _loss_streak(labels: List[int]) -> int:
+    streak=0
+    for x in reversed(labels):
+        if int(x)==0: streak+=1
+        else: break
+    return streak
+
+def _strategy_rows(variant: str, executed_only: bool=False, since_ts: Optional[str]=None) -> List[sqlite3.Row]:
+    where=["ls.label IN (0,1)","s.setup_variant=?"]; params=[variant]
+    if executed_only: where.append("ls.executed=1")
+    if since_ts: where.append("s.ts>=?"); params.append(since_ts)
+    c=conn(); rows=c.execute(f"""SELECT ls.label,ls.executed,ls.blocked,s.ts,s.candle_ts,s.setup_variant
+                                 FROM learning_samples ls JOIN signals s ON s.id=ls.signal_id
+                                 WHERE {' AND '.join(where)} ORDER BY s.id ASC""",tuple(params)).fetchall(); c.close()
+    return rows
+
+def _health_transition(variant,old_status,new_status,evidence_mode,baseline_wr,recent_wr,recent_drop,loss_streak,details):
+    if old_status==new_status:return
+    c=conn(); c.execute("""INSERT INTO strategy_health_audit(ts,setup_variant,old_status,new_status,evidence_mode,
+                           baseline_win_rate,recent_win_rate,recent_drop,loss_streak,details_json)
+                           VALUES(?,?,?,?,?,?,?,?,?,?)""",
+                        (now_iso(),variant,old_status,new_status,evidence_mode,baseline_wr,recent_wr,recent_drop,
+                         loss_streak,json.dumps(details or {},separators=(",",":")))); c.commit(); c.close()
+
+def strategy_health_snapshot(variant: str) -> Optional[Dict[str, Any]]:
+    c=conn(); row=c.execute("SELECT * FROM strategy_health WHERE setup_variant=?",(variant,)).fetchone(); c.close()
+    return dict(row) if row else None
+
+def all_strategy_health() -> List[Dict[str, Any]]:
+    c=conn(); rows=c.execute("""SELECT * FROM strategy_health ORDER BY CASE status
+                                  WHEN 'PAUSED' THEN 1 WHEN 'DEGRADED' THEN 2 WHEN 'WATCH' THEN 3
+                                  WHEN 'RECOVERING' THEN 4 WHEN 'HEALTHY' THEN 5 ELSE 6 END, updated_ts DESC""").fetchall(); c.close()
+    return [dict(x) for x in rows]
+
+def _evaluate_one_strategy_health(variant: str) -> Dict[str, Any]:
+    canonical=_strategy_rows(variant,False); executed=_strategy_rows(variant,True)
+    c=conn(); previous=c.execute("SELECT * FROM strategy_health WHERE setup_variant=?",(variant,)).fetchone(); c.close()
+    prev=dict(previous) if previous else None; old_status=prev['status'] if prev else None
+    total=len(canonical); executed_total=len(executed)
+    evidence_mode='EXECUTED' if executed_total>=STRATEGY_MIN_EXECUTED_TOTAL else 'CANONICAL_MONITOR'
+    primary=executed if evidence_mode=='EXECUTED' else canonical
+    labels=[int(x['label']) for x in primary]
+    recent_n=min(STRATEGY_RECENT_WINDOW,len(labels)); recent_labels=labels[-recent_n:] if recent_n else []
+    recent_wr=sum(recent_labels)/recent_n if recent_n else None; loss_streak=_loss_streak(labels)
+    earlier=labels[:-recent_n] if recent_n else labels[:]; baseline_labels=earlier[-STRATEGY_BASELINE_WINDOW:]
+    baseline_n=len(baseline_labels); baseline_wr=sum(baseline_labels)/baseline_n if baseline_n else None
+    drop=(baseline_wr-recent_wr) if baseline_wr is not None and recent_wr is not None else None
+    status='LEARNING'; reason='not_enough_health_evidence'
+    if recent_n>=STRATEGY_RECENT_WINDOW and baseline_n>=STRATEGY_RECENT_WINDOW:
+        status='HEALTHY'; reason='recent performance within historical range'
+        if drop is not None and drop>=STRATEGY_WATCH_DROP:
+            status='WATCH'; reason=f'recent win rate down {drop:.3f} vs baseline'
+        if loss_streak>=STRATEGY_MAX_LOSS_STREAK_WATCH and status=='HEALTHY':
+            status='WATCH'; reason=f'loss streak {loss_streak}'
+        if (evidence_mode=='EXECUTED' and drop is not None and drop>=STRATEGY_DEGRADED_DROP
+            and recent_wr is not None and recent_wr<=STRATEGY_DEGRADED_MAX_WR):
+            status='PAUSED' if STRATEGY_AUTO_PAUSE else 'DEGRADED'
+            reason=f'executed performance degraded: recent {recent_wr:.3f}, baseline {baseline_wr:.3f}, drop {drop:.3f}'
+    paused_ts=prev.get('paused_ts') if prev else None; pause_baseline=prev.get('pause_baseline_win_rate') if prev else None
+    recovery_n=0; recovery_wr=None
+    if status=='PAUSED' and old_status not in ('PAUSED','RECOVERING'):
+        paused_ts=now_iso(); pause_baseline=baseline_wr
+    if old_status in ('PAUSED','RECOVERING') and paused_ts:
+        post=_strategy_rows(variant,False,paused_ts); labs=[int(x['label']) for x in post]
+        recovery_n=len(labs); recovery_wr=sum(labs)/recovery_n if recovery_n else None
+        target=(float(pause_baseline)-STRATEGY_RECOVERY_TOLERANCE) if pause_baseline is not None else .50
+        if recovery_n>=STRATEGY_RECOVERY_SAMPLES:
+            if recovery_wr is not None and recovery_wr>=target:
+                status='HEALTHY'; reason=f'paper recovery confirmed: {recovery_wr:.3f} over {recovery_n} post-pause outcomes'; paused_ts=None
+            else:
+                status='PAUSED'; reason=f'still degraded in recovery monitor: {recovery_wr:.3f} < target {target:.3f}'
+        else:
+            status='RECOVERING'; reason=f'paused; collecting recovery evidence {recovery_n}/{STRATEGY_RECOVERY_SAMPLES}'
+    transition=('PAUSED' if status=='PAUSED' and old_status not in ('PAUSED','RECOVERING') else
+                'RECOVERED' if status=='HEALTHY' and old_status in ('PAUSED','RECOVERING') else
+                'WATCH' if status=='WATCH' and old_status!='WATCH' else
+                'HEALTHY' if status=='HEALTHY' and old_status not in ('HEALTHY',None) else None)
+    c=conn(); c.execute("""INSERT INTO strategy_health(setup_variant,status,evidence_mode,total_resolved,executed_resolved,
+      baseline_samples,baseline_win_rate,recent_samples,recent_win_rate,recent_drop,recent_loss_streak,paused_ts,
+      pause_baseline_win_rate,recovery_samples,recovery_win_rate,last_transition,reason,updated_ts)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(setup_variant) DO UPDATE SET
+      status=excluded.status,evidence_mode=excluded.evidence_mode,total_resolved=excluded.total_resolved,
+      executed_resolved=excluded.executed_resolved,baseline_samples=excluded.baseline_samples,
+      baseline_win_rate=excluded.baseline_win_rate,recent_samples=excluded.recent_samples,recent_win_rate=excluded.recent_win_rate,
+      recent_drop=excluded.recent_drop,recent_loss_streak=excluded.recent_loss_streak,paused_ts=excluded.paused_ts,
+      pause_baseline_win_rate=excluded.pause_baseline_win_rate,recovery_samples=excluded.recovery_samples,
+      recovery_win_rate=excluded.recovery_win_rate,last_transition=excluded.last_transition,reason=excluded.reason,
+      updated_ts=excluded.updated_ts""",
+      (variant,status,evidence_mode,total,executed_total,baseline_n,baseline_wr,recent_n,recent_wr,drop,loss_streak,
+       paused_ts,pause_baseline,recovery_n,recovery_wr,transition,reason,now_iso())); c.commit(); c.close()
+    _health_transition(variant,old_status,status,evidence_mode,baseline_wr,recent_wr,drop,loss_streak,
+                       {'reason':reason,'recovery_samples':recovery_n,'recovery_win_rate':recovery_wr})
+    return strategy_health_snapshot(variant) or {'setup_variant':variant,'status':status,'reason':reason}
+
+def evaluate_all_strategy_health() -> Dict[str, Any]:
+    if not STRATEGY_SELF_EVAL_ENABLED:return {'enabled':False,'strategies':[]}
+    c=conn(); variants=[x['setup_variant'] for x in c.execute("""SELECT DISTINCT setup_variant FROM signals
+                        WHERE setup_variant IS NOT NULL AND setup_variant NOT IN ('','WAIT')""").fetchall()]; c.close()
+    results=[_evaluate_one_strategy_health(v) for v in variants]
+    return {'enabled':True,'strategies':results,'paused':[x['setup_variant'] for x in results if x.get('status')=='PAUSED'],
+            'watch':[x['setup_variant'] for x in results if x.get('status')=='WATCH'],
+            'recovering':[x['setup_variant'] for x in results if x.get('status')=='RECOVERING']}
+
+def strategy_execution_gate(r: Dict[str, Any]) -> Dict[str, Any]:
+    if not STRATEGY_SELF_EVAL_ENABLED:return {'ok':True,'reason':'self_eval_disabled'}
+    variant=setup_variant(r); health=strategy_health_snapshot(variant)
+    if not health:return {'ok':True,'reason':'strategy_not_yet_evaluated','variant':variant}
+    if health['status'] in ('PAUSED','DEGRADED','RECOVERING'):
+        return {'ok':False,'reason':f"strategy health {health['status']}: {health.get('reason','')}",
+                'variant':variant,'health':health}
+    return {'ok':True,'reason':f"strategy health {health['status']}",'variant':variant,'health':health}
+
+
+def _strategy_performance_summary(variant: str) -> Dict[str, Any]:
+    """
+    Historical/recent canonical strategy performance.
+    Uses resolved learning samples, preserving the current architecture.
+    """
+    c=conn()
+    rows=c.execute("""SELECT ls.label,ls.executed,s.ts
+                      FROM learning_samples ls
+                      JOIN signals s ON s.id=ls.signal_id
+                      WHERE ls.label IN (0,1) AND s.setup_variant=?
+                      ORDER BY s.id ASC""",(variant,)).fetchall()
+    c.close()
+
+    labels=[int(x["label"]) for x in rows]
+    n=len(labels)
+    hist_wr=(sum(labels)/n) if n else None
+    recent_labels=labels[-AI_DIRECTOR_RECENT_WINDOW:] if labels else []
+    recent_n=len(recent_labels)
+    recent_wr=(sum(recent_labels)/recent_n) if recent_n else None
+
+    return {
+        "historical_samples":n,
+        "historical_win_rate":hist_wr,
+        "recent_samples":recent_n,
+        "recent_win_rate":recent_wr,
+        "executed_samples":sum(int(x["executed"] or 0) for x in rows)
+    }
+
+
+def _strategy_regime_affinity(variant: str, current_regime: Optional[str]) -> Dict[str, Any]:
+    """
+    Learn whether a strategy historically behaves better/worse in the CURRENT regime.
+    Uses stored market_regime_history nearest to each signal candle.
+    If there is not enough evidence, returns neutral 0.5.
+    """
+    if not current_regime:
+        return {"score":0.5,"samples":0,"win_rate":None,"reason":"no_current_regime"}
+
+    c=conn()
+    rows=c.execute("""SELECT ls.label,s.candle_ts,s.instrument
+                      FROM learning_samples ls
+                      JOIN signals s ON s.id=ls.signal_id
+                      WHERE ls.label IN (0,1) AND s.setup_variant=?
+                      ORDER BY s.id DESC LIMIT 300""",(variant,)).fetchall()
+
+    matched=[]
+    for row in rows:
+        rr=c.execute("""SELECT market_regime FROM market_regime_history
+                        WHERE instrument=? AND candle_ts<=?
+                        ORDER BY candle_ts DESC LIMIT 1""",
+                     (row["instrument"],row["candle_ts"])).fetchone()
+        if rr and rr["market_regime"]==current_regime:
+            matched.append(int(row["label"]))
+    c.close()
+
+    if len(matched)<10:
+        return {"score":0.5,"samples":len(matched),"win_rate":(sum(matched)/len(matched) if matched else None),
+                "reason":"insufficient_regime_history"}
+
+    wr=sum(matched)/len(matched)
+    # Convert WR into 0..1 affinity centered around 0.5.
+    score=clamp(0.5 + (wr-0.5)*1.5, 0.0, 1.0)
+    return {"score":score,"samples":len(matched),"win_rate":wr,"reason":"historical_regime_performance"}
+
+
+def _health_state_score(status: Optional[str]) -> float:
+    return {
+        "HEALTHY":1.0,
+        "LEARNING":0.55,
+        "WATCH":0.40,
+        "RECOVERING":0.25,
+        "PAUSED":0.05,
+        "DEGRADED":0.0
+    }.get(str(status or "LEARNING").upper(),0.5)
+
+
+def _director_state_from_score(score: float, health_status: Optional[str]) -> str:
+    hs=str(health_status or "").upper()
+    if hs in ("PAUSED","DEGRADED"):
+        return "DISABLED"
+    if hs=="RECOVERING":
+        return "PAUSED"
+    if score>=AI_DIRECTOR_ACTIVE_THRESHOLD:
+        return "ACTIVE"
+    if score>=AI_DIRECTOR_REDUCED_THRESHOLD:
+        return "REDUCED"
+    if score>=0.35:
+        return "PAUSED"
+    return "DISABLED"
+
+
+def ai_strategy_director_recommendation(
+    instrument: str,
+    variant: str,
+    regime: Optional[Dict[str, Any]],
+    signal_confidence: Optional[float] = None
+) -> Dict[str, Any]:
+    """
+    OBSERVATION ONLY.
+    Produces a recommendation but never changes execution, sizing, SL/TP or strategy code.
+    """
+    if not AI_DIRECTOR_ENABLED:
+        return {
+            "enabled":False,"observation_only":True,"setup_variant":variant,
+            "recommended_state":"ACTIVE","confidence":0.0,
+            "reasons":["AI Strategy Director disabled"]
+        }
+
+    perf=_strategy_performance_summary(variant)
+    health=strategy_health_snapshot(variant) or {"status":"LEARNING"}
+
+    market_regime=(regime or {}).get("market_regime")
+    regime_conf=float((regime or {}).get("confidence") or 0.0)
+    volatility_state=(regime or {}).get("volatility_state")
+    trend_strength=float((regime or {}).get("trend_strength") or 0.0)
+
+    affinity=_strategy_regime_affinity(variant,market_regime)
+
+    hist_wr=perf["historical_win_rate"]
+    recent_wr=perf["recent_win_rate"]
+
+    hist_score=0.5 if hist_wr is None else clamp(0.5 + (hist_wr-0.5)*1.2,0.0,1.0)
+    recent_score=0.5 if recent_wr is None else clamp(0.5 + (recent_wr-0.5)*1.5,0.0,1.0)
+    health_score=_health_state_score(health.get("status"))
+    signal_score=clamp(float(signal_confidence or 0.5),0.0,1.0)
+
+    # Current regime confidence tells us how much to trust regime affinity.
+    regime_score=(0.5*(1.0-regime_conf)) + (float(affinity["score"])*regime_conf)
+
+    # Volatility sanity component: abnormal uncertainty should reduce recommendation confidence.
+    vol_score=1.0
+    if market_regime=="ABNORMAL_UNCERTAIN" or volatility_state=="ABNORMAL":
+        vol_score=0.15
+    elif volatility_state=="HIGH":
+        vol_score=0.70
+    elif volatility_state=="LOW":
+        vol_score=0.80
+
+    components={
+        "historical_performance":hist_score,
+        "recent_performance":recent_score,
+        "strategy_health":health_score,
+        "regime_affinity":regime_score,
+        "signal_confidence":signal_score,
+        "volatility_sanity":vol_score
+    }
+
+    # Weighted, explainable score.
+    score=(
+        hist_score*0.20 +
+        recent_score*0.25 +
+        health_score*0.25 +
+        regime_score*0.15 +
+        signal_score*0.10 +
+        vol_score*0.05
+    )
+
+    # Confidence in the DIRECTOR'S recommendation, not confidence that a trade wins.
+    history_factor=clamp(perf["historical_samples"]/max(AI_DIRECTOR_MIN_HISTORY,1),0.0,1.0)
+    recent_factor=clamp(perf["recent_samples"]/max(AI_DIRECTOR_RECENT_WINDOW,1),0.0,1.0)
+    affinity_factor=clamp(affinity["samples"]/30.0,0.0,1.0)
+    recommendation_confidence=clamp(
+        0.30*history_factor +
+        0.25*recent_factor +
+        0.25*regime_conf +
+        0.20*affinity_factor,
+        0.0,1.0
+    )
+
+    state=_director_state_from_score(score,health.get("status"))
+
+    reasons=[]
+    reasons.append(f"strategy_health={health.get('status','LEARNING')}")
+    if hist_wr is not None:
+        reasons.append(f"historical_wr={hist_wr:.3f} over {perf['historical_samples']}")
+    else:
+        reasons.append("historical_wr=insufficient")
+    if recent_wr is not None:
+        reasons.append(f"recent_wr={recent_wr:.3f} over {perf['recent_samples']}")
+    if market_regime:
+        reasons.append(f"regime={market_regime} conf={regime_conf:.3f}")
+    reasons.append(f"regime_affinity={affinity['score']:.3f} samples={affinity['samples']}")
+    reasons.append(f"signal_confidence={signal_score:.3f}")
+    if market_regime=="ABNORMAL_UNCERTAIN" or volatility_state=="ABNORMAL":
+        reasons.append("abnormal/uncertain market conditions penalized")
+    if state in ("PAUSED","DISABLED"):
+        reasons.append("observation recommendation only; execution remains unchanged")
+
+    return {
+        "enabled":True,
+        "observation_only":True,
+        "instrument":instrument,
+        "setup_variant":variant,
+        "recommended_state":state,
+        "confidence":float(recommendation_confidence),
+        "director_score":float(score),
+        "market_regime":market_regime,
+        "regime_confidence":regime_conf,
+        "volatility_state":volatility_state,
+        "trend_strength":trend_strength,
+        "strategy_health_status":health.get("status"),
+        "historical_win_rate":hist_wr,
+        "recent_win_rate":recent_wr,
+        "historical_samples":perf["historical_samples"],
+        "recent_samples":perf["recent_samples"],
+        "signal_confidence":signal_score,
+        "regime_affinity":affinity,
+        "score_components":components,
+        "reasons":reasons,
+        "timestamp":now_iso()
+    }
+
+
+def log_ai_director_decision(decision: Dict[str, Any]) -> Optional[int]:
+    if not decision.get("enabled"):
+        return None
+
+    # Optional change-only logging to stdout; DB always records every decision.
+    c=conn()
+    prev=c.execute("""SELECT recommended_state FROM ai_strategy_director_decisions
+                      WHERE instrument=? AND setup_variant=?
+                      ORDER BY id DESC LIMIT 1""",
+                   (decision["instrument"],decision["setup_variant"])).fetchone()
+
+    c.execute("""INSERT INTO ai_strategy_director_decisions(
+      ts,instrument,setup_variant,recommended_state,confidence,market_regime,
+      regime_confidence,volatility_state,strategy_health_status,historical_win_rate,
+      recent_win_rate,historical_samples,recent_samples,signal_confidence,
+      score_components_json,reasons_json,observation_only)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)""",
+      (decision["timestamp"],decision["instrument"],decision["setup_variant"],
+       decision["recommended_state"],decision["confidence"],decision.get("market_regime"),
+       decision.get("regime_confidence"),decision.get("volatility_state"),
+       decision.get("strategy_health_status"),decision.get("historical_win_rate"),
+       decision.get("recent_win_rate"),decision.get("historical_samples",0),
+       decision.get("recent_samples",0),decision.get("signal_confidence"),
+       json.dumps(decision.get("score_components") or {},separators=(",",":")),
+       json.dumps(decision.get("reasons") or [],separators=(",",":"))))
+    did=c.execute("SELECT last_insert_rowid() id").fetchone()["id"]
+    c.commit();c.close()
+
+    changed=(not prev or prev["recommended_state"]!=decision["recommended_state"])
+    if changed or not AI_DIRECTOR_LOG_CHANGES_ONLY:
+        log.info(
+            "AI_DIRECTOR %s %s state=%s conf=%.3f score=%.3f regime=%s regime_conf=%.3f health=%s",
+            decision["instrument"],decision["setup_variant"],decision["recommended_state"],
+            decision["confidence"],decision["director_score"],decision.get("market_regime"),
+            decision.get("regime_confidence",0.0),decision.get("strategy_health_status")
+        )
+    return int(did)
+
+
+def attach_ai_director_outcome(signal_id: int, label: int) -> int:
+    """
+    Link resolved real/paper outcome back to the most recent director observation
+    for the same setup variant/instrument at or before the signal timestamp.
+    """
+    c=conn()
+    sig=c.execute("""SELECT id,instrument,setup_variant,ts,executed,blocked
+                     FROM signals WHERE id=?""",(signal_id,)).fetchone()
+    if not sig:
+        c.close()
+        return 0
+
+    dec=c.execute("""SELECT id FROM ai_strategy_director_decisions
+                     WHERE instrument=? AND setup_variant=? AND ts<=?
+                     ORDER BY id DESC LIMIT 1""",
+                  (sig["instrument"],sig["setup_variant"],sig["ts"])).fetchone()
+    if not dec:
+        c.close()
+        return 0
+
+    exists=c.execute("""SELECT 1 FROM ai_strategy_director_outcomes
+                        WHERE director_decision_id=? AND signal_id=?""",
+                     (dec["id"],signal_id)).fetchone()
+    if exists:
+        c.close()
+        return 0
+
+    c.execute("""INSERT INTO ai_strategy_director_outcomes(
+      director_decision_id,signal_id,resolved_label,executed,blocked,resolved_ts)
+      VALUES(?,?,?,?,?,?)""",
+      (dec["id"],signal_id,int(label),int(sig["executed"] or 0),
+       int(sig["blocked"] or 0),now_iso()))
+    c.commit();c.close()
+    return 1
+
+
+def ai_director_report(limit: int = 100) -> Dict[str, Any]:
+    c=conn()
+    decisions=c.execute("""SELECT * FROM ai_strategy_director_decisions
+                           ORDER BY id DESC LIMIT ?""",(min(max(limit,1),500),)).fetchall()
+
+    performance=c.execute("""
+        SELECT d.recommended_state,
+               COUNT(o.id) resolved,
+               AVG(o.resolved_label) win_rate,
+               SUM(CASE WHEN o.executed=1 THEN 1 ELSE 0 END) executed_resolved
+        FROM ai_strategy_director_decisions d
+        LEFT JOIN ai_strategy_director_outcomes o ON o.director_decision_id=d.id
+        GROUP BY d.recommended_state
+        ORDER BY d.recommended_state
+    """).fetchall()
+    c.close()
+
+    return {
+        "enabled":AI_DIRECTOR_ENABLED,
+        "observation_only":True,
+        "authority_over_execution":False,
+        "authority_over_risk":False,
+        "recent_decisions":[dict(x) for x in decisions],
+        "outcome_summary":[dict(x) for x in performance]
+    }
+
+def reconcile_ai_director_outcomes(limit: int = 500) -> int:
+    c=conn()
+    rows=c.execute("""SELECT ls.signal_id,ls.label
+                      FROM learning_samples ls
+                      WHERE ls.label IN (0,1)
+                      ORDER BY ls.signal_id DESC LIMIT ?""",(limit,)).fetchall()
+    c.close()
+    linked=0
+    for row in rows:
+        try:
+            linked += attach_ai_director_outcome(int(row["signal_id"]),int(row["label"]))
+        except Exception:
+            continue
+    return linked
+
+
+
+
+def _risk_float(value, default=None):
+    try:
+        v=float(value)
+        return v if math.isfinite(v) else default
+    except Exception:
+        return default
+
+
+def _executed_loss_streak() -> int:
+    c=conn()
+    rows=c.execute("""SELECT label FROM learning_samples
+                      WHERE label IN (0,1) AND executed=1
+                      ORDER BY signal_id DESC LIMIT 50""").fetchall()
+    c.close()
+    streak=0
+    for row in rows:
+        if int(row["label"])==0:
+            streak+=1
+        else:
+            break
+    return streak
+
+
+def _strategy_open_risk_proxy(variant: str) -> float:
+    """
+    Until broker reconciliation stores realized monetary risk per trade,
+    strategy open risk is represented conservatively as a fraction-of-NAV proxy:
+    each tracked open trade consumes one max-per-trade risk allowance.
+    """
+    c=conn()
+    n=c.execute("""SELECT COUNT(*) n FROM active_trade_management
+                   WHERE setup_variant=? AND closed=0""",(variant,)).fetchone()["n"]
+    c.close()
+    return float(min(RISK_MAX_STRATEGY_FRACTION, int(n)*RISK_MAX_TRADE_FRACTION))
+
+
+def _shared_currency_correlation(instrument: str, open_instruments: List[str]) -> Dict[str, Any]:
+    """
+    Conservative correlation protection before a full rolling-correlation engine exists.
+    FX pairs sharing a currency are treated as correlated exposure.
+    """
+    try:
+        a,b=instrument.split("_")
+    except Exception:
+        return {"count":0,"high":False,"method":"unknown_instrument"}
+    count=0
+    related=[]
+    for other in open_instruments:
+        try:
+            x,y=other.split("_")
+        except Exception:
+            continue
+        if other==instrument or {a,b}.intersection({x,y}):
+            count+=1
+            related.append(other)
+    return {
+        "count":count,
+        "high":count>=RISK_MAX_CORRELATED_POSITIONS,
+        "related":related,
+        "method":"shared_currency_conservative_proxy"
+    }
+
+
+async def build_broker_risk_context(client: httpx.AsyncClient) -> Dict[str, Any]:
+    """
+    Read-only OANDA Practice risk context.
+    It does not send, modify or close orders.
+    """
+    ctx={
+        "balance":None,"nav":None,"peak_nav":None,"current_drawdown":None,
+        "margin_used":None,"margin_usage":None,"open_positions":0,
+        "portfolio_open_risk":0.0,"open_instruments":[],
+        "consecutive_losses":_executed_loss_streak(),
+        "data_stale":False,"system_abnormal":False,
+        "source":"OANDA_PRACTICE_READ_ONLY"
+    }
+    errors=[]
+    try:
+        summary=await req(client,"GET","/v3/accounts/{account}/summary")
+        account=summary.get("account") or {}
+        ctx["balance"]=_risk_float(account.get("balance"))
+        ctx["nav"]=_risk_float(account.get("NAV"))
+        ctx["margin_used"]=_risk_float(account.get("marginUsed"),0.0)
+        if ctx["nav"] and ctx["nav"]>0 and ctx["margin_used"] is not None:
+            ctx["margin_usage"]=max(0.0,ctx["margin_used"]/ctx["nav"])
+    except Exception as e:
+        errors.append(f"account_summary:{e}")
+
+    try:
+        pos=await req(client,"GET","/v3/accounts/{account}/openPositions")
+        positions=pos.get("positions") or []
+        ctx["open_instruments"]=[x.get("instrument") for x in positions if x.get("instrument")]
+        ctx["open_positions"]=len(ctx["open_instruments"])
+        # Risk fraction proxy is deliberately capped and marked as a proxy.
+        ctx["portfolio_open_risk"]=min(
+            RISK_MAX_PORTFOLIO_FRACTION,
+            ctx["open_positions"]*RISK_MAX_TRADE_FRACTION
+        )
+    except Exception as e:
+        errors.append(f"open_positions:{e}")
+
+    # Persist high-water NAV locally across scans/deployments if DB persists.
+    c=conn()
+    prev=c.execute("SELECT peak_nav FROM portfolio_risk_state WHERE id=1").fetchone()
+    c.close()
+    prev_peak=_risk_float(prev["peak_nav"]) if prev else None
+    if ctx["nav"] is not None:
+        ctx["peak_nav"]=max(ctx["nav"],prev_peak or ctx["nav"])
+        if ctx["peak_nav"]>0:
+            ctx["current_drawdown"]=max(0.0,(ctx["peak_nav"]-ctx["nav"])/ctx["peak_nav"])
+
+    heartbeat=state.get("worker_last_heartbeat")
+    if heartbeat:
+        try:
+            hb=datetime.fromisoformat(str(heartbeat).replace("Z","+00:00"))
+            ctx["data_stale"]=(datetime.now(timezone.utc)-hb).total_seconds()>RISK_DATA_STALE_SECONDS
+        except Exception:
+            ctx["data_stale"]=True
+
+    # System-abnormal is a conservative health check, not self-modifying logic.
+    ctx["system_abnormal"]=bool(
+        errors or
+        (state.get("last_error") and int(state.get("worker_restarts") or 0)>=RISK_ABNORMAL_ERROR_COUNT)
+    )
+    ctx["errors"]=errors
+    return ctx
+
+
+def persist_portfolio_risk_context(ctx: Dict[str, Any]) -> None:
+    c=conn()
+    c.execute("""INSERT INTO portfolio_risk_state(
+      id,ts,balance,nav,peak_nav,current_drawdown,margin_used,margin_usage,
+      open_positions,portfolio_open_risk,consecutive_losses,data_stale,system_abnormal,details_json)
+      VALUES(1,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      ON CONFLICT(id) DO UPDATE SET
+      ts=excluded.ts,balance=excluded.balance,nav=excluded.nav,peak_nav=excluded.peak_nav,
+      current_drawdown=excluded.current_drawdown,margin_used=excluded.margin_used,
+      margin_usage=excluded.margin_usage,open_positions=excluded.open_positions,
+      portfolio_open_risk=excluded.portfolio_open_risk,
+      consecutive_losses=excluded.consecutive_losses,data_stale=excluded.data_stale,
+      system_abnormal=excluded.system_abnormal,details_json=excluded.details_json""",
+      (now_iso(),ctx.get("balance"),ctx.get("nav"),ctx.get("peak_nav"),
+       ctx.get("current_drawdown"),ctx.get("margin_used"),ctx.get("margin_usage"),
+       int(ctx.get("open_positions") or 0),ctx.get("portfolio_open_risk"),
+       int(ctx.get("consecutive_losses") or 0),int(bool(ctx.get("data_stale"))),
+       int(bool(ctx.get("system_abnormal"))),json.dumps(ctx,separators=(",",":"))))
+    c.commit();c.close()
+
+
+def adaptive_risk_recommendation(
+    instrument: str,
+    variant: str,
+    regime: Optional[Dict[str, Any]],
+    director: Optional[Dict[str, Any]],
+    signal_confidence: Optional[float],
+    risk_context: Dict[str, Any],
+    requested_units: float
+) -> Dict[str, Any]:
+    """
+    Pure decision function. SHADOW ONLY in V3.12.
+    The multiplier is capped at 1.0, so strong performance can never increase
+    risk above the existing configured position size.
+    """
+    market_regime=(regime or {}).get("market_regime")
+    volatility_state=(regime or {}).get("volatility_state")
+    regime_conf=_risk_float((regime or {}).get("confidence"),0.0) or 0.0
+
+    director_conf=_risk_float((director or {}).get("confidence"))
+    strategy_conf=director_conf if director_conf is not None else (_risk_float(signal_confidence,0.5) or 0.5)
+
+    perf=_strategy_performance_summary(variant)
+    recent_wr=perf.get("recent_win_rate")
+    health=strategy_health_snapshot(variant) or {"status":"LEARNING"}
+    health_status=str(health.get("status") or "LEARNING").upper()
+
+    dd=_risk_float(risk_context.get("current_drawdown"))
+    margin_usage=_risk_float(risk_context.get("margin_usage"))
+    portfolio_open_risk=_risk_float(risk_context.get("portfolio_open_risk"),0.0) or 0.0
+    strategy_open_risk=_strategy_open_risk_proxy(variant)
+    open_instruments=list(risk_context.get("open_instruments") or [])
+    corr=_shared_currency_correlation(instrument,open_instruments)
+    loss_streak=int(risk_context.get("consecutive_losses") or 0)
+
+    reasons=[]
+    hard=False
+    emergency=False
+    reduce_existing=False
+    allow=True
+
+    # ---------- hard limits ----------
+    if market_regime is None or volatility_state is None or strategy_conf is None:
+        hard=True; allow=False
+        reasons.append("missing_or_inconsistent_inputs")
+
+    if risk_context.get("data_stale"):
+        hard=True; allow=False; emergency=True
+        reasons.append("stale_data")
+
+    if risk_context.get("system_abnormal"):
+        hard=True; allow=False; emergency=True
+        reasons.append("abnormal_system_behavior")
+
+    if dd is not None and dd>=RISK_DRAWDOWN_STOP:
+        hard=True; allow=False; emergency=True; reduce_existing=True
+        reasons.append("drawdown_hard_limit")
+    elif dd is not None and dd>=RISK_DRAWDOWN_WARN:
+        reasons.append("drawdown_warning")
+
+    if loss_streak>=RISK_MAX_CONSECUTIVE_LOSSES:
+        hard=True; allow=False
+        reasons.append("consecutive_loss_limit")
+
+    if market_regime=="ABNORMAL_UNCERTAIN" or volatility_state=="ABNORMAL":
+        hard=True; allow=False; emergency=True; reduce_existing=True
+        reasons.append("abnormal_market_volatility")
+
+    if portfolio_open_risk>=RISK_MAX_PORTFOLIO_FRACTION:
+        hard=True; allow=False; reduce_existing=True
+        reasons.append("portfolio_risk_limit")
+
+    if strategy_open_risk>=RISK_MAX_STRATEGY_FRACTION:
+        hard=True; allow=False
+        reasons.append("strategy_risk_limit")
+
+    if margin_usage is not None and margin_usage>=RISK_MAX_MARGIN_USAGE:
+        hard=True; allow=False; reduce_existing=True
+        reasons.append("margin_usage_limit")
+
+    if corr["high"]:
+        hard=True; allow=False
+        reasons.append("correlated_position_limit")
+
+    # ---------- progressive reductions ----------
+    mult=1.0
+
+    # Confidence can only reduce; never lever up.
+    if strategy_conf<0.45:
+        conf_mult=RISK_MIN_MULTIPLIER
+    elif strategy_conf<0.60:
+        conf_mult=0.50
+    elif strategy_conf<0.72:
+        conf_mult=0.75
+    else:
+        conf_mult=1.0
+    mult*=conf_mult
+    if conf_mult<1.0: reasons.append("confidence_reduction")
+
+    if recent_wr is not None:
+        if recent_wr<0.40: perf_mult=0.40
+        elif recent_wr<0.50: perf_mult=0.60
+        elif recent_wr<0.60: perf_mult=0.80
+        else: perf_mult=1.0
+        mult*=perf_mult
+        if perf_mult<1.0: reasons.append("recent_performance_reduction")
+
+    health_mult={
+        "HEALTHY":1.0,"LEARNING":0.70,"WATCH":0.55,
+        "RECOVERING":0.25,"PAUSED":0.0,"DEGRADED":0.0
+    }.get(health_status,0.60)
+    mult*=health_mult
+    if health_mult<1.0: reasons.append(f"strategy_health_{health_status.lower()}")
+
+    vol_mult={"LOW":0.85,"NORMAL":1.0,"HIGH":0.60,"ABNORMAL":0.0}.get(str(volatility_state),0.70)
+    mult*=vol_mult
+    if vol_mult<1.0: reasons.append("volatility_reduction")
+
+    # Progressive drawdown taper before hard stop.
+    if dd is not None and 0<dd<RISK_DRAWDOWN_STOP:
+        if dd<RISK_DRAWDOWN_WARN:
+            dd_mult=max(0.75,1.0-0.25*(dd/RISK_DRAWDOWN_WARN))
+        else:
+            span=max(RISK_DRAWDOWN_STOP-RISK_DRAWDOWN_WARN,1e-9)
+            progress=(dd-RISK_DRAWDOWN_WARN)/span
+            dd_mult=max(0.20,0.75-0.55*progress)
+        mult*=dd_mult
+        if dd_mult<1.0: reasons.append("drawdown_progressive_reduction")
+
+    if regime_conf<0.50:
+        mult*=0.70
+        reasons.append("low_regime_confidence")
+
+    mult=clamp(mult,0.0,1.0)
+    if hard:
+        mult=0.0
+
+    # ---------- separate risk layers ----------
+    requested_risk=RISK_BASE_FRACTION
+    trade_cap=RISK_MAX_TRADE_FRACTION
+    strategy_remaining=max(0.0,RISK_MAX_STRATEGY_FRACTION-strategy_open_risk)
+    portfolio_remaining=max(0.0,RISK_MAX_PORTFOLIO_FRACTION-portfolio_open_risk)
+
+    approved_risk=0.0 if not allow else min(
+        requested_risk*mult,
+        trade_cap,
+        strategy_remaining,
+        portfolio_remaining
+    )
+
+    shadow_max_units=max(0.0,float(requested_units)*mult)
+
+    if not reasons:
+        reasons=["normal_risk_conditions"]
+
+    return {
+        "enabled":RISK_ENGINE_ENABLED,
+        "shadow_mode":True,
+        "risk_multiplier":float(mult),
+        "max_position_size":float(shadow_max_units),
+        "max_exposure":float(RISK_MAX_MARGIN_USAGE),
+        "allow_new_trades":bool(allow),
+        "reduce_existing_positions":bool(reduce_existing),
+        "emergency_stop":bool(emergency),
+        "hard_limit_triggered":bool(hard),
+        "reason":"; ".join(reasons),
+        "requested_risk":float(requested_risk),
+        "approved_risk":float(approved_risk),
+        "metrics":{
+            "instrument":instrument,
+            "setup_variant":variant,
+            "market_regime":market_regime,
+            "regime_confidence":regime_conf,
+            "volatility_state":volatility_state,
+            "strategy_confidence":strategy_conf,
+            "recent_win_rate":recent_wr,
+            "strategy_health_status":health_status,
+            "current_drawdown":dd,
+            "nav":risk_context.get("nav"),
+            "margin_usage":margin_usage,
+            "portfolio_open_risk":portfolio_open_risk,
+            "strategy_open_risk":strategy_open_risk,
+            "consecutive_losses":loss_streak,
+            "correlation":corr,
+            "requested_units":float(requested_units),
+            "risk_per_trade_cap":trade_cap,
+            "risk_per_strategy_cap":RISK_MAX_STRATEGY_FRACTION,
+            "risk_portfolio_cap":RISK_MAX_PORTFOLIO_FRACTION
+        },
+        "timestamp":now_iso()
+    }
+
+
+def log_adaptive_risk_decision(d: Dict[str, Any]) -> Optional[int]:
+    if not d.get("enabled"):
+        return None
+    m=d.get("metrics") or {}
+    c=conn()
+    c.execute("""INSERT INTO adaptive_risk_decisions(
+      ts,instrument,setup_variant,market_regime,volatility_state,strategy_confidence,
+      recent_win_rate,current_drawdown,nav,margin_usage,portfolio_open_risk,
+      strategy_open_risk,requested_risk,approved_risk,requested_units,
+      shadow_max_position_size,risk_multiplier,max_exposure,allow_new_trades,
+      reduce_existing_positions,emergency_stop,hard_limit_triggered,reason,metrics_json,shadow_mode)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)""",
+      (d["timestamp"],m.get("instrument"),m.get("setup_variant"),m.get("market_regime"),
+       m.get("volatility_state"),m.get("strategy_confidence"),m.get("recent_win_rate"),
+       m.get("current_drawdown"),m.get("nav"),m.get("margin_usage"),
+       m.get("portfolio_open_risk"),m.get("strategy_open_risk"),
+       d.get("requested_risk"),d.get("approved_risk"),m.get("requested_units"),
+       d.get("max_position_size"),d.get("risk_multiplier"),d.get("max_exposure"),
+       int(bool(d.get("allow_new_trades"))),int(bool(d.get("reduce_existing_positions"))),
+       int(bool(d.get("emergency_stop"))),int(bool(d.get("hard_limit_triggered"))),
+       d.get("reason",""),json.dumps(m,separators=(",",":"))))
+    rid=c.execute("SELECT last_insert_rowid() id").fetchone()["id"]
+    c.commit();c.close()
+    log.info("RISK_SHADOW %s %s allow=%s mult=%.3f emergency=%s reason=%s",
+             m.get("instrument"),m.get("setup_variant"),d.get("allow_new_trades"),
+             d.get("risk_multiplier",0.0),d.get("emergency_stop"),d.get("reason"))
+    return int(rid)
+
+
+def adaptive_risk_report(limit: int = 200) -> Dict[str, Any]:
+    c=conn()
+    rows=c.execute("""SELECT * FROM adaptive_risk_decisions
+                      ORDER BY id DESC LIMIT ?""",(min(max(limit,1),1000),)).fetchall()
+    ps=c.execute("SELECT * FROM portfolio_risk_state WHERE id=1").fetchone()
+    c.close()
+    return {
+        "enabled":RISK_ENGINE_ENABLED,
+        "shadow_mode":True,
+        "authority_over_execution":False,
+        "authority_over_position_size":False,
+        "rules_self_modifiable":False,
+        "portfolio_state":dict(ps) if ps else None,
+        "recent_decisions":[dict(x) for x in rows]
+    }
+
+
+
+def _tm_confidence_bucket(p: Optional[float]) -> str:
+    if p is None:
+        return "UNKNOWN"
+    p=float(p)
+    if p<0.55:return "LOW"
+    if p<0.70:return "MEDIUM"
+    if p<0.80:return "HIGH"
+    return "VERY_HIGH"
+
+
+def _tm_session(at: Optional[str]) -> str:
+    try:
+        dt=datetime.fromisoformat(str(at).replace("Z","+00:00")).astimezone(NY)
+        h=dt.hour
+        if 0<=h<3:return "ASIA_LATE"
+        if 3<=h<8:return "LONDON"
+        if 8<=h<12:return "NY_LONDON_OVERLAP"
+        if 12<=h<17:return "NEW_YORK"
+        return "AFTER_HOURS"
+    except Exception:
+        return "UNKNOWN"
+
+
+def _tm_json(value, fallback):
+    try:
+        return json.dumps(value if value is not None else fallback,separators=(",",":"),default=str)
+    except Exception:
+        return json.dumps(fallback,separators=(",",":"))
+
+
+def record_trade_memory_entry(
+    trade_id: str,
+    signal_id: int,
+    order_id: str,
+    r: Dict[str, Any],
+    conf: Dict[str, Any],
+    director: Dict[str, Any],
+    risk_shadow: Dict[str, Any],
+    pre_execution_reason: str,
+    fill: Dict[str, Any],
+    fill_price: float,
+    entry_slippage_pips: Optional[float]
+) -> Optional[int]:
+    """
+    Freeze PRE-TRADE context at entry.
+    Post-entry fields (exit, P/L, MFE, MAE) are deliberately absent from entry_context_json.
+    """
+    if not TRADE_MEMORY_ENABLED or not trade_id:
+        return None
+
+    regime=r.get("market_regime") if isinstance(r.get("market_regime"),dict) else {}
+    risk_metrics=(risk_shadow or {}).get("metrics") or {}
+    trade_opened=fill.get("tradeOpened") or {}
+    units=_risk_float(trade_opened.get("units"))
+    if units is None:
+        units=_risk_float(fill.get("units"),UNITS)
+    units=float(abs(units or UNITS))
+    direction="LONG" if r.get("signal")=="BUY" else "SHORT"
+
+    # This JSON contains only data available before order submission.
+    entry_context={
+        "context_version":"v1_pre_trade_only",
+        "candle_ts":r.get("candle_ts"),
+        "strategy":setup_variant(r),
+        "planned_entry":r.get("entry"),
+        "planned_stop":r.get("stop"),
+        "planned_target":r.get("managed_target",r.get("target")),
+        "rr":r.get("rr"),
+        "rr_raw":r.get("rr_raw"),
+        "technical":r.get("technical"),
+        "score":r.get("score"),
+        "features":r.get("features") or {},
+        "filters":r.get("filters") or {},
+        "news_alignment":r.get("alignment"),
+        "market_regime":regime,
+        "strategy_confidence":{
+            "probability":conf.get("probability"),
+            "source":conf.get("source"),
+            "samples":conf.get("samples"),
+            "required":conf.get("required_confidence")
+        },
+        "ai_strategy_director":{
+            "recommended_state":director.get("recommended_state"),
+            "confidence":director.get("confidence"),
+            "director_score":director.get("director_score"),
+            "reasons":director.get("reasons") or []
+        },
+        "adaptive_risk_shadow":{
+            "risk_multiplier":risk_shadow.get("risk_multiplier"),
+            "allow_new_trades":risk_shadow.get("allow_new_trades"),
+            "requested_risk":risk_shadow.get("requested_risk"),
+            "approved_risk":risk_shadow.get("approved_risk"),
+            "reason":risk_shadow.get("reason")
+        },
+        "decision_reason":pre_execution_reason,
+        "account_drawdown":risk_metrics.get("current_drawdown"),
+        "entry_session":_tm_session(r.get("candle_ts") or now_iso())
+    }
+
+    # Fill/protection information is entry execution data, separate from decision context.
+    execution_context={
+        "fill_transaction_id":fill.get("id"),
+        "fill_time":fill.get("time"),
+        "actual_fill_price":fill_price,
+        "units":units,
+        "entry_slippage_pips":entry_slippage_pips
+    }
+
+    entry_reasons=[
+        pre_execution_reason,
+        *list(director.get("reasons") or []),
+        "risk_shadow:"+str(risk_shadow.get("reason") or "")
+    ]
+
+    data_quality={
+        "entry_context_frozen":True,
+        "lookahead_fields_in_entry_context":False,
+        "actual_broker_exit_pending":True,
+        "mfe_mae_source":"observed_M1_candles_while_open",
+        "realized_result_source":"OANDA_trade_reconciliation_when_available"
+    }
+
+    c=conn()
+    c.execute("""INSERT OR IGNORE INTO trade_memory(
+      trade_id,signal_id,order_id,strategy,symbol,direction,status,entry_ts,entry_price,
+      position_size,stop_loss,take_profit,market_regime_entry,regime_confidence_entry,
+      volatility_state_entry,trend_strength_entry,strategy_confidence_entry,
+      director_state_entry,director_confidence_entry,risk_multiplier_entry,
+      risk_allow_new_trades_shadow,requested_risk,approved_risk,entry_drawdown,
+      entry_slippage_pips,entry_session,confidence_bucket,entry_reasons_json,
+      entry_context_json,execution_context_json,risk_recommendation_json,data_quality_json,
+      created_ts,updated_ts)
+      VALUES(?,?,?,?,?,?,'OPEN',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+      (
+       str(trade_id),int(signal_id),str(order_id or ""),setup_variant(r),r["instrument"],direction,
+       fill.get("time") or now_iso(),float(fill_price),units,
+       float(r.get("stop")) if r.get("stop") is not None else None,
+       float(r.get("managed_target",r.get("target"))) if r.get("target") is not None else None,
+       regime.get("market_regime"),regime.get("confidence"),regime.get("volatility_state"),
+       regime.get("trend_strength"),conf.get("probability"),
+       director.get("recommended_state"),director.get("confidence"),
+       risk_shadow.get("risk_multiplier"),int(bool(risk_shadow.get("allow_new_trades"))),
+       risk_shadow.get("requested_risk"),risk_shadow.get("approved_risk"),
+       risk_metrics.get("current_drawdown"),entry_slippage_pips,
+       _tm_session(r.get("candle_ts") or now_iso()),_tm_confidence_bucket(conf.get("probability")),
+       _tm_json(entry_reasons,[]),_tm_json(entry_context,{}),_tm_json(execution_context,{}),
+       _tm_json(risk_shadow,{}),_tm_json(data_quality,{}),now_iso(),now_iso()
+      ))
+    row=c.execute("SELECT id FROM trade_memory WHERE trade_id=?",(str(trade_id),)).fetchone()
+    c.commit();c.close()
+
+    log.info("TRADE_MEMORY OPEN trade=%s strategy=%s %s %s regime=%s conf=%s",
+             trade_id,setup_variant(r),r["instrument"],direction,
+             regime.get("market_regime"),conf.get("probability"))
+    return int(row["id"]) if row else None
+
+
+def update_trade_memory_excursions(instrument: str, candles_m1: List[Dict[str, Any]]) -> int:
+    """
+    MFE/MAE use only candles whose timestamps are at/after entry.
+    They update POST-TRADE columns, never entry_context_json.
+    """
+    if not TRADE_MEMORY_ENABLED or not candles_m1:
+        return 0
+    c=conn()
+    rows=[dict(x) for x in c.execute(
+        "SELECT * FROM trade_memory WHERE symbol=? AND status='OPEN'",(instrument,)
+    ).fetchall()]
+    c.close()
+    updated=0
+
+    for tr in rows:
+        entry=float(tr["entry_price"])
+        stop=tr.get("stop_loss")
+        if stop is None:
+            continue
+        risk=abs(entry-float(stop))
+        if risk<=0:
+            continue
+        entry_dt=_parse_iso(tr.get("entry_ts"))
+        if not entry_dt:
+            continue
+
+        max_fav=float(tr.get("mfe_r") or 0.0)
+        max_adv=float(tr.get("mae_r") or 0.0)
+
+        for candle in candles_m1:
+            cdt=_parse_iso(candle.get("t"))
+            if not cdt or cdt<entry_dt:
+                continue
+            high=float(candle["h"]); low=float(candle["l"])
+            if tr["direction"]=="LONG":
+                fav=max(0.0,(high-entry)/risk)
+                adv=max(0.0,(entry-low)/risk)
+            else:
+                fav=max(0.0,(entry-low)/risk)
+                adv=max(0.0,(high-entry)/risk)
+            max_fav=max(max_fav,fav)
+            max_adv=max(max_adv,adv)
+
+        c=conn()
+        c.execute("""UPDATE trade_memory
+                     SET mfe_r=?,mae_r=?,max_drawdown_during_trade_r=?,updated_ts=?
+                     WHERE trade_id=?""",
+                  (max_fav,max_adv,max_adv,now_iso(),tr["trade_id"]))
+        c.commit();c.close()
+        updated+=1
+    return updated
+
+
+async def _trade_memory_exit_reason(client: httpx.AsyncClient, trade: Dict[str, Any]) -> List[str]:
+    reasons=[]
+    ids=list(trade.get("closingTransactionIDs") or [])
+    if ids:
+        tid=str(ids[-1])
+        try:
+            payload=await req(client,"GET",f"/v3/accounts/{{account}}/transactions/{tid}")
+            tx=payload.get("transaction") or {}
+            if tx.get("reason"):reasons.append(str(tx.get("reason")))
+            if tx.get("type"):reasons.append(str(tx.get("type")))
+            if tx.get("orderID"):reasons.append("order_id:"+str(tx.get("orderID")))
+        except Exception as e:
+            reasons.append("closing_transaction_unavailable:"+str(e))
+    if not reasons:
+        reasons.append("BROKER_TRADE_CLOSED")
+    return reasons
+
+
+async def reconcile_trade_memory(client: httpx.AsyncClient, instrument: Optional[str]=None) -> Dict[str, Any]:
+    """
+    Read-only OANDA reconciliation of executed trades.
+    OANDA trade state is the source of truth for actual exit price/time/P&L.
+    """
+    if not TRADE_MEMORY_ENABLED:
+        return {"enabled":False,"checked":0,"closed":0}
+
+    c=conn()
+    if instrument:
+        rows=[dict(x) for x in c.execute("""SELECT * FROM trade_memory
+                                           WHERE status='OPEN' AND symbol=?
+                                           ORDER BY id LIMIT ?""",
+                                        (instrument,TRADE_MEMORY_RECONCILE_LIMIT)).fetchall()]
+    else:
+        rows=[dict(x) for x in c.execute("""SELECT * FROM trade_memory
+                                           WHERE status='OPEN'
+                                           ORDER BY id LIMIT ?""",
+                                        (TRADE_MEMORY_RECONCILE_LIMIT,)).fetchall()]
+    c.close()
+
+    closed=0;errors=[]
+    for mem in rows:
+        try:
+            payload=await req(client,"GET",f"/v3/accounts/{{account}}/trades/{mem['trade_id']}")
+            tr=payload.get("trade") or {}
+            if str(tr.get("state"))!="CLOSED":
+                continue
+
+            exit_price=_risk_float(tr.get("averageClosePrice"))
+            exit_ts=tr.get("closeTime") or now_iso()
+            realized=_risk_float(tr.get("realizedPL"),0.0) or 0.0
+            financing=_risk_float(tr.get("financing"),0.0) or 0.0
+            dividend=_risk_float(tr.get("dividendAdjustment"),0.0) or 0.0
+            guaranteed=_risk_float(tr.get("guaranteedExecutionFee"),0.0) or 0.0
+            commission=_risk_float(tr.get("commission"),0.0) or 0.0
+            fees_total=financing+dividend+guaranteed+commission
+            net=realized+fees_total
+
+            entry=float(mem["entry_price"])
+            risk=abs(entry-float(mem["stop_loss"])) if mem.get("stop_loss") is not None else 0.0
+            realized_r=None
+            if exit_price is not None and risk>0:
+                raw=(exit_price-entry)/risk if mem["direction"]=="LONG" else (entry-exit_price)/risk
+                realized_r=float(raw)
+
+            ent=_parse_iso(mem.get("entry_ts")); ex=_parse_iso(exit_ts)
+            duration=(ex-ent).total_seconds() if ent and ex else None
+            exit_reasons=await _trade_memory_exit_reason(client,tr)
+
+            exit_context={
+                "broker_state":tr.get("state"),
+                "closing_transaction_ids":tr.get("closingTransactionIDs") or [],
+                "broker_realized_pl":realized,
+                "financing":financing,
+                "dividend_adjustment":dividend,
+                "guaranteed_execution_fee":guaranteed,
+                "commission":commission,
+                "average_close_price":exit_price,
+                "close_time":exit_ts
+            }
+
+            quality=json.loads(mem.get("data_quality_json") or "{}")
+            quality["actual_broker_exit_pending"]=False
+            quality["actual_broker_exit_reconciled"]=True
+
+            c=conn()
+            c.execute("""UPDATE trade_memory SET
+              status='CLOSED',exit_ts=?,exit_price=?,gross_result=?,net_result=?,
+              realized_pl=?,financing=?,dividend_adjustment=?,guaranteed_execution_fees=?,
+              commission=?,fees_total=?,duration_seconds=?,realized_r=?,
+              exit_reasons_json=?,exit_context_json=?,data_quality_json=?,updated_ts=?
+              WHERE trade_id=?""",
+              (exit_ts,exit_price,realized,net,realized,financing,dividend,guaranteed,
+               commission,fees_total,duration,realized_r,_tm_json(exit_reasons,[]),
+               _tm_json(exit_context,{}),_tm_json(quality,{}),now_iso(),mem["trade_id"]))
+            c.execute("UPDATE active_trade_management SET closed=1,updated_ts=? WHERE trade_id=?",
+                      (now_iso(),mem["trade_id"]))
+            c.commit();c.close()
+            closed+=1
+            log.info("TRADE_MEMORY CLOSED trade=%s net=%s realized_r=%s reason=%s",
+                     mem["trade_id"],net,realized_r,";".join(exit_reasons))
+        except Exception as e:
+            errors.append({"trade_id":mem["trade_id"],"error":str(e)})
+            log.warning("TRADE_MEMORY reconcile failed trade=%s err=%s",mem["trade_id"],e)
+
+    if closed:
+        refresh_trade_memory_degradation()
+    return {"enabled":True,"checked":len(rows),"closed":closed,"errors":errors}
+
+
+def _tm_value(row: Dict[str, Any]) -> Optional[float]:
+    """
+    Prefer broker net result in account units.
+    Fall back to realized R only when monetary result is unavailable.
+    A single analysis never mixes the two bases.
+    """
+    return _risk_float(row.get("net_result"))
+
+
+def _tm_metric_rows(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    monetary=[r for r in rows if _risk_float(r.get("net_result")) is not None]
+    if len(monetary)==len(rows) and rows:
+        vals=[float(r["net_result"]) for r in monetary]
+        basis="NET_ACCOUNT_UNITS"
+    else:
+        usable=[r for r in rows if _risk_float(r.get("realized_r")) is not None]
+        vals=[float(r["realized_r"]) for r in usable]
+        basis="REALIZED_R"
+        rows=usable
+
+    n=len(vals)
+    wins=[x for x in vals if x>0]
+    losses=[x for x in vals if x<0]
+    gross_profit=sum(wins)
+    gross_loss=abs(sum(losses))
+    pf=(gross_profit/gross_loss) if gross_loss>0 else (999.0 if gross_profit>0 else None)
+    expectancy=(sum(vals)/n) if n else None
+    avg_win=(sum(wins)/len(wins)) if wins else None
+    avg_loss=(sum(losses)/len(losses)) if losses else None
+
+    # Trade-level Sharpe (sqrt(N) scaled, not annualized by time).
+    sharpe=None
+    if n>=2:
+        mean=sum(vals)/n
+        var=sum((x-mean)**2 for x in vals)/(n-1)
+        sd=math.sqrt(var)
+        sharpe=(mean/sd)*math.sqrt(n) if sd>0 else None
+
+    # Cumulative P&L/R max drawdown.
+    curve=0.0;peak=0.0;max_dd=0.0
+    for x in vals:
+        curve+=x
+        peak=max(peak,curve)
+        max_dd=max(max_dd,peak-curve)
+
+    max_wins=max_losses=cur_w=cur_l=0
+    for x in vals:
+        if x>0:
+            cur_w+=1;cur_l=0;max_wins=max(max_wins,cur_w)
+        elif x<0:
+            cur_l+=1;cur_w=0;max_losses=max(max_losses,cur_l)
+
+    realized_rr=[_risk_float(r.get("realized_r")) for r in rows]
+    realized_rr=[x for x in realized_rr if x is not None]
+
+    return {
+        "samples":n,
+        "basis":basis,
+        "win_rate":len(wins)/n if n else None,
+        "profit_factor":pf,
+        "expectancy":expectancy,
+        "average_win":avg_win,
+        "average_loss":avg_loss,
+        "average_realized_r":sum(realized_rr)/len(realized_rr) if realized_rr else None,
+        "max_drawdown":max_dd if n else None,
+        "max_consecutive_wins":max_wins,
+        "max_consecutive_losses":max_losses,
+        "trade_sharpe":sharpe,
+        "gross_profit":gross_profit,
+        "gross_loss":gross_loss
+    }
+
+
+def trade_memory_metrics(rows: List[Dict[str, Any]], min_samples: Optional[int]=None) -> Dict[str, Any]:
+    min_samples=int(min_samples or TRADE_MEMORY_MIN_SAMPLE_SIZE)
+    metrics=_tm_metric_rows(rows)
+    metrics["minimum_sample_size"]=min_samples
+    metrics["evidence_status"]="OK" if metrics["samples"]>=min_samples else "INSUFFICIENT_DATA"
+    return metrics
+
+
+def _tm_closed_rows(
+    strategy: Optional[str]=None,
+    regime: Optional[str]=None,
+    symbol: Optional[str]=None,
+    direction: Optional[str]=None,
+    volatility: Optional[str]=None,
+    min_confidence: Optional[float]=None,
+    since: Optional[str]=None
+) -> List[Dict[str, Any]]:
+    where=["status='CLOSED'"]
+    params=[]
+    if strategy:where.append("strategy=?");params.append(strategy)
+    if regime:where.append("market_regime_entry=?");params.append(regime)
+    if symbol:where.append("symbol=?");params.append(symbol)
+    if direction:where.append("direction=?");params.append(direction)
+    if volatility:where.append("volatility_state_entry=?");params.append(volatility)
+    if min_confidence is not None:where.append("strategy_confidence_entry>=?");params.append(float(min_confidence))
+    if since:where.append("exit_ts>=?");params.append(since)
+    c=conn()
+    rows=[dict(x) for x in c.execute(
+        "SELECT * FROM trade_memory WHERE "+" AND ".join(where)+" ORDER BY exit_ts,id",tuple(params)
+    ).fetchall()]
+    c.close()
+    return rows
+
+
+def trade_memory_group_analysis(group_by: str, min_samples: Optional[int]=None,
+                                period: str="month") -> Dict[str, Any]:
+    rows=_tm_closed_rows()
+    supported={"strategy","market_regime","symbol","direction","confidence",
+               "volatility","session","period"}
+    if group_by not in supported:
+        return {"error":"unsupported_group_by","supported":sorted(supported)}
+
+    groups={}
+    for r in rows:
+        if group_by=="strategy":key=r.get("strategy")
+        elif group_by=="market_regime":key=r.get("market_regime_entry") or "UNKNOWN"
+        elif group_by=="symbol":key=r.get("symbol")
+        elif group_by=="direction":key=r.get("direction")
+        elif group_by=="confidence":key=r.get("confidence_bucket") or "UNKNOWN"
+        elif group_by=="volatility":key=r.get("volatility_state_entry") or "UNKNOWN"
+        elif group_by=="session":key=r.get("entry_session") or "UNKNOWN"
+        else:
+            dt=_parse_iso(r.get("exit_ts") or r.get("entry_ts"))
+            if not dt:key="UNKNOWN"
+            elif period=="day":key=dt.date().isoformat()
+            elif period=="week":key=f"{dt.isocalendar().year}-W{dt.isocalendar().week:02d}"
+            else:key=f"{dt.year:04d}-{dt.month:02d}"
+        groups.setdefault(str(key),[]).append(r)
+
+    return {
+        "group_by":group_by,
+        "period":period if group_by=="period" else None,
+        "groups":[{"key":k,**trade_memory_metrics(v,min_samples)} for k,v in sorted(groups.items())]
+    }
+
+
+def trade_memory_combination_analysis(
+    strategy: Optional[str]=None,
+    regime: Optional[str]=None,
+    symbol: Optional[str]=None,
+    direction: Optional[str]=None,
+    volatility: Optional[str]=None,
+    min_confidence: Optional[float]=None,
+    min_samples: Optional[int]=None
+) -> Dict[str, Any]:
+    rows=_tm_closed_rows(strategy,regime,symbol,direction,volatility,min_confidence)
+    metrics=trade_memory_metrics(rows,min_samples)
+    return {
+        "combination":{
+            "strategy":strategy,"market_regime":regime,"symbol":symbol,
+            "direction":direction,"volatility":volatility,
+            "min_confidence":min_confidence
+        },
+        **metrics
+    }
+
+
+def _tm_degradation_for_rows(strategy: str, regime: Optional[str],
+                             rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    recent_n=TRADE_MEMORY_DEGRADATION_RECENT
+    if len(rows)<TRADE_MEMORY_DEGRADATION_MIN_HISTORY+recent_n:
+        return {
+            "status":"INSUFFICIENT_DATA",
+            "historical_samples":max(0,len(rows)-min(recent_n,len(rows))),
+            "recent_samples":min(recent_n,len(rows)),
+            "reason":"minimum historical/recent sample size not reached"
+        }
+
+    historical=rows[:-recent_n]
+    recent=rows[-recent_n:]
+    hm=_tm_metric_rows(historical)
+    rm=_tm_metric_rows(recent)
+
+    hp=hm.get("profit_factor");rp=rm.get("profit_factor")
+    he=hm.get("expectancy");rexp=rm.get("expectancy")
+    hwr=hm.get("win_rate");rwr=rm.get("win_rate")
+
+    status="STABLE";reason="recent behavior remains within historical range";score=0.0
+
+    pf_drop=None
+    if hp is not None and rp is not None and hp<900 and rp<900:
+        pf_drop=hp-rp
+
+    strong_pf_degradation=(
+        hp is not None and rp is not None and
+        hp>=1.20 and rp<TRADE_MEMORY_DEGRADATION_PF_FLOOR and
+        (pf_drop is None or pf_drop>=TRADE_MEMORY_DEGRADATION_MIN_PF_DROP)
+    )
+    expectancy_flip=(he is not None and rexp is not None and he>0 and rexp<0)
+
+    if strong_pf_degradation or expectancy_flip:
+        status="DEGRADED"
+        reason="recent profit factor/expectancy materially below historical behavior"
+        score=1.0
+    elif (hp is not None and rp is not None and hp<900 and rp<900 and rp<hp*0.75) or (
+          he is not None and rexp is not None and he>0 and rexp<he*0.50):
+        status="WATCH"
+        reason="recent behavior weakening versus historical baseline"
+        score=0.5
+
+    return {
+        "status":status,
+        "historical_samples":hm["samples"],
+        "recent_samples":rm["samples"],
+        "historical_profit_factor":hp,
+        "recent_profit_factor":rp,
+        "historical_expectancy":he,
+        "recent_expectancy":rexp,
+        "historical_win_rate":hwr,
+        "recent_win_rate":rwr,
+        "change_score":score,
+        "reason":reason
+    }
+
+
+def refresh_trade_memory_degradation() -> Dict[str, Any]:
+    """
+    Observe/report only. It never pauses strategies or modifies Director/Risk rules.
+    """
+    if not TRADE_MEMORY_ENABLED:
+        return {"enabled":False}
+    c=conn()
+    pairs=[dict(x) for x in c.execute("""SELECT DISTINCT strategy,market_regime_entry
+                                         FROM trade_memory WHERE status='CLOSED'""").fetchall()]
+    strategies=[x["strategy"] for x in c.execute(
+        "SELECT DISTINCT strategy FROM trade_memory WHERE status='CLOSED'"
+    ).fetchall()]
+    c.close()
+
+    results=[]
+    scopes=[("STRATEGY",st,None) for st in strategies]
+    scopes += [("STRATEGY_REGIME",x["strategy"],x["market_regime_entry"]) for x in pairs]
+
+    for scope_type,strategy,regime in scopes:
+        rows=_tm_closed_rows(strategy=strategy,regime=regime)
+        d=_tm_degradation_for_rows(strategy,regime,rows)
+        scope_key=f"{scope_type}::{strategy}::{regime or 'ALL'}"
+        c=conn()
+        c.execute("""INSERT INTO trade_memory_degradation(
+          scope_key,ts,scope_type,strategy,market_regime,status,historical_samples,recent_samples,
+          historical_profit_factor,recent_profit_factor,historical_expectancy,recent_expectancy,
+          historical_win_rate,recent_win_rate,change_score,reason,details_json)
+          VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+          ON CONFLICT(scope_key) DO UPDATE SET
+          ts=excluded.ts,status=excluded.status,historical_samples=excluded.historical_samples,
+          recent_samples=excluded.recent_samples,historical_profit_factor=excluded.historical_profit_factor,
+          recent_profit_factor=excluded.recent_profit_factor,historical_expectancy=excluded.historical_expectancy,
+          recent_expectancy=excluded.recent_expectancy,historical_win_rate=excluded.historical_win_rate,
+          recent_win_rate=excluded.recent_win_rate,change_score=excluded.change_score,
+          reason=excluded.reason,details_json=excluded.details_json""",
+          (scope_key,now_iso(),scope_type,strategy,regime,d["status"],
+           d.get("historical_samples",0),d.get("recent_samples",0),
+           d.get("historical_profit_factor"),d.get("recent_profit_factor"),
+           d.get("historical_expectancy"),d.get("recent_expectancy"),
+           d.get("historical_win_rate"),d.get("recent_win_rate"),d.get("change_score"),
+           d["reason"],_tm_json(d,{})))
+        c.commit();c.close()
+        results.append({"scope_key":scope_key,**d})
+        if d["status"]=="DEGRADED":
+            log.warning("TRADE_MEMORY DEGRADATION %s hist_pf=%s recent_pf=%s reason=%s",
+                        scope_key,d.get("historical_profit_factor"),d.get("recent_profit_factor"),d["reason"])
+    return {"enabled":True,"results":results}
+
+
+def trade_memory_recent_degradation(strategy: Optional[str]=None) -> List[Dict[str, Any]]:
+    c=conn()
+    if strategy:
+        rows=c.execute("""SELECT * FROM trade_memory_degradation
+                          WHERE strategy=? ORDER BY ts DESC""",(strategy,)).fetchall()
+    else:
+        rows=c.execute("""SELECT * FROM trade_memory_degradation
+                          ORDER BY CASE status WHEN 'DEGRADED' THEN 1 WHEN 'WATCH' THEN 2
+                          WHEN 'STABLE' THEN 3 ELSE 4 END,ts DESC""").fetchall()
+    c.close()
+    return [dict(x) for x in rows]
+
+
+def trade_memory_insights(query: str, strategy: Optional[str]=None,
+                          regime: Optional[str]=None) -> Dict[str, Any]:
+    """
+    Stable internal read interface for future AI Strategy Director use.
+    It does not currently alter Director decisions.
+    """
+    q=str(query or "").lower()
+    if q=="performance_by_strategy":
+        return trade_memory_group_analysis("strategy")
+    if q=="performance_by_regime":
+        return trade_memory_group_analysis("market_regime")
+    if q=="recent_degradation":
+        return {"query":q,"results":trade_memory_recent_degradation(strategy)}
+    if q=="confidence_performance":
+        return trade_memory_group_analysis("confidence")
+    if q=="strategy_regime_edge":
+        if not strategy:
+            return {"query":q,"error":"strategy is required"}
+        rows=_tm_closed_rows(strategy=strategy,regime=regime)
+        return {"query":q,"strategy":strategy,"regime":regime,
+                **trade_memory_metrics(rows)}
+    if q=="recent_vs_historical_performance":
+        if not strategy:
+            return {"query":q,"error":"strategy is required"}
+        rows=_tm_closed_rows(strategy=strategy,regime=regime)
+        return {"query":q,"strategy":strategy,"regime":regime,
+                **_tm_degradation_for_rows(strategy,regime,rows)}
+    return {
+        "error":"unsupported_query",
+        "supported":[
+            "performance_by_strategy","performance_by_regime","recent_degradation",
+            "confidence_performance","strategy_regime_edge",
+            "recent_vs_historical_performance"
+        ]
+    }
+
+
+def trade_memory_example(trade_id: str) -> Optional[Dict[str, Any]]:
+    c=conn()
+    row=c.execute("SELECT * FROM trade_memory WHERE trade_id=?",(trade_id,)).fetchone()
+    c.close()
+    if not row:return None
+    out=dict(row)
+    for k in ("entry_reasons_json","exit_reasons_json","entry_context_json",
+              "execution_context_json","exit_context_json","risk_recommendation_json",
+              "data_quality_json"):
+        try:out[k[:-5] if k.endswith("_json") else k]=json.loads(out.get(k) or "{}")
+        except Exception:pass
+    return out
+
+
+
+def _al_event(run_id: str, stage: str, status: str,
+              strategy_id: Optional[str]=None, candidate_id: Optional[str]=None,
+              details: Optional[Dict[str,Any]]=None) -> None:
+    c=conn()
+    c.execute("""INSERT INTO adaptive_learning_events(
+      run_id,ts,stage,strategy_id,candidate_id,status,details_json)
+      VALUES(?,?,?,?,?,?,?)""",
+      (run_id,now_iso(),stage,strategy_id,candidate_id,status,_tm_json(details or {},{})))
+    c.commit();c.close()
+    log.info("ADAPTIVE_LEARNING %s run=%s strategy=%s candidate=%s status=%s",
+             stage,run_id,strategy_id,candidate_id,status)
+
+
+def _al_trade_rows(strategy: Optional[str]=None) -> List[Dict[str,Any]]:
+    c=conn()
+    if strategy:
+        rows=[dict(x) for x in c.execute(
+            """SELECT * FROM trade_memory WHERE status='CLOSED' AND strategy=?
+               ORDER BY entry_ts,id""",(strategy,)).fetchall()]
+    else:
+        rows=[dict(x) for x in c.execute(
+            """SELECT * FROM trade_memory WHERE status='CLOSED'
+               ORDER BY entry_ts,id""").fetchall()]
+    c.close()
+    return rows
+
+
+def _al_period(rows: List[Dict[str,Any]]) -> Dict[str,Optional[str]]:
+    dates=[r.get("entry_ts") for r in rows if r.get("entry_ts")]
+    return {"start":min(dates) if dates else None,"end":max(dates) if dates else None}
+
+
+def _al_production_parameters(strategy: str) -> Dict[str,Any]:
+    """
+    Snapshot only. Candidate parameters never overwrite these values.
+    """
+    return {
+        "strategy_id":strategy,
+        "code_version":VERSION_TAG,
+        "execution_min_confidence":EXECUTION_MIN_CONFIDENCE,
+        "quality_threshold":THRESH,
+        "min_rr":MIN_RR,
+        "session_filter":SESSION,
+        "news_filter":NEWS,
+        "trade_units":UNITS
+    }
+
+
+def _al_next_candidate_version(strategy: str) -> str:
+    c=conn()
+    n=c.execute("SELECT COUNT(*) n FROM candidate_strategies WHERE strategy_id=?",(strategy,)).fetchone()["n"]
+    c.close()
+    return f"{strategy}_candidate_v{int(n)+2}"
+
+
+def _al_recent_candidate(strategy: str, parameter_name: str) -> Optional[Dict[str,Any]]:
+    c=conn()
+    row=c.execute("""SELECT * FROM candidate_strategies
+                     WHERE strategy_id=? AND parameter_name=?
+                     ORDER BY id DESC LIMIT 1""",(strategy,parameter_name)).fetchone()
+    c.close()
+    return dict(row) if row else None
+
+
+def _al_cooldown_allows(strategy: str, parameter_name: str,
+                        rows: List[Dict[str,Any]]) -> Dict[str,Any]:
+    prev=_al_recent_candidate(strategy,parameter_name)
+    if not prev:return {"ok":True}
+    try:
+        generated=datetime.fromisoformat(prev["generated_at"].replace("Z","+00:00"))
+        hours=(datetime.now(timezone.utc)-generated).total_seconds()/3600
+    except Exception:
+        hours=ADAPTIVE_LEARNING_COOLDOWN_HOURS+1
+    new_count=sum(1 for r in rows if r.get("entry_ts") and r["entry_ts"]>str(prev.get("period_end") or ""))
+    ok=hours>=ADAPTIVE_LEARNING_COOLDOWN_HOURS and new_count>=ADAPTIVE_LEARNING_MIN_NEW_TRADES
+    return {"ok":ok,"hours_since":hours,"new_trades":new_count,
+            "required_hours":ADAPTIVE_LEARNING_COOLDOWN_HOURS,
+            "required_new_trades":ADAPTIVE_LEARNING_MIN_NEW_TRADES}
+
+
+def _al_candidate_confidence(validation: Dict[str,Any]) -> float:
+    cm=validation.get("oos_candidate") or {}
+    samples=float(cm.get("samples") or 0)
+    folds=float(validation.get("positive_oos_fold_fraction") or 0)
+    score=float(validation.get("candidate_score") or 0)
+    return clamp(0.35*min(1.0,samples/100.0)+0.35*folds+0.30*score,0.0,1.0)
+
+
+def _al_candidate_risks(change_type: str, validation: Dict[str,Any]) -> List[str]:
+    risks=[
+        "historical counterfactual only; production behavior remains unchanged",
+        "candidate has not traded live",
+        "candidate may reduce opportunity count"
+    ]
+    if change_type in ("MIN_CONFIDENCE","MIN_DIRECTOR_CONFIDENCE"):
+        risks.append("threshold may become regime-specific over time")
+    if change_type in ("EXCLUDE_REGIME","EXCLUDE_VOLATILITY"):
+        risks.append("excluding a condition can miss future regime reversals")
+    cm=validation.get("oos_candidate") or {}
+    if (cm.get("samples") or 0)<50:
+        risks.append("out-of-sample sample remains moderate")
+    return risks
+
+
+def _al_store_candidate(run_id: str, strategy: str, candidate: Dict[str,Any],
+                        reason: str, evidence: Dict[str,Any],
+                        validation: Dict[str,Any], rows: List[Dict[str,Any]]) -> Dict[str,Any]:
+    candidate_id=f"cand_{hashlib.sha256((run_id+strategy+candidate['parameter_name']+json.dumps(candidate,sort_keys=True)).encode()).hexdigest()[:16]}"
+    version=_al_next_candidate_version(strategy)
+    period=_al_period(rows)
+    dataset_hash=al_dataset_fingerprint(rows)
+    score=validation.get("candidate_score")
+    confidence=_al_candidate_confidence(validation)
+    improvement=validation.get("avg_oos_expectancy_improvement")
+    status=validation.get("status","REJECTED_AS_CANDIDATE")
+    current_params=_al_production_parameters(strategy)
+    candidate_params={**current_params,
+                      "candidate_overlay":{
+                          "change_type":candidate["change_type"],
+                          "parameter_name":candidate["parameter_name"],
+                          "value":candidate["proposed_value"]
+                      }}
+
+    cooldown_until=(datetime.now(timezone.utc)+timedelta(hours=ADAPTIVE_LEARNING_COOLDOWN_HOURS)).isoformat()
+    c=conn()
+    c.execute("""INSERT OR IGNORE INTO candidate_strategies(
+      candidate_id,run_id,strategy_id,production_version,candidate_version,status,
+      change_type,parameter_name,current_value_json,proposed_value_json,reason,
+      supporting_evidence_json,sample_size,expected_improvement,confidence,risks_json,
+      original_parameters_json,candidate_parameters_json,validation_json,candidate_score,
+      dataset_hash,period_start,period_end,generated_at,validated_at,cooldown_until,auto_deploy)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0)""",
+      (candidate_id,run_id,strategy,VERSION_TAG,version,status,candidate["change_type"],
+       candidate["parameter_name"],_tm_json(candidate["current_value"],None),
+       _tm_json(candidate["proposed_value"],None),reason,_tm_json(evidence,{}),len(rows),
+       improvement,confidence,_tm_json(_al_candidate_risks(candidate["change_type"],validation),[]),
+       _tm_json(current_params,{}),_tm_json(candidate_params,{}),_tm_json(validation,{}),score,
+       dataset_hash,period["start"],period["end"],now_iso(),now_iso(),cooldown_until))
+    c.commit()
+    row=c.execute("SELECT * FROM candidate_strategies WHERE candidate_id=?",(candidate_id,)).fetchone()
+    c.close()
+    return dict(row) if row else {}
+
+
+def _al_generate_proposals_for_strategy(run_id: str, strategy: str,
+                                        rows: List[Dict[str,Any]]) -> List[Dict[str,Any]]:
+    """
+    Generate only changes reconstructible from entry-time Trade Memory.
+    No blind parameter grid search.
+    """
+    if len(rows)<ADAPTIVE_LEARNING_MIN_TRADES:
+        _al_event(run_id,"ANALYZE","INSUFFICIENT_DATA",strategy,None,
+                  {"samples":len(rows),"minimum":ADAPTIVE_LEARNING_MIN_TRADES})
+        return []
+
+    period=_al_period(rows)
+    try:
+        start_dt=datetime.fromisoformat(str(period["start"]).replace("Z","+00:00"))
+        end_dt=datetime.fromisoformat(str(period["end"]).replace("Z","+00:00"))
+        observation_days=max(0.0,(end_dt-start_dt).total_seconds()/86400.0)
+    except Exception:
+        observation_days=0.0
+    if observation_days<ADAPTIVE_LEARNING_MIN_OBSERVATION_DAYS:
+        _al_event(run_id,"ANALYZE","INSUFFICIENT_DATA",strategy,None,
+                  {"samples":len(rows),"observation_days":observation_days,
+                   "minimum_observation_days":ADAPTIVE_LEARNING_MIN_OBSERVATION_DAYS})
+        return []
+
+    proposals=[]
+    baseline=al_metrics(rows)
+    _al_event(run_id,"ANALYZE","OK",strategy,None,
+              {"samples":len(rows),"baseline":baseline})
+
+    # 1) Confidence threshold candidate: only ONE bounded step.
+    current=float(EXECUTION_MIN_CONFIDENCE)
+    lower=[r for r in rows if _risk_float(r.get("strategy_confidence_entry")) is not None
+           and float(r["strategy_confidence_entry"])<current+ADAPTIVE_LEARNING_MAX_CONFIDENCE_STEP]
+    high=[r for r in rows if _risk_float(r.get("strategy_confidence_entry")) is not None
+          and float(r["strategy_confidence_entry"])>=current+ADAPTIVE_LEARNING_MAX_CONFIDENCE_STEP]
+    if len(lower)>=TRADE_MEMORY_MIN_SAMPLE_SIZE and len(high)>=TRADE_MEMORY_MIN_SAMPLE_SIZE:
+        lm=al_metrics(lower);hm=al_metrics(high)
+        if (hm.get("expectancy") or 0)>(lm.get("expectancy") or 0) and (hm.get("profit_factor") or 0)>1.0:
+            proposals.append({
+                "change_type":"MIN_CONFIDENCE",
+                "parameter_name":"execution_min_confidence",
+                "current_value":current,
+                "proposed_value":round(min(0.95,current+ADAPTIVE_LEARNING_MAX_CONFIDENCE_STEP),4),
+                "reason":"higher-confidence trades show stronger expectancy than lower-confidence observations",
+                "evidence":{"lower_confidence":lm,"higher_confidence":hm}
+            })
+
+    # 2) Regime exclusion only when degradation engine already flags it and sample is sufficient.
+    c=conn()
+    deg=[dict(x) for x in c.execute("""SELECT * FROM trade_memory_degradation
+                                       WHERE strategy=? AND scope_type='STRATEGY_REGIME'
+                                         AND status='DEGRADED'""",(strategy,)).fetchall()]
+    c.close()
+    for d in deg:
+        regime=d.get("market_regime")
+        rg=[r for r in rows if r.get("market_regime_entry")==regime]
+        if len(rg)>=TRADE_MEMORY_MIN_SAMPLE_SIZE:
+            proposals.append({
+                "change_type":"EXCLUDE_REGIME",
+                "parameter_name":"regime_exclusion",
+                "current_value":"NONE",
+                "proposed_value":regime,
+                "reason":"Trade Memory reports persistent degradation in this strategy/regime combination",
+                "evidence":{"degradation":d,"regime_metrics":al_metrics(rg)}
+            })
+
+    # 3) Volatility exclusion if one state has persistent negative expectancy/PF and enough observations.
+    by_vol={}
+    for r in rows:
+        by_vol.setdefault(str(r.get("volatility_state_entry") or "UNKNOWN"),[]).append(r)
+    for vol,rr in by_vol.items():
+        if vol not in ("HIGH","LOW","ABNORMAL") or len(rr)<TRADE_MEMORY_MIN_SAMPLE_SIZE:
+            continue
+        vm=al_metrics(rr)
+        if (vm.get("expectancy") is not None and vm["expectancy"]<0) and (
+            vm.get("profit_factor") is not None and vm["profit_factor"]<1.0):
+            proposals.append({
+                "change_type":"EXCLUDE_VOLATILITY",
+                "parameter_name":"volatility_exclusion",
+                "current_value":"NONE",
+                "proposed_value":vol,
+                "reason":"this volatility state has negative expectancy and profit factor below 1",
+                "evidence":{"volatility_metrics":vm}
+            })
+
+    # 4) Director-confidence candidate. No proposal unless the higher-confidence
+    # subset actually shows stronger performance; this preserves NO_CHANGE_RECOMMENDED.
+    vals=[_risk_float(r.get("director_confidence_entry")) for r in rows]
+    vals=[v for v in vals if v is not None]
+    if len(vals)>=ADAPTIVE_LEARNING_MIN_TRADES:
+        q=sorted(vals)[int(0.35*(len(vals)-1))]
+        proposed=min(0.95,max(0.50,round(q,2)))
+        low_dc=[r for r in rows if _risk_float(r.get("director_confidence_entry")) is not None
+                and float(r["director_confidence_entry"])<proposed]
+        high_dc=[r for r in rows if _risk_float(r.get("director_confidence_entry")) is not None
+                 and float(r["director_confidence_entry"])>=proposed]
+        if len(low_dc)>=TRADE_MEMORY_MIN_SAMPLE_SIZE and len(high_dc)>=TRADE_MEMORY_MIN_SAMPLE_SIZE:
+            ldm=al_metrics(low_dc);hdm=al_metrics(high_dc)
+            if (hdm.get("expectancy") or 0)>(ldm.get("expectancy") or 0) and (hdm.get("profit_factor") or 0)>1.0:
+                proposals.append({
+                    "change_type":"MIN_DIRECTOR_CONFIDENCE",
+                    "parameter_name":"director_min_confidence_candidate",
+                    "current_value":0.0,
+                    "proposed_value":proposed,
+                    "reason":"higher Director-confidence observations show stronger expectancy",
+                    "evidence":{"lower_director_confidence":ldm,"higher_director_confidence":hdm,
+                                "bounded_quantile":"35%"}
+                })
+
+    # De-duplicate by parameter/value; do not chase dozens of alternatives.
+    seen=set();unique=[]
+    for x in proposals:
+        key=(x["parameter_name"],str(x["proposed_value"]))
+        if key in seen:continue
+        seen.add(key);unique.append(x)
+    return unique[:4]
+
+
+def detect_adaptive_concept_drift() -> Dict[str,Any]:
+    c=conn()
+    pairs=[dict(x) for x in c.execute(
+        """SELECT DISTINCT strategy,market_regime_entry FROM trade_memory
+           WHERE status='CLOSED'"""
+    ).fetchall()]
+    c.close()
+    results=[]
+    for x in pairs:
+        strategy=x["strategy"];regime=x["market_regime_entry"]
+        rows=_tm_closed_rows(strategy=strategy,regime=regime)
+        d=al_concept_drift(rows,TRADE_MEMORY_DEGRADATION_RECENT,
+                           TRADE_MEMORY_DEGRADATION_MIN_HISTORY)
+        scope=f"{strategy}::{regime or 'UNKNOWN'}"
+        confidence=0.0
+        if d["status"]=="POSSIBLE_CONCEPT_DRIFT":
+            confidence=clamp(min(1.0,len(rows)/150.0)*0.7+0.3,0,1)
+        c=conn()
+        c.execute("""INSERT INTO concept_drift_alerts(
+          scope_key,ts,strategy_id,market_regime,status,confidence,
+          historical_metrics_json,previous_metrics_json,recent_metrics_json,reason,auto_action)
+          VALUES(?,?,?,?,?,?,?,?,?,?,0)
+          ON CONFLICT(scope_key) DO UPDATE SET ts=excluded.ts,status=excluded.status,
+          confidence=excluded.confidence,historical_metrics_json=excluded.historical_metrics_json,
+          previous_metrics_json=excluded.previous_metrics_json,recent_metrics_json=excluded.recent_metrics_json,
+          reason=excluded.reason,auto_action=0""",
+          (scope,now_iso(),strategy,regime,d["status"],confidence,
+           _tm_json(d.get("historical") or {},{}),_tm_json(d.get("previous_window") or {},{}),
+           _tm_json(d.get("current_window") or {},{}),
+           "two consecutive recent windows materially weakened vs historical edge"
+           if d["status"]=="POSSIBLE_CONCEPT_DRIFT" else d["status"]))
+        c.commit();c.close()
+        results.append({"scope_key":scope,**d,"confidence":confidence})
+        if d["status"]=="POSSIBLE_CONCEPT_DRIFT":
+            log.warning("ADAPTIVE_LEARNING POSSIBLE_CONCEPT_DRIFT %s confidence=%.3f",scope,confidence)
+    return {"results":results,"auto_action":False}
+
+
+def run_adaptive_learning(force: bool=False) -> Dict[str,Any]:
+    """
+    OBSERVE -> ANALYZE -> GENERATE CANDIDATE -> VALIDATE -> ACCEPT/REJECT AS CANDIDATE.
+    Never DEPLOY TO PRODUCTION.
+    """
+    if not ADAPTIVE_LEARNING_ENABLED:
+        return {"enabled":False}
+
+    all_rows=_al_trade_rows()
+    dataset_hash=al_dataset_fingerprint(all_rows)
+    period=_al_period(all_rows)
+    run_id=f"al_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%f')}_{dataset_hash[:10]}"
+    config={
+        "min_trades":ADAPTIVE_LEARNING_MIN_TRADES,
+        "min_observation_days":ADAPTIVE_LEARNING_MIN_OBSERVATION_DAYS,
+        "min_oos_trades":ADAPTIVE_LEARNING_MIN_OOS_TRADES,
+        "folds":ADAPTIVE_LEARNING_WALK_FORWARD_FOLDS,
+        "embargo_minutes":ADAPTIVE_LEARNING_EMBARGO_MINUTES,
+        "cooldown_hours":ADAPTIVE_LEARNING_COOLDOWN_HOURS,
+        "max_confidence_step":ADAPTIVE_LEARNING_MAX_CONFIDENCE_STEP,
+        "observation_only":True
+    }
+    c=conn()
+    c.execute("""INSERT OR IGNORE INTO adaptive_learning_runs(
+      run_id,started_ts,code_version,dataset_hash,period_start,period_end,trade_count,status,config_json)
+      VALUES(?,?,?,?,?,?,?,?,?)""",
+      (run_id,now_iso(),VERSION_TAG,dataset_hash,period["start"],period["end"],
+       len(all_rows),"RUNNING",_tm_json(config,{})))
+    c.commit();c.close()
+
+    _al_event(run_id,"OBSERVE","OK",None,None,
+              {"trades":len(all_rows),"dataset_hash":dataset_hash,"period":period})
+
+    refresh_trade_memory_degradation()
+    drift=detect_adaptive_concept_drift()
+
+    c=conn()
+    strategies=[x["strategy"] for x in c.execute(
+        "SELECT DISTINCT strategy FROM trade_memory WHERE status='CLOSED'"
+    ).fetchall()]
+    c.close()
+
+    accepted=[];rejected=[];insufficient=[];no_change=[]
+    for strategy in strategies:
+        rows=_al_trade_rows(strategy)
+        if len(rows)<ADAPTIVE_LEARNING_MIN_TRADES:
+            insufficient.append({"strategy":strategy,"samples":len(rows)})
+            _al_event(run_id,"ANALYZE","INSUFFICIENT_DATA",strategy,None,
+                      {"samples":len(rows)})
+            continue
+
+        proposals=_al_generate_proposals_for_strategy(run_id,strategy,rows)
+        if not proposals:
+            no_change.append({"strategy":strategy,"status":"NO_CHANGE_RECOMMENDED"})
+            _al_event(run_id,"GENERATE_CANDIDATE","NO_CHANGE_RECOMMENDED",strategy,None,
+                      {"reason":"no robust bounded change identified"})
+            continue
+
+        generated_for_strategy=0
+        for prop in proposals:
+            cooldown=_al_cooldown_allows(strategy,prop["parameter_name"],rows)
+            if not cooldown["ok"] and not force:
+                _al_event(run_id,"GENERATE_CANDIDATE","COOLDOWN",strategy,None,
+                          {"proposal":prop,"cooldown":cooldown})
+                continue
+
+            # No future data can enter selection predicate.
+            if not al_candidate_uses_entry_only(prop):
+                _al_event(run_id,"VALIDATE","UNVALIDATABLE",strategy,None,
+                          {"proposal":prop,"reason":"candidate uses non-entry data"})
+                continue
+
+            _al_event(run_id,"GENERATE_CANDIDATE","GENERATED",strategy,None,prop)
+            validation=al_validate_candidate(
+                rows,prop,min_trades=ADAPTIVE_LEARNING_MIN_OOS_TRADES,
+                folds=ADAPTIVE_LEARNING_WALK_FORWARD_FOLDS,
+                embargo_minutes=ADAPTIVE_LEARNING_EMBARGO_MINUTES
+            )
+            if (validation.get("status")=="ACCEPTED_AS_CANDIDATE" and
+                float(validation.get("candidate_score") or 0)<ADAPTIVE_LEARNING_ACCEPT_SCORE):
+                validation["status"]="REJECTED_AS_CANDIDATE"
+                validation["reason"]="candidate score below configured acceptance threshold"
+            stored=_al_store_candidate(
+                run_id,strategy,prop,prop["reason"],prop.get("evidence") or {},
+                validation,rows
+            )
+            generated_for_strategy+=1
+            cid=stored.get("candidate_id")
+            _al_event(run_id,"VALIDATE",validation.get("status","UNKNOWN"),
+                      strategy,cid,validation)
+
+            if validation.get("status")=="ACCEPTED_AS_CANDIDATE":
+                accepted.append(stored)
+                try:
+                    _vp_registry_upsert(stored,"PENDING",reason="accepted by Adaptive Learning; awaiting Step 7 validation")
+                except Exception as e:
+                    log.warning("Candidate registry pending insert failed candidate=%s err=%s",cid,e)
+                _al_event(run_id,"ACCEPT_AS_CANDIDATE","ACCEPTED",strategy,cid,
+                          {"candidate_version":stored.get("candidate_version"),
+                           "score":validation.get("candidate_score"),
+                           "auto_deploy":False})
+            else:
+                rejected.append(stored)
+                _al_event(run_id,"REJECT_AS_CANDIDATE",validation.get("status","REJECTED"),
+                          strategy,cid,{"reason":validation.get("reason")})
+
+        if generated_for_strategy==0:
+            no_change.append({"strategy":strategy,"status":"NO_CHANGE_RECOMMENDED"})
+
+    summary={
+        "accepted_candidates":len(accepted),"rejected_candidates":len(rejected),
+        "insufficient_strategies":len(insufficient),
+        "no_change_recommended":len(no_change),
+        "concept_drift_alerts":sum(1 for x in drift["results"]
+                                   if x["status"]=="POSSIBLE_CONCEPT_DRIFT"),
+        "auto_deploy":False
+    }
+    c=conn()
+    c.execute("""UPDATE adaptive_learning_runs SET completed_ts=?,status='COMPLETED',
+                 summary_json=? WHERE run_id=?""",
+              (now_iso(),_tm_json(summary,{}),run_id))
+    c.commit();c.close()
+    _al_event(run_id,"COMPLETE","COMPLETED",None,None,summary)
+
+    return {
+        "enabled":True,"observation_only":True,"run_id":run_id,
+        "dataset_hash":dataset_hash,"period":period,"summary":summary,
+        "accepted_candidates":accepted,"rejected_candidates":rejected,
+        "insufficient_data":insufficient,"no_change_recommended":no_change,
+        "concept_drift":drift
+    }
+
+
+def adaptive_learning_insights(query: str, strategy: Optional[str]=None) -> Dict[str,Any]:
+    """
+    Informational interface for AI Strategy Director. No activation authority.
+    """
+    q=str(query or "").lower()
+    c=conn()
+    if q=="candidate_strategies":
+        if strategy:
+            rows=c.execute("""SELECT * FROM candidate_strategies
+                              WHERE strategy_id=? ORDER BY id DESC LIMIT 100""",(strategy,)).fetchall()
+        else:
+            rows=c.execute("""SELECT * FROM candidate_strategies
+                              ORDER BY id DESC LIMIT 100""").fetchall()
+        out={"query":q,"results":[dict(x) for x in rows],"activation_authority":False}
+    elif q=="degradation_alerts":
+        rows=c.execute("""SELECT * FROM trade_memory_degradation
+                          WHERE status IN ('WATCH','DEGRADED')
+                          ORDER BY ts DESC""").fetchall()
+        out={"query":q,"results":[dict(x) for x in rows],"activation_authority":False}
+    elif q=="parameter_recommendations":
+        rows=c.execute("""SELECT * FROM candidate_strategies
+                          WHERE status='ACCEPTED_AS_CANDIDATE'
+                          ORDER BY candidate_score DESC,id DESC""").fetchall()
+        out={"query":q,"results":[dict(x) for x in rows],"activation_authority":False}
+    elif q=="concept_drift":
+        rows=c.execute("""SELECT * FROM concept_drift_alerts
+                          WHERE status='POSSIBLE_CONCEPT_DRIFT'
+                          ORDER BY ts DESC""").fetchall()
+        out={"query":q,"results":[dict(x) for x in rows],"activation_authority":False}
+    elif q=="strategy_edge_by_regime":
+        c.close()
+        return trade_memory_group_analysis("market_regime")
+    else:
+        out={"error":"unsupported_query","supported":[
+            "candidate_strategies","degradation_alerts","parameter_recommendations",
+            "concept_drift","strategy_edge_by_regime"
+        ]}
+    c.close()
+    return out
+
+
+
+def _vp_event(candidate_id: str, stage: str, status: str,
+              validation_id: Optional[str]=None, details: Optional[Dict[str,Any]]=None) -> None:
+    c=conn();c.execute("""INSERT INTO validation_events(ts,candidate_id,validation_id,stage,status,details_json)
+                         VALUES(?,?,?,?,?,?)""",
+                      (now_iso(),candidate_id,validation_id,stage,status,_tm_json(details or {},{})))
+    c.commit();c.close()
+    log.info("VALIDATION_PIPELINE %s candidate=%s validation=%s status=%s",stage,candidate_id,validation_id,status)
+
+
+def _vp_code_hash() -> str:
+    h=hashlib.sha256()
+    for name in ("server.py","adaptive_learning.py","validation_pipeline.py"):
+        fp=Path(__file__).resolve().parent/name
+        if fp.exists():h.update(fp.read_bytes())
+    return h.hexdigest()
+
+
+def _vp_candidate(candidate_id: str) -> Optional[Dict[str,Any]]:
+    c=conn();row=c.execute("SELECT * FROM candidate_strategies WHERE candidate_id=?",(candidate_id,)).fetchone();c.close()
+    if not row:return None
+    out=dict(row)
+    for k in ("current_value_json","proposed_value_json","candidate_parameters_json","original_parameters_json","validation_json"):
+        try:out[k[:-5]]=json.loads(out.get(k) or "null")
+        except Exception:out[k[:-5]]=None
+    out["proposed_value"]=out.get("proposed_value")
+    return out
+
+
+def _vp_candidate_spec(row: Dict[str,Any]) -> Dict[str,Any]:
+    pv=row.get("proposed_value")
+    if pv is None:
+        try:pv=json.loads(row.get("proposed_value_json") or "null")
+        except Exception:pv=None
+    cv=row.get("current_value")
+    if cv is None:
+        try:cv=json.loads(row.get("current_value_json") or "null")
+        except Exception:cv=None
+    return {"change_type":row["change_type"],"parameter_name":row["parameter_name"],
+            "current_value":cv,"proposed_value":pv}
+
+
+def _vp_rows(strategy: str) -> List[Dict[str,Any]]:
+    return _al_trade_rows(strategy)
+
+
+def _vp_dataset_version(candidate: Dict[str,Any], rows: List[Dict[str,Any]], split: Dict[str,Any]) -> str:
+    raw=(candidate["strategy_id"]+"|"+candidate["parameter_name"]+"|"+vp_dataset_fingerprint(rows)+"|"+
+         json.dumps(split.get("periods") or {},sort_keys=True)).encode()
+    return "ds_"+hashlib.sha256(raw).hexdigest()[:20]
+
+
+def _vp_test_reused(candidate: Dict[str,Any], split: Dict[str,Any]) -> Optional[Dict[str,Any]]:
+    test_start=(split.get("periods") or {}).get("test",{}).get("start")
+    if not test_start:return None
+    c=conn();row=c.execute("""SELECT d.dataset_version,d.test_start,d.test_end,r.candidate_id
+                               FROM validation_datasets d
+                               JOIN candidate_validation_runs r ON r.dataset_version=d.dataset_version
+                               JOIN candidate_strategies cs ON cs.candidate_id=r.candidate_id
+                               WHERE cs.strategy_id=? AND cs.parameter_name=? AND r.candidate_id<>?
+                               ORDER BY d.test_end DESC LIMIT 1""",
+                            (candidate["strategy_id"],candidate["parameter_name"],candidate["candidate_id"])).fetchone();c.close()
+    if row and row["test_end"] and str(test_start)<=str(row["test_end"]):return dict(row)
+    return None
+
+
+def _vp_seal_dataset(candidate: Dict[str,Any], rows: List[Dict[str,Any]], split: Dict[str,Any]) -> str:
+    version=_vp_dataset_version(candidate,rows,split);periods=split["periods"]
+    c=conn();c.execute("""INSERT OR IGNORE INTO validation_datasets(
+      dataset_version,created_ts,strategy_id,dataset_hash,trade_count,period_start,period_end,
+      training_start,training_end,validation_start,validation_end,test_start,test_end,sealed,details_json)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,1,?)""",
+      (version,now_iso(),candidate["strategy_id"],vp_dataset_fingerprint(rows),len(rows),
+       rows[0].get("entry_ts") if rows else None,rows[-1].get("exit_ts") if rows else None,
+       periods["train"].get("start"),periods["train"].get("end"),periods["validation"].get("start"),
+       periods["validation"].get("end"),periods["test"].get("start"),periods["test"].get("end"),
+       _tm_json({"candidate_id":candidate["candidate_id"],"sealed_test":True},{})))
+    for part in ("train","validation","test"):
+        for i,r in enumerate(split[part]):
+            c.execute("""INSERT OR IGNORE INTO validation_dataset_members(dataset_version,trade_id,partition,position)
+                         VALUES(?,?,?,?)""",(version,str(r.get("trade_id")),part,i))
+    c.commit();c.close();return version
+
+
+def _vp_registry_upsert(candidate: Dict[str,Any], state_name: str, validation_id: Optional[str]=None,
+                        score: Optional[float]=None, dataset_version: Optional[str]=None,
+                        reason: Optional[str]=None) -> None:
+    c=conn();c.execute("""INSERT INTO candidate_registry(
+      candidate_id,strategy_id,candidate_version,current_state,historical_validation_status,
+      validation_score,dataset_version,final_reason,latest_validation_id,auto_deploy,created_ts,updated_ts)
+      VALUES(?,?,?,?,?,?,?,?,?,0,?,?)
+      ON CONFLICT(candidate_id) DO UPDATE SET current_state=excluded.current_state,
+      historical_validation_status=COALESCE(excluded.historical_validation_status,candidate_registry.historical_validation_status),
+      validation_score=COALESCE(excluded.validation_score,candidate_registry.validation_score),
+      dataset_version=COALESCE(excluded.dataset_version,candidate_registry.dataset_version),
+      final_reason=COALESCE(excluded.final_reason,candidate_registry.final_reason),
+      latest_validation_id=COALESCE(excluded.latest_validation_id,candidate_registry.latest_validation_id),
+      auto_deploy=0,updated_ts=excluded.updated_ts""",
+      (candidate["candidate_id"],candidate["strategy_id"],candidate["candidate_version"],state_name,
+       state_name,score,dataset_version,reason,validation_id,now_iso(),now_iso()))
+    c.commit();c.close()
+
+
+def validate_candidate_advanced(candidate_id: str) -> Dict[str,Any]:
+    if not VALIDATION_PIPELINE_ENABLED:return {"enabled":False}
+    cand=_vp_candidate(candidate_id)
+    if not cand:return {"status":"FAILED","reason":"candidate not found"}
+    # Only Adaptive Learning accepted candidates can enter Step 7.
+    if cand.get("status")!="ACCEPTED_AS_CANDIDATE":
+        _vp_registry_upsert(cand,"FAILED",reason="candidate was not accepted by Adaptive Learning")
+        return {"status":"FAILED","reason":"candidate was not accepted by Adaptive Learning"}
+    rows=_vp_rows(cand["strategy_id"]);spec=_vp_candidate_spec(cand)
+    _vp_registry_upsert(cand,"VALIDATING",reason="historical validation started")
+    _vp_event(candidate_id,"VALIDATING","STARTED",None,{"trades":len(rows)})
+    split=vp_strict_temporal_split(rows,.60,.20,ADAPTIVE_LEARNING_EMBARGO_MINUTES)
+    if split.get("status")!="OK":
+        _vp_registry_upsert(cand,"INSUFFICIENT_DATA",reason="strict temporal split unavailable")
+        return {"status":"INSUFFICIENT_DATA","reason":"strict temporal split unavailable"}
+    reused=_vp_test_reused(cand,split)
+    if reused:
+        _vp_registry_upsert(cand,"INSUFFICIENT_DATA",reason="unseen test-set protection: prior OOS set already inspected")
+        _vp_event(candidate_id,"OUT_OF_SAMPLE","TEST_SET_REUSE_BLOCKED",None,reused)
+        return {"status":"INSUFFICIENT_DATA","reason":"TEST_SET_REUSE_BLOCKED","prior_test":reused}
+    ds=_vp_seal_dataset(cand,rows,split)
+    validation_id="val_"+hashlib.sha256((candidate_id+ds+_vp_code_hash()).encode()).hexdigest()[:20]
+    c=conn();existing=c.execute("SELECT * FROM candidate_validation_runs WHERE validation_id=?",(validation_id,)).fetchone();c.close()
+    if existing:return {"status":existing["final_status"],"validation_id":validation_id,"reproduced_existing":True}
+    cfg={"train_window":VALIDATION_TRAIN_WINDOW,"test_window":VALIDATION_TEST_WINDOW,"step_size":VALIDATION_STEP_SIZE,
+         "min_windows":VALIDATION_MIN_WINDOWS,"embargo_minutes":ADAPTIVE_LEARNING_EMBARGO_MINUTES,
+         "min_oos_trades":VALIDATION_MIN_OOS_TRADES,"monte_carlo_sims":VALIDATION_MONTE_CARLO_SIMS}
+    c=conn();c.execute("""INSERT INTO candidate_validation_runs(
+      validation_id,candidate_id,strategy_id,candidate_version,code_version,code_hash,dataset_version,
+      started_ts,state,walk_forward_config_json,final_status,final_reason,reproducibility_json,auto_deploy)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,0)""",
+      (validation_id,candidate_id,cand["strategy_id"],cand["candidate_version"],VERSION_TAG,_vp_code_hash(),ds,
+       now_iso(),"VALIDATING",_tm_json(cfg,{}),"VALIDATING","in progress",
+       _tm_json({"dataset_hash":vp_dataset_fingerprint(rows),"candidate_spec":spec,"config":cfg},{})))
+    c.commit();c.close()
+    result=vp_run_historical_validation(rows,spec,VALIDATION_TRAIN_WINDOW,VALIDATION_TEST_WINDOW,
+                                        VALIDATION_STEP_SIZE,VALIDATION_MIN_WINDOWS,
+                                        ADAPTIVE_LEARNING_EMBARGO_MINUTES,VALIDATION_MIN_OOS_TRADES,
+                                        VALIDATION_MONTE_CARLO_SIMS,int(ds[-8:],16))
+    # Store individual walk-forward windows.
+    c=conn()
+    for w in (result.get("walk_forward") or {}).get("windows",[]):
+        comp=w.get("comparison") or {}
+        c.execute("""INSERT OR REPLACE INTO validation_walk_forward_windows(
+          validation_id,window_no,train_start,train_end,test_start,test_end,
+          production_metrics_json,candidate_metrics_json,comparison_json)
+          VALUES(?,?,?,?,?,?,?,?,?)""",
+          (validation_id,int(w.get("window",0)),(w.get("train_period") or {}).get("start"),(w.get("train_period") or {}).get("end"),
+           (w.get("test_period") or {}).get("start"),(w.get("test_period") or {}).get("end"),
+           _tm_json(comp.get("production") or {},{}),_tm_json(comp.get("candidate") or {},{}),_tm_json(comp,{})))
+    hist_status=result.get("status")
+    if hist_status=="PAPER_TRADING_REQUIRED":registry_state="PAPER_TRADING"
+    elif hist_status=="INSUFFICIENT_DATA":registry_state="INSUFFICIENT_DATA"
+    elif hist_status=="PROMISING":registry_state="PROMISING"
+    else:registry_state="FAILED"
+    periods=result.get("split_periods") or {}
+    c.execute("""UPDATE candidate_validation_runs SET completed_ts=?,state=?,training_period_json=?,
+      validation_period_json=?,test_period_json=?,backtest_results_json=?,oos_results_json=?,
+      walk_forward_results_json=?,stress_results_json=?,sensitivity_results_json=?,regime_results_json=?,
+      monte_carlo_results_json=?,validation_score=?,final_status=?,final_reason=? WHERE validation_id=?""",
+      (now_iso(),registry_state,_tm_json(periods.get("train") or {},{}),_tm_json(periods.get("validation") or {},{}),
+       _tm_json(periods.get("test") or {},{}),_tm_json(result.get("backtest") or {},{}),
+       _tm_json(result.get("out_of_sample") or {},{}),_tm_json(result.get("walk_forward") or {},{}),
+       _tm_json(result.get("stress_test") or {},{}),_tm_json(result.get("parameter_sensitivity") or {},{}),
+       _tm_json(result.get("regime_analysis") or {},{}),_tm_json(result.get("monte_carlo") or {},{}),
+       result.get("validation_score"),registry_state,"; ".join(result.get("reasons") or []),validation_id))
+    if registry_state=="PAPER_TRADING":
+        c.execute("""INSERT INTO candidate_registry(candidate_id,strategy_id,candidate_version,current_state,
+          historical_validation_status,validation_score,dataset_version,paper_started_ts,latest_validation_id,
+          final_reason,auto_deploy,created_ts,updated_ts)
+          VALUES(?,?,?,?,?,?,?,?,?,?,0,?,?)
+          ON CONFLICT(candidate_id) DO UPDATE SET current_state='PAPER_TRADING',historical_validation_status='PASSED',
+          validation_score=excluded.validation_score,dataset_version=excluded.dataset_version,
+          paper_started_ts=COALESCE(candidate_registry.paper_started_ts,excluded.paper_started_ts),
+          latest_validation_id=excluded.latest_validation_id,final_reason=excluded.final_reason,auto_deploy=0,
+          updated_ts=excluded.updated_ts""",
+          (candidate_id,cand["strategy_id"],cand["candidate_version"],"PAPER_TRADING","PASSED",result.get("validation_score"),
+           ds,now_iso(),validation_id,"mandatory real-time paper trading",now_iso(),now_iso()))
+    else:
+        c.execute("""INSERT INTO candidate_registry(candidate_id,strategy_id,candidate_version,current_state,
+          historical_validation_status,validation_score,dataset_version,latest_validation_id,final_reason,
+          auto_deploy,created_ts,updated_ts) VALUES(?,?,?,?,?,?,?,?,?,0,?,?)
+          ON CONFLICT(candidate_id) DO UPDATE SET current_state=excluded.current_state,
+          historical_validation_status=excluded.historical_validation_status,validation_score=excluded.validation_score,
+          dataset_version=excluded.dataset_version,latest_validation_id=excluded.latest_validation_id,
+          final_reason=excluded.final_reason,auto_deploy=0,updated_ts=excluded.updated_ts""",
+          (candidate_id,cand["strategy_id"],cand["candidate_version"],registry_state,registry_state,
+           result.get("validation_score"),ds,validation_id,"; ".join(result.get("reasons") or []),now_iso(),now_iso()))
+    c.commit();c.close()
+    _vp_event(candidate_id,"HISTORICAL_VALIDATION",registry_state,validation_id,
+              {"score":result.get("validation_score"),"reasons":result.get("reasons"),"dataset_version":ds})
+    return {"status":registry_state,"validation_id":validation_id,"dataset_version":ds,"result":result,"auto_deploy":False}
+
+
+def _vp_live_entry_row(r: Dict[str,Any],conf: Dict[str,Any],director: Dict[str,Any]) -> Dict[str,Any]:
+    rg=r.get("market_regime") if isinstance(r.get("market_regime"),dict) else {}
+    return {"strategy_confidence_entry":conf.get("probability"),"director_confidence_entry":director.get("confidence"),
+            "market_regime_entry":rg.get("market_regime"),"volatility_state_entry":rg.get("volatility_state")}
+
+
+def record_candidate_paper_signals(signal_id: int,r: Dict[str,Any],conf: Dict[str,Any],director: Dict[str,Any],
+                                   risk_shadow: Dict[str,Any],observed_price: float) -> int:
+    if r.get("signal") not in ("BUY","SELL") or not observed_price:return 0
+    strategy=setup_variant(r);c=conn();regs=[dict(x) for x in c.execute("""SELECT cr.*,cs.change_type,cs.parameter_name,
+      cs.current_value_json,cs.proposed_value_json FROM candidate_registry cr JOIN candidate_strategies cs
+      ON cs.candidate_id=cr.candidate_id WHERE cr.strategy_id=? AND cr.current_state='PAPER_TRADING'""",(strategy,)).fetchall()];c.close()
+    if not regs:return 0
+    live=_vp_live_entry_row(r,conf,director);made=0
+    for reg in regs:
+        try:pv=json.loads(reg.get("proposed_value_json") or "null")
+        except Exception:pv=None
+        spec={"change_type":reg["change_type"],"parameter_name":reg["parameter_name"],"proposed_value":pv}
+        if not vp_candidate_passes(spec,live):continue
+        entry=float(r["entry"]);stop=float(r["stop"]);target=float(r.get("managed_target",r["target"]));risk=abs(entry-stop)
+        if risk<=0:continue
+        deviation=abs(float(observed_price)-entry)/risk
+        executable=int(deviation<=VALIDATION_PAPER_MAX_ENTRY_DEVIATION_R)
+        candle=_parse_iso(r.get("candle_ts"));latency=(datetime.now(timezone.utc)-candle).total_seconds() if candle else None
+        rg=r.get("market_regime") if isinstance(r.get("market_regime"),dict) else {}
+        c=conn();before=c.total_changes;c.execute("""INSERT OR IGNORE INTO candidate_paper_trades(
+          candidate_id,signal_id,created_ts,candle_ts,instrument,direction,entry,stop,target,risk,observed_entry,
+          entry_deviation_r,latency_seconds,executable,status,market_regime,volatility_state,strategy_confidence,
+          director_confidence,risk_multiplier) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'PENDING',?,?,?,?,?)""",
+          (reg["candidate_id"],signal_id,now_iso(),r.get("candle_ts"),r["instrument"],r["signal"],entry,stop,target,risk,
+           float(observed_price),deviation,latency,executable,rg.get("market_regime"),rg.get("volatility_state"),
+           conf.get("probability"),director.get("confidence"),risk_shadow.get("risk_multiplier")))
+        made+=int(c.total_changes>before);c.commit();c.close()
+    return made
+
+
+def resolve_candidate_paper_trades(inst: str,m1: List[Dict[str,Any]]) -> int:
+    c=conn();rows=c.execute("""SELECT * FROM candidate_paper_trades WHERE status='PENDING' AND instrument=?
+                              ORDER BY id""",(inst,)).fetchall();n=0
+    for row in rows:
+        if not int(row["executable"]):
+            c.execute("UPDATE candidate_paper_trades SET status='MISSED',resolved_ts=?,note=? WHERE id=?",
+                      (now_iso(),"entry deviation exceeded paper execution tolerance",row["id"]));n+=1;continue
+        fake={"candle_ts":row["candle_ts"],"created_ts":row["created_ts"],"direction":row["direction"],
+              "entry":row["entry"],"stop":row["stop"],"target":row["target"]}
+        out=resolve_one(fake,m1)
+        if out:
+            rr=abs(float(row["target"])-float(row["entry"]))/float(row["risk"]) if int(out["label"])==1 else -1.0
+            sim_exit=float(row["target"]) if int(out["label"])==1 else float(row["stop"])
+            c.execute("""UPDATE candidate_paper_trades SET status=?,label=?,resolved_ts=?,bars_to_resolution=?,
+              mfe_r=?,mae_r=?,realized_r=?,simulated_exit=?,note=? WHERE id=?""",
+              (out["status"],out["label"],now_iso(),out["bars"],out["mfe_r"],out["mae_r"],rr,sim_exit,out["note"],row["id"]));n+=1
+    c.commit();c.close()
+    if n:evaluate_all_candidate_paper_states()
+    return n
+
+
+def _vp_paper_metrics(candidate_id: str) -> Dict[str,Any]:
+    c=conn();rows=[dict(x) for x in c.execute("""SELECT * FROM candidate_paper_trades WHERE candidate_id=?
+                                                 ORDER BY created_ts,id""",(candidate_id,)).fetchall()];c.close()
+    resolved=[r for r in rows if r.get("status") in ("DONE","WIN","LOSS") and r.get("realized_r") is not None]
+    vals=[float(r["realized_r"]) for r in resolved]
+    wins=[x for x in vals if x>0];loss=[x for x in vals if x<0];gp=sum(wins);gl=abs(sum(loss));pf=gp/gl if gl else (999 if gp else None)
+    curve=peak=dd=0
+    for x in vals:curve+=x;peak=max(peak,curve);dd=max(dd,peak-curve)
+    dates=[_parse_iso(r.get("created_ts")) for r in rows if _parse_iso(r.get("created_ts"))]
+    days=(max(dates)-min(dates)).total_seconds()/86400 if len(dates)>=2 else 0
+    regimes={r.get("market_regime") for r in resolved if r.get("market_regime")}
+    missed=sum(1 for r in rows if r.get("status")=="MISSED")
+    recent=vals[-10:] if len(vals)>=10 else []
+    prior=vals[:-10] if len(vals)>=20 else []
+    recent_exp=sum(recent)/len(recent) if recent else None
+    prior_exp=sum(prior)/len(prior) if prior else None
+    degradation=bool(prior_exp is not None and prior_exp>0 and recent_exp is not None and recent_exp<0)
+    observed=[float(r["observed_entry"]) for r in rows if r.get("observed_entry") is not None]
+    exits=[float(r["simulated_exit"]) for r in resolved if r.get("simulated_exit") is not None]
+    return {"trades":len(resolved),"signals":len(rows),"missed":missed,"missed_rate":missed/len(rows) if rows else 0,
+            "days":days,"regimes":len(regimes),"win_rate":len(wins)/len(vals) if vals else None,
+            "expectancy_r":sum(vals)/len(vals) if vals else None,"profit_factor":pf,"max_drawdown_r":dd,
+            "recent_expectancy_r":recent_exp,"prior_expectancy_r":prior_exp,"paper_degradation":degradation,
+            "avg_observed_entry":sum(observed)/len(observed) if observed else None,
+            "avg_simulated_exit":sum(exits)/len(exits) if exits else None,
+            "avg_entry_deviation_r":sum(float(r.get("entry_deviation_r") or 0) for r in rows)/len(rows) if rows else None,
+            "avg_latency_seconds":sum(float(r.get("latency_seconds") or 0) for r in rows)/len(rows) if rows else None}
+
+
+def _vp_production_paper_benchmark(strategy: str,paper_start: str) -> Dict[str,Any]:
+    c=conn();rows=[dict(x) for x in c.execute("""SELECT ls.label,s.rr,s.ts FROM learning_samples ls
+      JOIN signals s ON s.id=ls.signal_id WHERE ls.label IN (0,1) AND s.setup_variant=? AND s.ts>=?
+      ORDER BY s.id""",(strategy,paper_start)).fetchall()];c.close()
+    vals=[float(r.get("rr") or MIN_RR) if int(r["label"])==1 else -1.0 for r in rows]
+    wins=[x for x in vals if x>0];loss=[x for x in vals if x<0];gp=sum(wins);gl=abs(sum(loss));pf=gp/gl if gl else (999 if gp else None)
+    curve=peak=dd=0
+    for x in vals:curve+=x;peak=max(peak,curve);dd=max(dd,peak-curve)
+    return {"trades":len(vals),"win_rate":len(wins)/len(vals) if vals else None,"expectancy_r":sum(vals)/len(vals) if vals else None,
+            "profit_factor":pf,"max_drawdown_r":dd}
+
+
+def _vp_peer_paper_comparison(candidate_id: str, strategy: str) -> List[Dict[str,Any]]:
+    c=conn();ids=[x["candidate_id"] for x in c.execute("""SELECT candidate_id FROM candidate_registry
+      WHERE strategy_id=? AND candidate_id<>? AND current_state IN ('PAPER_TRADING','READY_FOR_REVIEW','CANDIDATE_NEEDS_REEVALUATION')""",
+      (strategy,candidate_id)).fetchall()];c.close()
+    return [{"candidate_id":cid,"metrics":_vp_paper_metrics(cid)} for cid in ids]
+
+
+def evaluate_candidate_paper_state(candidate_id: str) -> Dict[str,Any]:
+    c=conn();reg=c.execute("SELECT * FROM candidate_registry WHERE candidate_id=?",(candidate_id,)).fetchone();c.close()
+    if not reg:return {"status":"FAILED","reason":"candidate not in registry"}
+    reg=dict(reg);paper=_vp_paper_metrics(candidate_id)
+    benchmark=_vp_production_paper_benchmark(reg["strategy_id"],reg.get("paper_started_ts") or now_iso())
+    c=conn();vr=c.execute("SELECT * FROM candidate_validation_runs WHERE validation_id=?",(reg.get("latest_validation_id"),)).fetchone();c.close()
+    expected={}
+    if vr:
+        try:expected=json.loads(vr["oos_results_json"] or "{}").get("comparison",{}).get("candidate",{})
+        except Exception:expected={}
+    peers=_vp_peer_paper_comparison(candidate_id,reg["strategy_id"])
+    min_ok=paper["trades"]>=VALIDATION_PAPER_MIN_TRADES and paper["days"]>=VALIDATION_PAPER_MIN_DAYS and paper["regimes"]>=VALIDATION_PAPER_MIN_REGIMES
+    if not min_ok:
+        state_name="PAPER_TRADING";div="INSUFFICIENT_PAPER_DATA";reason="mandatory paper minimum not reached"
+    else:
+        exp_expected=expected.get("realized_r_expectancy")
+        exp_paper=paper.get("expectancy_r")
+        divergence=False
+        if exp_expected is not None and exp_paper is not None:
+            scale=max(abs(float(exp_expected)),0.10);divergence=abs(float(exp_paper)-float(exp_expected))/scale>VALIDATION_BACKTEST_LIVE_EXPECTANCY_TOL
+        if paper.get("missed_rate",0)>.20:divergence=True
+        severe=(paper.get("expectancy_r") is not None and paper["expectancy_r"]<0 and (paper.get("profit_factor") or 0)<1.0)
+        if severe:
+            state_name="CANDIDATE_REJECTED_AFTER_PAPER";div="CANDIDATE_REJECTED_AFTER_PAPER";reason="paper expectancy/PF lost edge"
+        elif paper.get("paper_degradation"):
+            state_name="CANDIDATE_NEEDS_REEVALUATION";div="PAPER_DEGRADATION";reason="recent paper expectancy turned negative after earlier positive paper behavior"
+        elif divergence:
+            state_name="CANDIDATE_NEEDS_REEVALUATION";div="BACKTEST_LIVE_DIVERGENCE";reason="paper behavior diverges materially from historical expectations"
+        else:
+            state_name="READY_FOR_REVIEW";div="CONSISTENT";reason="historical validation and mandatory paper evidence passed; manual review required"
+    c=conn();c.execute("""UPDATE candidate_registry SET current_state=?,paper_updated_ts=?,paper_trade_count=?,paper_regime_count=?,
+      paper_days=?,divergence_status=?,final_reason=?,auto_deploy=0,updated_ts=? WHERE candidate_id=?""",
+      (state_name,now_iso(),paper["trades"],paper["regimes"],paper["days"],div,reason,now_iso(),candidate_id))
+    if vr:c.execute("UPDATE candidate_validation_runs SET paper_results_json=?,final_status=?,final_reason=?,auto_deploy=0 WHERE validation_id=?",
+                    (_tm_json({"candidate":paper,"production_benchmark":benchmark,"peer_candidates":peers,"expected_backtest":expected,"divergence":div},{}),state_name,reason,reg.get("latest_validation_id")))
+    c.commit();c.close();_vp_event(candidate_id,"PAPER_EVALUATION",state_name,reg.get("latest_validation_id"),{"paper":paper,"benchmark":benchmark,"divergence":div})
+    return {"status":state_name,"divergence":div,"reason":reason,"paper":paper,"production_benchmark":benchmark,
+            "peer_candidates":peers,"expected_backtest":expected,"auto_deploy":False}
+
+
+def evaluate_all_candidate_paper_states() -> Dict[str,Any]:
+    c=conn();ids=[x["candidate_id"] for x in c.execute("SELECT candidate_id FROM candidate_registry WHERE current_state='PAPER_TRADING'").fetchall()];c.close()
+    return {"results":[evaluate_candidate_paper_state(x) for x in ids],"auto_deploy":False}
+
+
+def candidate_registry_snapshot() -> List[Dict[str,Any]]:
+    c=conn();rows=c.execute("SELECT * FROM candidate_registry ORDER BY created_ts,id" if False else "SELECT * FROM candidate_registry ORDER BY created_ts,candidate_id").fetchall();c.close()
+    return [dict(x) for x in rows]
+
 def execution_decision(r: Dict[str, Any], conf: Dict[str, Any]) -> Dict[str, Any]:
     if r["signal"] == "WAIT":
         return {"execute": False, "reason": "WAIT: no hay señal direccional"}
@@ -1576,6 +4667,10 @@ def execution_decision(r: Dict[str, Any], conf: Dict[str, Any]) -> Dict[str, Any
     if not research_gate["ok"]:
         keys="; ".join(f"{x['source']}:{x['rule_key']}" for x in research_gate.get("vetoes",[])[:5])
         return {"execute":False,"reason":f"Research veto(s): {keys}"}
+
+    strategy_gate=strategy_execution_gate(r)
+    if not strategy_gate["ok"]:
+        return {"execute":False,"reason":"Strategy health veto: "+strategy_gate["reason"]}
 
     rg = reentry_guard(r)
     if not rg["ok"]:
@@ -2701,6 +5796,10 @@ def resolve_pending(inst: str, m1: List[Dict[str, Any]]) -> int:
             c.execute("""UPDATE learning_samples SET status=?,label=?,resolved_ts=?,bars_to_resolution=?,mfe_r=?,mae_r=?,note=? WHERE id=?""",
                       (out["status"], out["label"], now_iso(), out["bars"], out["mfe_r"], out["mae_r"], out["note"], s["id"]))
             resolved += 1
+            try:
+                attach_ai_director_outcome(int(row["signal_id"]), int(label))
+            except Exception as e:
+                log.warning("AI_DIRECTOR outcome link failed signal_id=%s err=%s", row["signal_id"], e)
     c.commit(); c.close()
     return resolved
 
@@ -2741,6 +5840,26 @@ def learning_stats() -> Dict[str, Any]:
         "weekend_research":{"enabled":WEEKEND_RESEARCH_ENABLED,"signal_context_hours":WEEKEND_SIGNAL_CONTEXT_HOURS,
                             "reaction_horizons_hours":list(WEEKEND_REACTION_HORIZONS),
                             "creates_trade_labels_while_closed":False},
+        "strategy_self_evaluation":{"enabled":STRATEGY_SELF_EVAL_ENABLED,"auto_pause":STRATEGY_AUTO_PAUSE,
+                                    "baseline_window":STRATEGY_BASELINE_WINDOW,"recent_window":STRATEGY_RECENT_WINDOW,
+                                    "recovery_samples":STRATEGY_RECOVERY_SAMPLES,"health":all_strategy_health()},
+        "adaptive_risk_engine":{"enabled":RISK_ENGINE_ENABLED,"shadow_mode":True,
+                                "authority_over_execution":False,
+                                "authority_over_position_size":False,
+                                "rules_self_modifiable":False},
+        "trade_memory":{"enabled":TRADE_MEMORY_ENABLED,
+                        "storage":"SQLite existing DB",
+                        "min_sample_size":TRADE_MEMORY_MIN_SAMPLE_SIZE,
+                        "auto_strategy_changes":False,
+                        "degradation":trade_memory_recent_degradation()},
+        "adaptive_learning_engine":{"enabled":ADAPTIVE_LEARNING_ENABLED,
+                                    "observation_only":True,
+                                    "candidate_activation_authority":False,
+                                    "production_mutation":False},
+        "candidate_validation_pipeline":{"enabled":VALIDATION_PIPELINE_ENABLED,
+                                         "maximum_state":VALIDATION_MAX_STATE,
+                                         "paper_trading_mandatory":True,
+                                         "auto_deploy":False},
         "retrain_policy":retrain_policy
     }
 
@@ -2838,16 +5957,22 @@ async def scan(client: httpx.AsyncClient, inst: str) -> Dict[str, Any]:
         candles(client, inst, "M1", max(220, OUTCOME_HORIZON_MIN + 30))
     )
     current_price=float(m1[-1]["c"]) if m1 else 0.0
+    trade_memory_excursions=update_trade_memory_excursions(inst,m1) if TRADE_MEMORY_ENABLED else 0
+    trade_memory_reconcile=await reconcile_trade_memory(client,inst) if TRADE_MEMORY_ENABLED else {"enabled":False}
     managed_changes=await manage_open_trades(client,inst,current_price) if current_price else 0
     resolved = resolve_pending(inst, m1)
     shadow_resolved = resolve_shadow_trials(inst, m1)
-    if resolved or shadow_resolved:
+    candidate_paper_resolved = resolve_candidate_paper_trades(inst,m1) if VALIDATION_PIPELINE_ENABLED else 0
+    deployment_live_reconcile = await deployment_manager.reconcile(client) if DEPLOYMENT_MANAGER_ENABLED and CANARY_ACCOUNT and CANARY_TOKEN else {"checked":0,"closed":0,"errors":[]}
+    if resolved or shadow_resolved or candidate_paper_resolved:
         refresh_discovered_patterns()
         refresh_filter_hypotheses()
         refresh_external_hypotheses()
         autonomous_discovery_refresh()
         review_active_research_rules()
         promote_validated_research_rules()
+        state["strategy_health"]=evaluate_all_strategy_health()
+        reconcile_ai_director_outcomes()
         # Close the learning loop as soon as enough labeled outcomes exist instead
         # of waiting for the hourly maintenance tick. Training still enforces its
         # own minimum sample and temporal-validation requirements.
@@ -2857,8 +5982,15 @@ async def scan(client: httpx.AsyncClient, inst: str) -> Dict[str, Any]:
             except Exception as e: log.exception("evidence-gated learning refresh failed: %s",e)
     if AUTO_PROMOTE_RESEARCH:
         promote_validated_research_rules()
+    if STRATEGY_SELF_EVAL_ENABLED:
+        state["strategy_health"]=evaluate_all_strategy_health()
 
     r = analyze(h1, m15, m5, m1, inst)
+
+    if MARKET_REGIME_ENABLED:
+        log_market_regime(inst,r["market_regime"])
+        state.setdefault("market_regimes",{})[inst]=r["market_regime"]
+        record_market_regime(inst,r.get("candle_ts"),r["market_regime"])
 
     weekend_session=ensure_weekend_session(inst,current_price)
     weekend_reaction=update_weekend_reactions(inst,current_price) if current_price else {"updated":False}
@@ -2882,6 +6014,7 @@ async def scan(client: httpx.AsyncClient, inst: str) -> Dict[str, Any]:
         "variant": "WAIT", "mature": False, "recent_win_rate": None,
         "performance_penalty": 0.0, "required_confidence": EXECUTION_MIN_CONFIDENCE
     }
+    r["strategy_health"]=strategy_health_snapshot(setup_variant(r)) if r["signal"]!="WAIT" else None
     r["research_governance"]={
         "auto_promote":AUTO_PROMOTE_RESEARCH,
         "min_samples":AUTO_PROMOTE_MIN_SAMPLES,
@@ -2893,8 +6026,55 @@ async def scan(client: httpx.AsyncClient, inst: str) -> Dict[str, Any]:
         "compatibility_required":MULTI_FILTER_COMPAT_ENABLED,
         "autonomous_discovery":AUTONOMOUS_DISCOVERY_ENABLED
     }
+    # AI Strategy Director — OBSERVATION ONLY.
+    # It records what it would recommend but does not alter r, conf, units or execution_decision().
+    current_regime = r.get("market_regime")
+    if not isinstance(current_regime, dict):
+        current_regime = state.get("market_regimes",{}).get(inst)
+    director = ai_strategy_director_recommendation(
+        instrument=inst,
+        variant=setup_variant(r),
+        regime=current_regime,
+        signal_confidence=conf.get("dynamic_confidence")
+    )
+    director_id = log_ai_director_decision(director)
+    r["ai_strategy_director"] = director
+    r["ai_strategy_director_decision_id"] = director_id
+
+    # Adaptive Risk Engine: observation/shadow only.
+    # Read-only broker context; the recommendation is NOT passed into execution_decision().
+    try:
+        broker_risk_context = await build_broker_risk_context(client)
+        persist_portfolio_risk_context(broker_risk_context)
+    except Exception as e:
+        broker_risk_context = {
+            "balance":None,"nav":None,"peak_nav":None,"current_drawdown":None,
+            "margin_used":None,"margin_usage":None,"open_positions":0,
+            "portfolio_open_risk":0.0,"open_instruments":[],
+            "consecutive_losses":_executed_loss_streak(),
+            "data_stale":False,"system_abnormal":True,"errors":[str(e)]
+        }
+        persist_portfolio_risk_context(broker_risk_context)
+
+    risk_shadow = adaptive_risk_recommendation(
+        instrument=inst,
+        variant=setup_variant(r),
+        regime=current_regime,
+        director=director,
+        signal_confidence=conf.get("dynamic_confidence"),
+        risk_context=broker_risk_context,
+        requested_units=UNITS
+    )
+    risk_shadow_id = log_adaptive_risk_decision(risk_shadow)
+    r["adaptive_risk_engine"] = risk_shadow
+    r["adaptive_risk_decision_id"] = risk_shadow_id
+
     decision = execution_decision(r, conf)
+    if DEPLOYMENT_MANAGER_ENABLED and deployment_manager.kill("SYSTEM").get("active"):
+        decision={"execute":False,"reason":"GLOBAL KILL SWITCH: new trades blocked"}
+    pre_execution_reason = str(decision["reason"])
     executed, oid = 0, ""
+    trade_id=""; fill={}; fill_price=None; slippage=None
     if AUTO and decision["execute"]:
         x = await execute(client, r)
         if x and not x.get("skipped"):
@@ -2914,11 +6094,63 @@ async def scan(client: httpx.AsyncClient, inst: str) -> Dict[str, Any]:
         decision["reason"] += "; AUTO_TRADE=false"
 
     signal_id = save_signal(r, executed, oid, mlp, conf, decision["reason"])
+    candidate_paper_created = record_candidate_paper_signals(signal_id,r,conf,director,risk_shadow,current_price) if VALIDATION_PIPELINE_ENABLED else 0
+
+    candidate_live_results=[]
+    if DEPLOYMENT_MANAGER_ENABLED and DEPLOYMENT_LIVE_EXECUTION_ENABLED and CANARY_OANDA_ENV=="live" and r["signal"] in ("BUY","SELL"):
+        live_deps=deployment_manager.live(setup_variant(r))
+        if live_deps:
+            try:
+                canary_health=await deployment_manager.account_health(client)
+            except Exception as e:
+                canary_health={"broker_ok":False,"data_ok":False,"system_abnormal":True,"errors":[str(e)]}
+            for dep in live_deps:
+                ctx={"instrument":inst,"strategy_confidence_entry":conf.get("probability"),
+                     "director_confidence_entry":director.get("confidence"),
+                     "director_state":director.get("recommended_state"),
+                     "market_regime_entry":current_regime.get("market_regime") if isinstance(current_regime,dict) else None,
+                     "volatility_state_entry":current_regime.get("volatility_state") if isinstance(current_regime,dict) else None}
+                try:
+                    canary_risk=adaptive_risk_recommendation(
+                        instrument=inst,variant=setup_variant(r),regime=current_regime,director=director,
+                        signal_confidence=conf.get("probability"),
+                        risk_context={"nav":canary_health.get("nav"),"current_drawdown":canary_health.get("current_drawdown"),
+                                      "margin_usage":canary_health.get("margin_usage"),"portfolio_open_risk":0.0,
+                                      "open_instruments":canary_health.get("open_instruments") or [],
+                                      "consecutive_losses":0,"data_stale":not canary_health.get("data_ok"),
+                                      "system_abnormal":canary_health.get("system_abnormal")},
+                        requested_units=UNITS)
+                    gate=deployment_manager.signal_gate(dep,ctx,canary_risk,canary_health)
+                    if not gate["allow"]:
+                        candidate_live_results.append({"candidate_id":dep["candidate_id"],"executed":False,"reasons":gate["reasons"]})
+                        continue
+                    allocation=float(dep["allocation_fraction"])
+                    approved=min(RISK_BASE_FRACTION*allocation,float(canary_risk.get("approved_risk") or 0))
+                    if approved<=0:
+                        candidate_live_results.append({"candidate_id":dep["candidate_id"],"executed":False,"reasons":["RISK_ENGINE_APPROVED_ZERO"]})
+                        continue
+                    units=max(1,int(math.floor(UNITS*min(1.0,approved/max(RISK_BASE_FRACTION,1e-9)))))
+                    sig={"signal_id":signal_id,"instrument":inst,"signal":r["signal"],"entry":r["entry"],"stop":r["stop"],
+                         "target":r["target"],"managed_target":r.get("managed_target",r["target"]),
+                         "market_regime":ctx["market_regime_entry"],"volatility_state":ctx["volatility_state_entry"],
+                         "director_state":ctx["director_state"],"director_confidence":ctx["director_confidence_entry"],
+                         "risk_multiplier":canary_risk.get("risk_multiplier")}
+                    x=await deployment_manager.execute(client,dep,sig,units,approved)
+                    candidate_live_results.append({"executed":True,**x})
+                except Exception as e:
+                    deployment_manager.pause(dep["candidate_id"],f"fail-safe execution error: {e}","EXECUTION_FAIL_SAFE")
+                    candidate_live_results.append({"candidate_id":dep["candidate_id"],"executed":False,"error":str(e)})
     if executed:
         c=conn(); c.execute("""INSERT INTO execution_audit(ts,signal_id,instrument,order_id,trade_id,expected_entry,fill_price,slippage_pips,
           stop_loss_ok,take_profit_ok,protection_status,detail) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
           (now_iso(),signal_id,inst,oid,trade_id,r["entry"],fill_price,slippage,int(protection["sl_ok"]),int(protection["tp_ok"]),protection["status"],protection["detail"]))
         c.commit(); c.close()
+        record_trade_memory_entry(
+            trade_id=trade_id,signal_id=signal_id,order_id=oid,r=r,conf=conf,
+            director=director,risk_shadow=risk_shadow,
+            pre_execution_reason=pre_execution_reason,fill=fill,
+            fill_price=float(fill_price),entry_slippage_pips=slippage
+        )
     save_decision(r, conf, executed, decision["reason"])
     return {
         **r,
@@ -2939,7 +6171,13 @@ async def scan(client: httpx.AsyncClient, inst: str) -> Dict[str, Any]:
         "trend_score": r.get("trend_score",0.0),
         "managed_target": r.get("managed_target",r.get("target")),
         "learning_resolved_this_cycle": resolved,
-        "shadow_resolved_this_cycle": shadow_resolved
+        "shadow_resolved_this_cycle": shadow_resolved,
+        "trade_memory_excursions_updated": trade_memory_excursions,
+        "trade_memory_reconciliation": trade_memory_reconcile,
+        "candidate_paper_created": candidate_paper_created,
+        "candidate_paper_resolved_this_cycle": candidate_paper_resolved,
+        "candidate_live_results": candidate_live_results,
+        "deployment_live_reconciliation": deployment_live_reconcile
     }
 
 
@@ -3061,6 +6299,8 @@ async def watchdog_loop():
 @app.on_event("startup")
 async def start():
     conn().close()
+    deployment_manager.ensure_schema()
+    deployment_manager.mark_restart()
     app.state.restart_requested = False
     app.state.worker_supervisor_task = asyncio.create_task(supervised_worker_loop(), name="scanner-supervisor")
     app.state.watchdog_task = asyncio.create_task(watchdog_loop(), name="scanner-watchdog")
@@ -3088,6 +6328,30 @@ async def health():
             "scanner": {**snap, "stale_effective": stale_effective}}
 
 
+@app.get("/api/market-regime")
+async def market_regime_api(instrument: Optional[str] = None, limit: int = 100):
+    c=conn()
+    if instrument:
+        inst=instrument.upper().replace("/","_")
+        rows=c.execute("""SELECT * FROM market_regime_history
+                          WHERE instrument=? ORDER BY id DESC LIMIT ?""",
+                       (inst,min(max(limit,1),500))).fetchall()
+    else:
+        rows=c.execute("""SELECT * FROM market_regime_history
+                          ORDER BY id DESC LIMIT ?""",
+                       (min(max(limit,1),500),)).fetchall()
+    c.close()
+    history=[]
+    for row in rows:
+        d=dict(row)
+        try:d["supporting_metrics"]=json.loads(d.pop("supporting_metrics_json") or "{}")
+        except Exception:d["supporting_metrics"]={}
+        history.append(d)
+    return {"enabled":MARKET_REGIME_ENABLED,
+            "current":state.get("market_regimes",{}),
+            "history":history}
+
+
 @app.get("/api/status")
 async def status():
     return {**state, "practice_only": True, "operation_count_limit": None, "auto_trade": AUTO,
@@ -3096,6 +6360,8 @@ async def status():
             "execution_min_confidence": EXECUTION_MIN_CONFIDENCE, "confidence_min_samples": CONFIDENCE_MIN_SAMPLES,
             "single_position_per_instrument": SINGLE, "adaptive_confidence": ADAPTIVE_CONFIDENCE,
             "ml_shadow": ML_SHADOW, "ml_role": "secondary_refinement",
+            "market_regime_enabled": MARKET_REGIME_ENABLED,
+            "market_regimes": state.get("market_regimes",{}),
             "scanner": scanner_health_snapshot()}
 
 
@@ -3207,6 +6473,291 @@ async def research_knowledge(limit: int = 100):
 
 
 
+
+
+
+
+
+@app.get("/api/deployment")
+async def deployment_dashboard_api():
+    return deployment_manager.dashboard()
+
+@app.get("/api/deployment/{candidate_id}")
+async def deployment_candidate_api(candidate_id: str):
+    dep=next((x for x in deployment_manager.dashboard()["deployments"] if x["candidate_id"]==candidate_id),None)
+    return {"readiness":deployment_manager.readiness(candidate_id),"deployment":dep,
+            "evaluation":deployment_manager.evaluate(candidate_id,auto=False) if dep else None}
+
+@app.post("/api/deployment/{candidate_id}/approve-canary")
+async def deployment_approve_api(candidate_id: str, approval_source: str, approval_note: str=""):
+    return deployment_manager.approve(candidate_id,approval_source,approval_note)
+
+@app.post("/api/deployment/{candidate_id}/start-canary")
+async def deployment_start_api(candidate_id: str, approval_source: str):
+    return await deployment_manager.start(candidate_id,approval_source)
+
+@app.post("/api/deployment/{candidate_id}/resume")
+async def deployment_resume_api(candidate_id: str, approval_source: str):
+    return await deployment_manager.resume(candidate_id,approval_source)
+
+@app.post("/api/deployment/{candidate_id}/promote")
+async def deployment_promote_api(candidate_id: str, approval_source: str):
+    return deployment_manager.promote(candidate_id,approval_source,risk_ok=True)
+
+@app.post("/api/deployment/{candidate_id}/pause")
+async def deployment_pause_api(candidate_id: str, reason: str, approval_source: str):
+    return deployment_manager.pause(candidate_id,reason,approval_source)
+
+@app.post("/api/deployment/{candidate_id}/rollback")
+async def deployment_rollback_api(candidate_id: str, reason: str, approval_source: str):
+    return deployment_manager.rollback(candidate_id,reason,approval_source)
+
+@app.post("/api/deployment/kill-switch")
+async def deployment_kill_api(scope: str, active: bool, reason: str, source: str):
+    return deployment_manager.set_kill(scope,active,reason,source)
+
+@app.post("/api/deployment/reconcile")
+async def deployment_reconcile_api():
+    async with httpx.AsyncClient() as client:
+        result=await deployment_manager.reconcile(client)
+    return {"result":result,"dashboard":deployment_manager.dashboard()}
+
+
+@app.get("/api/candidate-validation")
+async def candidate_validation_api(limit: int = 100):
+    c=conn();runs=c.execute("SELECT * FROM candidate_validation_runs ORDER BY started_ts DESC LIMIT ?",(min(max(limit,1),500),)).fetchall();
+    events=c.execute("SELECT * FROM validation_events ORDER BY id DESC LIMIT ?",(min(max(limit*2,1),1000),)).fetchall();c.close()
+    return {"enabled":VALIDATION_PIPELINE_ENABLED,"maximum_state":VALIDATION_MAX_STATE,"auto_deploy":False,
+            "registry":candidate_registry_snapshot(),"validation_runs":[dict(x) for x in runs],"events":[dict(x) for x in events]}
+
+
+@app.post("/api/candidate-validation/{candidate_id}/run")
+async def candidate_validation_run_api(candidate_id: str):
+    return validate_candidate_advanced(candidate_id)
+
+
+@app.get("/api/candidate-validation/{candidate_id}/paper")
+async def candidate_validation_paper_api(candidate_id: str):
+    return evaluate_candidate_paper_state(candidate_id)
+
+
+@app.get("/api/candidate-validation/{candidate_id}/walk-forward")
+async def candidate_validation_walk_forward_api(candidate_id: str):
+    c=conn();reg=c.execute("SELECT latest_validation_id FROM candidate_registry WHERE candidate_id=?",(candidate_id,)).fetchone()
+    rows=[] if not reg or not reg["latest_validation_id"] else [dict(x) for x in c.execute(
+        "SELECT * FROM validation_walk_forward_windows WHERE validation_id=? ORDER BY window_no",(reg["latest_validation_id"],)).fetchall()]
+    c.close();return {"candidate_id":candidate_id,"windows":rows,"auto_deploy":False}
+
+
+@app.get("/api/candidate-registry")
+async def candidate_registry_api():
+    return {"registry":candidate_registry_snapshot(),"maximum_state":VALIDATION_MAX_STATE,"auto_deploy":False}
+
+
+@app.get("/api/adaptive-learning")
+async def adaptive_learning_api(limit: int = 100):
+    c=conn()
+    candidates=c.execute("""SELECT * FROM candidate_strategies
+                            ORDER BY id DESC LIMIT ?""",(min(max(limit,1),500),)).fetchall()
+    runs=c.execute("""SELECT * FROM adaptive_learning_runs
+                      ORDER BY id DESC LIMIT 20""").fetchall()
+    drift=c.execute("""SELECT * FROM concept_drift_alerts
+                       ORDER BY ts DESC LIMIT 100""").fetchall()
+    c.close()
+    return {
+        "enabled":ADAPTIVE_LEARNING_ENABLED,
+        "observation_only":True,
+        "production_mutation":False,
+        "candidate_activation_authority":False,
+        "runs":[dict(x) for x in runs],
+        "candidates":[dict(x) for x in candidates],
+        "concept_drift":[dict(x) for x in drift]
+    }
+
+
+@app.post("/api/adaptive-learning/run")
+async def adaptive_learning_run_api(force: bool = False):
+    return run_adaptive_learning(force=force)
+
+
+@app.get("/api/adaptive-learning/insights")
+async def adaptive_learning_insights_api(query: str,
+                                         strategy: Optional[str] = None):
+    return adaptive_learning_insights(query,strategy)
+
+
+@app.get("/api/adaptive-learning/events")
+async def adaptive_learning_events_api(limit: int = 200):
+    c=conn()
+    rows=c.execute("""SELECT * FROM adaptive_learning_events
+                      ORDER BY id DESC LIMIT ?""",(min(max(limit,1),1000),)).fetchall()
+    c.close()
+    return {"events":[dict(x) for x in rows],"production_mutation":False}
+
+
+@app.get("/api/trade-memory")
+async def trade_memory_api(limit: int = 100, status: Optional[str] = None):
+    c=conn()
+    if status:
+        rows=c.execute("""SELECT * FROM trade_memory WHERE status=?
+                          ORDER BY id DESC LIMIT ?""",
+                       (status.upper(),min(max(limit,1),1000))).fetchall()
+    else:
+        rows=c.execute("""SELECT * FROM trade_memory
+                          ORDER BY id DESC LIMIT ?""",
+                       (min(max(limit,1),1000),)).fetchall()
+    c.close()
+    return {
+        "enabled":TRADE_MEMORY_ENABLED,
+        "storage":"existing SQLite database",
+        "auto_strategy_changes":False,
+        "trades":[dict(x) for x in rows]
+    }
+
+
+@app.get("/api/trade-memory/analysis")
+async def trade_memory_analysis_api(group_by: str = "strategy",
+                                    min_samples: int = TRADE_MEMORY_MIN_SAMPLE_SIZE,
+                                    period: str = "month"):
+    return trade_memory_group_analysis(group_by,min_samples,period)
+
+
+@app.get("/api/trade-memory/combination")
+async def trade_memory_combination_api(
+    strategy: Optional[str] = None,
+    regime: Optional[str] = None,
+    symbol: Optional[str] = None,
+    direction: Optional[str] = None,
+    volatility: Optional[str] = None,
+    min_confidence: Optional[float] = None,
+    min_samples: int = TRADE_MEMORY_MIN_SAMPLE_SIZE
+):
+    return trade_memory_combination_analysis(
+        strategy,regime,symbol,direction,volatility,min_confidence,min_samples
+    )
+
+
+@app.get("/api/trade-memory/degradation")
+async def trade_memory_degradation_api(strategy: Optional[str] = None):
+    refresh_trade_memory_degradation()
+    return {
+        "auto_strategy_changes":False,
+        "results":trade_memory_recent_degradation(strategy)
+    }
+
+
+@app.get("/api/trade-memory/insights")
+async def trade_memory_insights_api(query: str,
+                                    strategy: Optional[str] = None,
+                                    regime: Optional[str] = None):
+    return trade_memory_insights(query,strategy,regime)
+
+
+@app.post("/api/trade-memory/reconcile")
+async def trade_memory_reconcile_api():
+    async with httpx.AsyncClient() as client:
+        result=await reconcile_trade_memory(client,None)
+    return {
+        "result":result,
+        "degradation":refresh_trade_memory_degradation(),
+        "auto_strategy_changes":False
+    }
+
+
+@app.get("/api/adaptive-risk")
+async def adaptive_risk_api(limit: int = 200):
+    return adaptive_risk_report(limit)
+
+
+@app.get("/api/adaptive-risk/state")
+async def adaptive_risk_state_api():
+    c=conn()
+    row=c.execute("SELECT * FROM portfolio_risk_state WHERE id=1").fetchone()
+    c.close()
+    return {
+        "shadow_mode":True,
+        "authority_over_execution":False,
+        "authority_over_position_size":False,
+        "portfolio_state":dict(row) if row else None
+    }
+
+
+@app.post("/api/adaptive-risk/refresh")
+async def adaptive_risk_refresh():
+    async with httpx.AsyncClient() as client:
+        ctx=await build_broker_risk_context(client)
+    persist_portfolio_risk_context(ctx)
+    results=[]
+    c=conn()
+    variants=[x["setup_variant"] for x in c.execute(
+        """SELECT DISTINCT setup_variant FROM signals
+           WHERE setup_variant IS NOT NULL AND setup_variant NOT IN ('','WAIT')"""
+    ).fetchall()]
+    c.close()
+    for inst in INSTRUMENTS:
+        regime=state.get("market_regimes",{}).get(inst)
+        for variant in variants:
+            director=ai_strategy_director_recommendation(inst,variant,regime,None)
+            d=adaptive_risk_recommendation(inst,variant,regime,director,None,ctx,UNITS)
+            log_adaptive_risk_decision(d)
+            results.append(d)
+    return {"shadow_mode":True,"risk_context":ctx,"results":results}
+
+
+@app.get("/api/ai-strategy-director")
+async def ai_strategy_director_api(limit: int = 100):
+    return ai_director_report(limit)
+
+
+@app.post("/api/ai-strategy-director/refresh")
+async def ai_strategy_director_refresh():
+    """
+    Recompute observation recommendations for currently known strategies
+    using the latest regime snapshot. No trading authority.
+    """
+    c=conn()
+    variants=[x["setup_variant"] for x in c.execute(
+        """SELECT DISTINCT setup_variant FROM signals
+           WHERE setup_variant IS NOT NULL AND setup_variant NOT IN ('','WAIT')"""
+    ).fetchall()]
+    instruments=[x["instrument"] for x in c.execute(
+        "SELECT DISTINCT instrument FROM signals WHERE instrument IS NOT NULL"
+    ).fetchall()]
+    c.close()
+
+    results=[]
+    for inst in instruments or INSTRUMENTS:
+        regime=state.get("market_regimes",{}).get(inst)
+        for variant in variants:
+            d=ai_strategy_director_recommendation(inst,variant,regime,None)
+            log_ai_director_decision(d)
+            results.append(d)
+    return {"observation_only":True,"results":results}
+
+
+@app.get("/api/ai-strategy-director/outcomes")
+async def ai_strategy_director_outcomes_api():
+    reconcile_ai_director_outcomes()
+    return ai_director_report(200)
+
+
+@app.get("/api/strategy-health")
+async def strategy_health_api():
+    return {"enabled":STRATEGY_SELF_EVAL_ENABLED,"auto_pause":STRATEGY_AUTO_PAUSE,
+            "baseline_window":STRATEGY_BASELINE_WINDOW,"recent_window":STRATEGY_RECENT_WINDOW,
+            "watch_drop":STRATEGY_WATCH_DROP,"degraded_drop":STRATEGY_DEGRADED_DROP,
+            "recovery_samples":STRATEGY_RECOVERY_SAMPLES,"strategies":all_strategy_health()}
+
+@app.post("/api/strategy-health/refresh")
+async def strategy_health_refresh_api():
+    return evaluate_all_strategy_health()
+
+@app.get("/api/strategy-health/audit")
+async def strategy_health_audit_api(limit: int = 200):
+    c=conn(); rows=c.execute("SELECT * FROM strategy_health_audit ORDER BY id DESC LIMIT ?",(min(max(limit,1),1000),)).fetchall(); c.close()
+    return {"events":[dict(x) for x in rows]}
+
+
 @app.get("/api/research/weekends")
 async def research_weekends(limit: int = 20):
     c=conn(); sessions=c.execute("SELECT * FROM weekend_sessions ORDER BY opened_ts DESC LIMIT ?",(min(max(limit,1),200),)).fetchall(); recent=c.execute("SELECT * FROM weekend_context ORDER BY collected_ts DESC LIMIT ?",(min(max(limit*10,10),500),)).fetchall(); c.close()
@@ -3307,7 +6858,7 @@ async def discovery():
 async def home():
     return """<!doctype html><html lang='es'><meta name='viewport' content='width=device-width'><title>Market Alert V1.7</title>
 <style>body{font-family:system-ui;background:#0b1020;color:#eef2ff;max-width:1050px;margin:auto;padding:24px}.c{background:#151c32;border:1px solid #2c3656;border-radius:16px;padding:18px;margin:12px 0}pre{white-space:pre-wrap;word-break:break-word;background:#080c17;padding:14px;border-radius:12px}.tag{display:inline-block;padding:5px 9px;border-radius:999px;background:#25304f;margin-right:6px}</style>
-<h1>Market Alert V3.8 · Weekend Context Research</h1><div class=c><span class=tag>OANDA PRACTICE ONLY</span><span class=tag>24/7</span><span class=tag>Sin límite diario</span><span class=tag>Confianza calibrada</span>
+<h1>Market Alert V3.16 · Controlled Canary Deployment</h1><div class=c><span class=tag>OANDA PRACTICE ONLY</span><span class=tag>24/7</span><span class=tag>Sin límite diario</span><span class=tag>Confianza calibrada</span>
 <p><b>Quality Score ≠ probabilidad.</b> La confianza dinámica se calibra con resultados reales. Con poca muestra se limita deliberadamente y el 90% requiere evidencia sustancial.</p></div>
 <div class=c><h2>Estado</h2><pre id=s>Cargando…</pre></div><div class=c><h2>Aprendizaje</h2><pre id=l>Cargando…</pre></div><div class=c><h2>Última decisión</h2><pre id=d>Cargando…</pre></div><div class=c><h2>Últimas señales</h2><pre id=h>Cargando…</pre></div>
 <script>async function u(){s.textContent=JSON.stringify(await fetch('/api/status').then(r=>r.json()),null,2);l.textContent=JSON.stringify(await fetch('/api/learning').then(r=>r.json()),null,2);d.textContent=JSON.stringify(await fetch('/api/decisions?limit=5').then(r=>r.json()),null,2);h.textContent=JSON.stringify(await fetch('/api/signals?limit=15').then(r=>r.json()),null,2)}u();setInterval(u,15000)</script></html>"""
