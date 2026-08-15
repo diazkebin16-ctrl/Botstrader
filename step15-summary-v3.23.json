@@ -1,0 +1,264 @@
+{
+  "release_version": "3.23",
+  "step14": {
+    "framework_version": "3.23",
+    "total_tests": 26,
+    "passed": 26,
+    "failed": 0,
+    "critical_failures": 0,
+    "safety_violations": 0,
+    "ready_for_step15": true,
+    "gates": {
+      "zero_critical_safety_failures": true,
+      "zero_risk_limit_bypasses": true,
+      "zero_duplicate_order_vulnerabilities": true,
+      "restart_recovery_successful": true,
+      "reconciliation_passes": true,
+      "database_failure_recovery_passes": true,
+      "broker_exit_failure_passes": true,
+      "deterministic_replay_passes": true,
+      "audit_reproducibility_passes": true,
+      "emergency_stop_survives_restart": true,
+      "governance_protections_pass": true,
+      "data_leakage_pass": true,
+      "canary_rollback_pass": true,
+      "full_extreme_simulation_pass": true
+    },
+    "performance_metrics": {
+      "total_duration_ms": 4739.282600994557,
+      "average_scenario_ms": 182.2801000382522,
+      "max_scenario_ms": 1098.5281459998077,
+      "mean_recovery_ms": 104.63166199951957
+    }
+  },
+  "initial_certification": {
+    "certification_id": "cert_b35632c097fd41ccbebb6b0af2d0251f",
+    "release_id": "rc_3.23_f33d133689_726b3ec411",
+    "readiness_state": "BLOCKED",
+    "go_no_go": "NO_GO",
+    "checklist": {
+      "STEP14_NO_CRITICAL_FAILURES": {
+        "passed": true,
+        "evidence": "Step14 immutable report"
+      },
+      "NO_RISK_BYPASS_KNOWN": {
+        "passed": true,
+        "evidence": "Step14 + runtime declaration"
+      },
+      "NO_DUPLICATE_ORDER_VULNERABILITY": {
+        "passed": true,
+        "evidence": "idempotency/concurrency tests"
+      },
+      "RECONCILIATION_READY": {
+        "passed": false,
+        "evidence": {
+          "account_scope": "PRIMARY",
+          "state": "SAFE_MODE",
+          "safe_mode": 1,
+          "emergency_stop": 0,
+          "new_trades_allowed": 0,
+          "last_transaction_id": null,
+          "last_broker_success_ts": null,
+          "last_market_data_ts": null,
+          "last_reconciliation_ts": null,
+          "last_reconciliation_status": null,
+          "last_risk_verified_ts": null,
+          "incident_started_ts": null,
+          "broker_disconnect_started_ts": null,
+          "ready_ts": null,
+          "details_json": "{}",
+          "updated_ts": "2026-08-15T20:49:53.179287+00:00"
+        }
+      },
+      "EMERGENCY_STOP_READY": {
+        "passed": true,
+        "evidence": "restart persistence + reset procedure"
+      },
+      "RISK_ENGINE_READY": {
+        "passed": false,
+        "evidence": {
+          "reported_ready": true,
+          "shadow_mode": true
+        },
+        "blocker": "RISK_ENGINE_SHADOW_ONLY"
+      },
+      "BROKER_ACCOUNT_VERIFIED": {
+        "passed": false,
+        "evidence": {}
+      },
+      "MARKET_DATA_FRESH": {
+        "passed": false,
+        "evidence": {
+          "last_data_ts": null
+        }
+      },
+      "AUDIT_READY": {
+        "passed": true,
+        "evidence": "audit subsystem/integrity"
+      },
+      "GOVERNANCE_READY": {
+        "passed": true,
+        "evidence": {
+          "singleton": 1,
+          "governance_mode": "SHADOW",
+          "adaptation_state": "NORMAL_ADAPTATION",
+          "recommended_state": "NORMAL_ADAPTATION",
+          "governance_lock": 0,
+          "lock_reason": null,
+          "lock_source": null,
+          "lock_ts": null,
+          "review_required": 0,
+          "freeze_started_ts": null,
+          "limited_started_ts": null,
+          "last_review_ts": null,
+          "latest_meta_risk_score": 0.0,
+          "latest_meta_risk_state": "LOW",
+          "policy_version": "governance_policy_3.23_1_aa524b073c79",
+          "updated_ts": "2026-08-15T20:49:53.030907+00:00"
+        }
+      },
+      "DEPLOYMENT_STATE_CONSISTENT": {
+        "passed": true,
+        "evidence": {
+          "deployments": [],
+          "kill_switches": [],
+          "live_enabled": false,
+          "auto_promotion": false
+        }
+      },
+      "NO_STATE_CORRUPTION": {
+        "passed": true,
+        "evidence": {
+          "open_p0": null
+        }
+      },
+      "FINAL_PAPER_PASS": {
+        "passed": false,
+        "evidence": {}
+      },
+      "PRODUCTION_DRY_RUN_PASS": {
+        "passed": false,
+        "evidence": {}
+      },
+      "CANARY_CONTROLS_READY": {
+        "passed": true,
+        "evidence": "Step8/14 canary rollback & limits"
+      },
+      "RECOVERY_TESTS_PASS": {
+        "passed": true,
+        "evidence": "Step10/14"
+      },
+      "SECURITY_TESTS_PASS": {
+        "passed": true,
+        "evidence": "Step11/14"
+      },
+      "CHANGE_MANAGEMENT_READY": {
+        "passed": true,
+        "evidence": "RBAC/change-request/audit"
+      },
+      "RELEASE_CANDIDATE_FROZEN": {
+        "passed": true,
+        "evidence": {
+          "release_id": "rc_3.23_f33d133689_726b3ec411",
+          "status": "FROZEN"
+        }
+      },
+      "PRODUCTION_AUTHORIZATION_PRESENT": {
+        "passed": false,
+        "evidence": {
+          "environment": "PAPER",
+          "production_authorized": false
+        }
+      },
+      "SYSTEM_EVALUATION_STABLE": {
+        "passed": false,
+        "evidence": {}
+      },
+      "MONITORING_READY": {
+        "passed": false,
+        "evidence": "observability/alerts"
+      }
+    },
+    "blockers": [
+      "RECONCILIATION_READY",
+      "RISK_ENGINE_READY",
+      "BROKER_ACCOUNT_VERIFIED",
+      "MARKET_DATA_FRESH",
+      "FINAL_PAPER_PASS",
+      "PRODUCTION_DRY_RUN_PASS",
+      "PRODUCTION_AUTHORIZATION_PRESENT",
+      "SYSTEM_EVALUATION_STABLE",
+      "MONITORING_READY",
+      "ENVIRONMENT_NOT_PRODUCTION"
+    ],
+    "warnings": [],
+    "minimal_live_limits": {
+      "risk_cap_multiplier": 0.05,
+      "max_trade_risk_fraction": 0.0005,
+      "max_portfolio_exposure_fraction": 0.005,
+      "max_daily_loss_fraction": 0.0025,
+      "max_drawdown_fraction": 0.005,
+      "min_trades_for_promotion": 10,
+      "min_days_for_promotion": 5,
+      "max_slippage_pips": 2.0,
+      "max_reconciliation_mismatches": 0,
+      "principle": "STAGE_CAP_NEVER_EXCEEDS_RISK_ENGINE_HARD_LIMIT"
+    },
+    "suspension_conditions": [
+      "P0_INCIDENT",
+      "ACCOUNT_MISMATCH",
+      "RECONCILIATION_CRITICAL",
+      "RISK_ENGINE_UNAVAILABLE",
+      "MARKET_DATA_UNRELIABLE",
+      "EMERGENCY_STOP",
+      "STATE_CORRUPTION",
+      "AUDIT_INTEGRITY_FAILURE",
+      "GOVERNANCE_LOCK",
+      "CRITICAL_SYSTEM_EVALUATION",
+      "CERTIFICATION_INVALIDATED"
+    ],
+    "promotion_conditions": [
+      "MIN_TRADES",
+      "MIN_DAYS",
+      "EXECUTION_QUALITY_OK",
+      "DRAWDOWN_OK",
+      "RECONCILIATION_CLEAN",
+      "NO_CRITICAL_INCIDENTS",
+      "SYSTEM_STABLE",
+      "GOVERNANCE_NORMAL",
+      "RISK_READY",
+      "DATA_QUALITY_OK",
+      "LIVE_EXECUTION_DIVERGENCE_FALSE"
+    ]
+  },
+  "production_status": "BLOCKED / NO_GO",
+  "open_production_blockers": [
+    "RECONCILIATION_READY",
+    "RISK_ENGINE_READY",
+    "BROKER_ACCOUNT_VERIFIED",
+    "MARKET_DATA_FRESH",
+    "FINAL_PAPER_PASS",
+    "PRODUCTION_DRY_RUN_PASS",
+    "PRODUCTION_AUTHORIZATION_PRESENT",
+    "SYSTEM_EVALUATION_STABLE",
+    "MONITORING_READY",
+    "ENVIRONMENT_NOT_PRODUCTION"
+  ],
+  "critical_design_finding": "Adaptive Risk Engine remains shadow-only; production certification correctly blocks real capital.",
+  "tests": {
+    "test_production_readiness.py": "PASS",
+    "test_system_integration_framework.py": "PASS",
+    "test_security_integration.py": "PASS",
+    "test_governance_engine.py": "PASS",
+    "test_recovery_manager.py": "PASS",
+    "test_system_evaluation.py": "PASS",
+    "test_security_manager.py": "PASS",
+    "test_observability.py": "PASS",
+    "test_deployment_manager.py": "PASS",
+    "test_validation_pipeline.py": "PASS"
+  },
+  "real_orders_sent": 0,
+  "capital_activated": false,
+  "step15_implemented": true,
+  "step15_production_certified": false
+}

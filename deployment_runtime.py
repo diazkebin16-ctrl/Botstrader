@@ -383,13 +383,22 @@ class DeploymentManager:
                                        "promotion gate passed" if new!=d["current_stage"] else "; ".join(g["reasons"]),source)
         return {"ok":True,"action":"PROMOTION" if new!=d["current_stage"] else "HOLD","stage":new,"allocation_fraction":alloc,"gate":g}
 
-    async def execute(self,client,dep,signal,units,approved_risk):
+    async def execute(self,client,dep,signal,units,approved_risk,submitter=None):
         d=3 if "JPY" in signal["instrument"] else 5
         signed=units if signal["signal"]=="BUY" else -units
         body={"order":{"instrument":signal["instrument"],"units":str(signed),"type":"MARKET","timeInForce":"FOK","positionFill":"DEFAULT",
                        "stopLossOnFill":{"price":f"{signal['stop']:.{d}f}","timeInForce":"GTC"},
                        "takeProfitOnFill":{"price":f"{signal.get('managed_target',signal['target']):.{d}f}","timeInForce":"GTC"}}}
-        t0=datetime.now(timezone.utc);x=await self.req(client,"POST","/v3/accounts/{account}/orders",body=body)
+        t0=datetime.now(timezone.utc)
+        if submitter is None:
+            x=await self.req(client,"POST","/v3/accounts/{account}/orders",body=body)
+        else:
+            recovered=await submitter(body)
+            if recovered.get("status_unknown") or recovered.get("duplicate_prevented") or recovered.get("skipped"):
+                return {"candidate_id":dep["candidate_id"],"executed":False,"recovery_result":recovered}
+            if recovered.get("rejected"):
+                return {"candidate_id":dep["candidate_id"],"executed":False,"rejected":True,"recovery_result":recovered}
+            x=recovered.get("response") or recovered
         latency=(datetime.now(timezone.utc)-t0).total_seconds()
         fill=x.get("orderFillTransaction") or {};price=f(fill.get("price"),signal["entry"])
         tid=str((fill.get("tradeOpened") or {}).get("tradeID",""));oid=str(fill.get("id",""))

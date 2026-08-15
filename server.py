@@ -5,10 +5,21 @@ import json
 import logging
 import math
 import hashlib
+import time
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 from typing import Dict, Any, List, Optional
+from recovery_manager import RecoveryManager, deterministic_intent_key
+from security_manager import SecurityManager, RedactingFilter, sanitize as security_sanitize
+from system_evaluation import SystemEvaluationEngine
+from governance_engine import GovernanceEngine, AUTHORITY_MATRIX, AUTHORITY_PRIORITY
+from production_readiness import ProductionReadinessGate
+from observability import (
+    ObservabilityManager, DEPENDENCY_CRITICAL, DEPENDENCY_IMPORTANT, DEPENDENCY_NON_CRITICAL,
+    stale_status as observability_stale_status, reconciliation_status as observability_reconciliation_status,
+    degradation_state as observability_degradation_state,
+)
 from deployment_runtime import DeploymentManager
 from adaptive_learning import (
     dataset_fingerprint as al_dataset_fingerprint,
@@ -28,11 +39,17 @@ from validation_pipeline import (
 )
 
 import httpx
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Header, Body
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 
-# PRACTICE ONLY. There is intentionally no OANDA live endpoint or environment switch.
-OANDA = "https://api-fxpractice.oanda.com"
+# Primary broker environment remains PRACTICE by default. Live endpoint selection requires
+# THREE independent conditions and is disabled in unit/integration test processes. The
+# Production Readiness Gate must still separately authorize every real order.
+TRADING_ENVIRONMENT = os.getenv("TRADING_ENVIRONMENT","PAPER").strip().upper()
+EARLY_TEST_MODE = bool(os.getenv("PYTEST_CURRENT_TEST") or os.getenv("UNIT_TEST")=="1" or TRADING_ENVIRONMENT in ("TEST","INTEGRATION_TEST","SIMULATION"))
+PRIMARY_OANDA_ENV = os.getenv("PRIMARY_OANDA_ENV","practice").strip().lower()
+PRODUCTION_AUTHORIZED = os.getenv("PRODUCTION_AUTHORIZED","false").lower()=="true"
+OANDA = "https://api-fxtrade.oanda.com" if (PRIMARY_OANDA_ENV=="live" and PRODUCTION_AUTHORIZED and TRADING_ENVIRONMENT=="PRODUCTION" and not EARLY_TEST_MODE) else "https://api-fxpractice.oanda.com"
 CANARY_OANDA_ENV = os.getenv("CANARY_OANDA_ENV","practice").strip().lower()
 CANARY_OANDA = "https://api-fxtrade.oanda.com" if CANARY_OANDA_ENV=="live" else "https://api-fxpractice.oanda.com"
 CANARY_ACCOUNT = os.getenv("OANDA_CANARY_ACCOUNT_ID","").strip()
@@ -84,7 +101,7 @@ TREND_RUNNER_MIN_SCORE = max(0.0, float(os.getenv("TREND_RUNNER_MIN_SCORE", "0.6
 TREND_RUNNER_TP_R = max(2.0, float(os.getenv("TREND_RUNNER_TP_R", "3.0")))
 TREND_RUNNER_TRAIL_START_R = max(1.5, float(os.getenv("TREND_RUNNER_TRAIL_START_R", "1.75")))
 TREND_RUNNER_TRAIL_DISTANCE_R = max(0.40, float(os.getenv("TREND_RUNNER_TRAIL_DISTANCE_R", "0.90")))
-VERSION_TAG = "3.16"
+VERSION_TAG = "3.23"
 ENTRY_TIMING_ENABLED = os.getenv("ENTRY_TIMING_ENABLED", "true").lower() == "true"
 MAX_ENTRY_EXTENSION_ATR = max(0.5, float(os.getenv("MAX_ENTRY_EXTENSION_ATR", "1.20")))
 MIN_ROOM_TO_BARRIER_R = max(1.0, float(os.getenv("MIN_ROOM_TO_BARRIER_R", "1.50")))
@@ -126,7 +143,7 @@ EXTERNAL_RESEARCH_GRANULARITY = os.getenv("EXTERNAL_RESEARCH_GRANULARITY", "M5")
 EXTERNAL_RESEARCH_CANDLE_COUNT = max(30, min(200, int(os.getenv("EXTERNAL_RESEARCH_CANDLE_COUNT", "80"))))
 EXTERNAL_RESEARCH_MIN_MOVE_ATR = max(0.05, float(os.getenv("EXTERNAL_RESEARCH_MIN_MOVE_ATR", "0.20")))
 EXTERNAL_NEWS_RESEARCH = os.getenv("EXTERNAL_NEWS_RESEARCH", "true").lower() == "true"
-AUTO_PROMOTE_RESEARCH = os.getenv("AUTO_PROMOTE_RESEARCH", "true").lower() == "true"
+AUTO_PROMOTE_RESEARCH = False  # V3.19: research may recommend; activation requires Change Management approval
 AUTO_PROMOTE_MIN_SAMPLES = 100
 AUTO_PROMOTE_MIN_EDGE = max(0.05, min(0.30, float(os.getenv("AUTO_PROMOTE_MIN_EDGE", "0.10"))))
 AUTO_PROMOTE_REVIEW_SAMPLES = 50
@@ -232,6 +249,74 @@ DEPLOYMENT_CANARY_MAX_STAGE_DAYS = max(3,int(os.getenv("DEPLOYMENT_CANARY_MAX_ST
 DEPLOYMENT_MAX_SLIPPAGE_PIPS = max(.5,float(os.getenv("DEPLOYMENT_MAX_SLIPPAGE_PIPS","2.5")))
 DEPLOYMENT_MAX_LATENCY_SECONDS = max(.5,float(os.getenv("DEPLOYMENT_MAX_LATENCY_SECONDS","4.0")))
 DEPLOYMENT_AUTO_PROMOTION = False
+PRODUCTION_READINESS_ENABLED = os.getenv("PRODUCTION_READINESS_ENABLED","true").lower()=="true"
+PRODUCTION_DRY_RUN_MODE = os.getenv("PRODUCTION_DRY_RUN_MODE","true").lower()=="true"
+PRODUCTION_STEP14_REPORT_PATH = os.getenv("PRODUCTION_STEP14_REPORT_PATH","/mnt/data/step14-results/step14-integration-report-v3.23.json")
+PRODUCTION_MINIMAL_RISK_MULTIPLIER = max(0.01,min(0.10,float(os.getenv("PRODUCTION_MINIMAL_RISK_MULTIPLIER","0.05"))))
+PRODUCTION_LIMITED_RISK_MULTIPLIER = max(PRODUCTION_MINIMAL_RISK_MULTIPLIER,min(0.25,float(os.getenv("PRODUCTION_LIMITED_RISK_MULTIPLIER","0.10"))))
+PRODUCTION_CONTROLLED_RISK_MULTIPLIER = max(PRODUCTION_LIMITED_RISK_MULTIPLIER,min(0.50,float(os.getenv("PRODUCTION_CONTROLLED_RISK_MULTIPLIER","0.25"))))
+PRODUCTION_MINIMAL_MIN_TRADES = max(10,int(os.getenv("PRODUCTION_MINIMAL_MIN_TRADES","10")))
+PRODUCTION_MINIMAL_MIN_DAYS = max(3,int(os.getenv("PRODUCTION_MINIMAL_MIN_DAYS","5")))
+PRODUCTION_LIMITED_MIN_TRADES = max(25,int(os.getenv("PRODUCTION_LIMITED_MIN_TRADES","25")))
+PRODUCTION_LIMITED_MIN_DAYS = max(7,int(os.getenv("PRODUCTION_LIMITED_MIN_DAYS","10")))
+PRODUCTION_CONTROLLED_MIN_TRADES = max(50,int(os.getenv("PRODUCTION_CONTROLLED_MIN_TRADES","50")))
+PRODUCTION_CONTROLLED_MIN_DAYS = max(14,int(os.getenv("PRODUCTION_CONTROLLED_MIN_DAYS","20")))
+OBSERVABILITY_ENABLED = os.getenv("OBSERVABILITY_ENABLED","true").lower()=="true"
+OBSERVABILITY_ALERT_COOLDOWN_SECONDS = max(30,int(os.getenv("OBSERVABILITY_ALERT_COOLDOWN_SECONDS","900")))
+OBSERVABILITY_MARKET_STALE_SECONDS = max(60,int(os.getenv("OBSERVABILITY_MARKET_STALE_SECONDS","180")))
+OBSERVABILITY_BROKER_STALE_SECONDS = max(60,int(os.getenv("OBSERVABILITY_BROKER_STALE_SECONDS","180")))
+OBSERVABILITY_HEARTBEAT_STALE_SECONDS = max(60,int(os.getenv("OBSERVABILITY_HEARTBEAT_STALE_SECONDS","180")))
+OBSERVABILITY_LOOP_INTERVAL_SECONDS = max(2,int(os.getenv("OBSERVABILITY_LOOP_INTERVAL_SECONDS","5")))
+OBSERVABILITY_LOOP_LAG_WARNING_MS = max(50,float(os.getenv("OBSERVABILITY_LOOP_LAG_WARNING_MS","250")))
+OBSERVABILITY_LOOP_LAG_CRITICAL_MS = max(OBSERVABILITY_LOOP_LAG_WARNING_MS,float(os.getenv("OBSERVABILITY_LOOP_LAG_CRITICAL_MS","1000")))
+OBSERVABILITY_DB_LATENCY_WARNING_MS = max(10,float(os.getenv("OBSERVABILITY_DB_LATENCY_WARNING_MS","100")))
+OBSERVABILITY_BROKER_LATENCY_WARNING_MS = max(100,float(os.getenv("OBSERVABILITY_BROKER_LATENCY_WARNING_MS","2000")))
+OBSERVABILITY_SIGNAL_SILENCE_HOURS = max(1,float(os.getenv("OBSERVABILITY_SIGNAL_SILENCE_HOURS","24")))
+OBSERVABILITY_REGIME_STATIC_HOURS = max(4,float(os.getenv("OBSERVABILITY_REGIME_STATIC_HOURS","36")))
+OBSERVABILITY_STARTUP_BLOCK_TRADING = os.getenv("OBSERVABILITY_STARTUP_BLOCK_TRADING","true").lower()=="true"
+OBSERVABILITY_CRITICAL_FAILSAFE_ENABLED = os.getenv("OBSERVABILITY_CRITICAL_FAILSAFE_ENABLED","false").lower()=="true"
+RECOVERY_MANAGER_ENABLED = os.getenv("RECOVERY_MANAGER_ENABLED","true").lower()=="true"
+RECOVERY_USE_CLIENT_EXTENSIONS = os.getenv("RECOVERY_USE_CLIENT_EXTENSIONS","true").lower()=="true"
+RECOVERY_CIRCUIT_FAILURE_THRESHOLD = max(2,int(os.getenv("RECOVERY_CIRCUIT_FAILURE_THRESHOLD","3")))
+RECOVERY_CIRCUIT_OPEN_SECONDS = max(5.0,float(os.getenv("RECOVERY_CIRCUIT_OPEN_SECONDS","20")))
+RECOVERY_REQUEST_MIN_INTERVAL_MS = max(10.0,float(os.getenv("RECOVERY_REQUEST_MIN_INTERVAL_MS","80")))
+RECOVERY_MAX_READ_RETRIES = max(0,min(8,int(os.getenv("RECOVERY_MAX_READ_RETRIES","4"))))
+RECOVERY_BACKOFF_BASE_SECONDS = max(.05,float(os.getenv("RECOVERY_BACKOFF_BASE_SECONDS",".4")))
+RECOVERY_BACKOFF_CAP_SECONDS = max(1.0,float(os.getenv("RECOVERY_BACKOFF_CAP_SECONDS","8")))
+RECOVERY_RECONCILE_INTERVAL_SECONDS = max(30,int(os.getenv("RECOVERY_RECONCILE_INTERVAL_SECONDS","120")))
+RECOVERY_MARKET_DATA_MAX_AGE_SECONDS = max(30,int(os.getenv("RECOVERY_MARKET_DATA_MAX_AGE_SECONDS","180")))
+RECOVERY_BLOCK_ADAPTIVE_LEARNING_COMPROMISED = os.getenv("RECOVERY_BLOCK_ADAPTIVE_LEARNING_COMPROMISED","true").lower()=="true"
+RECOVERY_MAX_QUOTE_AGE_SECONDS = max(2,float(os.getenv("RECOVERY_MAX_QUOTE_AGE_SECONDS","10")))
+RECOVERY_MAX_SPREAD_PIPS = max(.5,float(os.getenv("RECOVERY_MAX_SPREAD_PIPS","5")))
+RECOVERY_MAX_PRICE_DEVIATION_PIPS = max(2,float(os.getenv("RECOVERY_MAX_PRICE_DEVIATION_PIPS","20")))
+SECURITY_ACTORS_JSON = os.getenv("SECURITY_ACTORS_JSON","{}")
+SECURITY_ALLOW_UNAUTHENTICATED_READS = os.getenv("SECURITY_ALLOW_UNAUTHENTICATED_READS","false").lower()=="true"
+BROKER_ACCOUNT_VERIFIED = os.getenv("BROKER_ACCOUNT_VERIFIED","false").lower()=="true"
+SECURITY_REQUIRE_TWO_CRITICAL_APPROVALS = True
+SECURITY_STARTUP_FAIL_CLOSED = os.getenv("SECURITY_STARTUP_FAIL_CLOSED","true").lower()=="true"
+SYSTEM_EVALUATION_ENABLED = os.getenv("SYSTEM_EVALUATION_ENABLED","true").lower()=="true"
+SYSTEM_EVALUATION_MIN_SAMPLES = max(5,int(os.getenv("SYSTEM_EVALUATION_MIN_SAMPLES","20")))
+SYSTEM_EVALUATION_PERIOD_HOURS = max(1,int(os.getenv("SYSTEM_EVALUATION_PERIOD_HOURS","24")))
+SYSTEM_EVALUATION_TRADING_WEIGHT = max(0.0,float(os.getenv("SYSTEM_EVALUATION_TRADING_WEIGHT","0.30")))
+SYSTEM_EVALUATION_RISK_WEIGHT = max(0.0,float(os.getenv("SYSTEM_EVALUATION_RISK_WEIGHT","0.30")))
+SYSTEM_EVALUATION_OPERATIONAL_WEIGHT = max(0.0,float(os.getenv("SYSTEM_EVALUATION_OPERATIONAL_WEIGHT","0.25")))
+SYSTEM_EVALUATION_STABILITY_WEIGHT = max(0.0,float(os.getenv("SYSTEM_EVALUATION_STABILITY_WEIGHT","0.15")))
+GOVERNANCE_ENABLED = os.getenv("GOVERNANCE_ENABLED","true").lower()=="true"
+GOVERNANCE_MODE = os.getenv("GOVERNANCE_MODE","SHADOW").strip().upper()
+GOVERNANCE_EVALUATION_INTERVAL_MINUTES = max(5,int(os.getenv("GOVERNANCE_EVALUATION_INTERVAL_MINUTES","60")))
+GOVERNANCE_MIN_STABILITY_HOURS = max(1,int(os.getenv("GOVERNANCE_MIN_STABILITY_HOURS","72")))
+GOVERNANCE_LIMITED_REVIEW_HOURS = max(1,int(os.getenv("GOVERNANCE_LIMITED_REVIEW_HOURS","48")))
+GOVERNANCE_MAX_MAJOR_CHANGES_7D = max(1,int(os.getenv("GOVERNANCE_MAX_MAJOR_CHANGES_7D","3")))
+GOVERNANCE_MAX_STRATEGY_CHANGES_7D = max(1,int(os.getenv("GOVERNANCE_MAX_STRATEGY_CHANGES_7D","5")))
+GOVERNANCE_MAX_PARAMETER_CHANGES_7D = max(1,int(os.getenv("GOVERNANCE_MAX_PARAMETER_CHANGES_7D","8")))
+GOVERNANCE_MAX_DEPLOYMENTS_7D = max(1,int(os.getenv("GOVERNANCE_MAX_DEPLOYMENTS_7D","3")))
+GOVERNANCE_MAX_PROMOTIONS_7D = max(1,int(os.getenv("GOVERNANCE_MAX_PROMOTIONS_7D","2")))
+GOVERNANCE_MAX_GLOBAL_CHANGES_7D = max(1,int(os.getenv("GOVERNANCE_MAX_GLOBAL_CHANGES_7D","10")))
+GOVERNANCE_META_RISK_HIGH = max(40.0,min(90.0,float(os.getenv("GOVERNANCE_META_RISK_HIGH","65"))))
+GOVERNANCE_META_RISK_CRITICAL = max(GOVERNANCE_META_RISK_HIGH,min(100.0,float(os.getenv("GOVERNANCE_META_RISK_CRITICAL","82"))))
+GOVERNANCE_DECISION_FRESHNESS_HOURS = max(1,int(os.getenv("GOVERNANCE_DECISION_FRESHNESS_HOURS","6")))
+OBSERVABILITY_DRAWDOWN_WARNING_FRACTION = max(.001,min(RISK_DRAWDOWN_STOP,float(os.getenv("OBSERVABILITY_DRAWDOWN_WARNING_FRACTION",str(RISK_DRAWDOWN_WARN*.8)))))
+OBSERVABILITY_RISK_CONSTANT_WINDOW = max(5,int(os.getenv("OBSERVABILITY_RISK_CONSTANT_WINDOW","20")))
 MARKET_REGIME_ENABLED = os.getenv("MARKET_REGIME_ENABLED", "true").lower() == "true"
 MARKET_REGIME_LOG_CHANGES_ONLY = os.getenv("MARKET_REGIME_LOG_CHANGES_ONLY", "true").lower() == "true"
 MARKET_REGIME_MIN_CANDLES = max(40, int(os.getenv("MARKET_REGIME_MIN_CANDLES", "60")))
@@ -249,8 +334,10 @@ EXECUTION_MIN_CONFIDENCE = max(0.50, min(0.95, float(os.getenv("EXECUTION_MIN_CO
 NY = ZoneInfo("America/New_York")
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(message)s")
+for _handler in logging.getLogger().handlers:
+    _handler.addFilter(RedactingFilter())
 log = logging.getLogger("market-alert")
-app = FastAPI(title="Market Alert V3.16 — Controlled Canary Deployment / OANDA Practice Only")
+app = FastAPI(title="Market Alert V3.23 — Production Readiness & Minimal Live Certification")
 state: Dict[str, Any] = {
     "started": datetime.now(timezone.utc).isoformat(),
     "last_scan": None,
@@ -265,6 +352,9 @@ state: Dict[str, Any] = {
     "watchdog_last_check": None,
     "last_results": {},
     "learning": {"last_train": None, "model_ready": False, "note": "Waiting for resolved samples"},
+    "system_ready": False,
+    "startup_health": None,
+    "observability": {"last_refresh": None, "last_broker_snapshot": None},
 }
 
 FEATURE_COLUMNS = [
@@ -279,9 +369,271 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+SECURITY_CONFIG_SCHEMA = {
+    # Hard risk limits: managed configuration can only stay equal or become MORE restrictive
+    # than the current code/environment ceilings. V3.19 does not permit increases.
+    "risk.base_fraction":{"type":"float","min":0.0001,"max":RISK_BASE_FRACTION,"hard_ceiling":RISK_BASE_FRACTION,"risk_level":"CRITICAL"},
+    "risk.max_trade_fraction":{"type":"float","min":0.0001,"max":RISK_MAX_TRADE_FRACTION,"hard_ceiling":RISK_MAX_TRADE_FRACTION,"risk_level":"CRITICAL"},
+    "risk.max_strategy_fraction":{"type":"float","min":0.0001,"max":RISK_MAX_STRATEGY_FRACTION,"hard_ceiling":RISK_MAX_STRATEGY_FRACTION,"risk_level":"CRITICAL"},
+    "risk.max_portfolio_fraction":{"type":"float","min":0.0001,"max":RISK_MAX_PORTFOLIO_FRACTION,"hard_ceiling":RISK_MAX_PORTFOLIO_FRACTION,"risk_level":"CRITICAL"},
+    "risk.max_margin_usage":{"type":"float","min":0.01,"max":RISK_MAX_MARGIN_USAGE,"hard_ceiling":RISK_MAX_MARGIN_USAGE,"risk_level":"CRITICAL"},
+    "risk.drawdown_warning":{"type":"float","min":0.001,"max":RISK_DRAWDOWN_WARN,"hard_ceiling":RISK_DRAWDOWN_WARN,"risk_level":"HIGH_RISK"},
+    "risk.drawdown_stop":{"type":"float","min":0.002,"max":RISK_DRAWDOWN_STOP,"hard_ceiling":RISK_DRAWDOWN_STOP,"risk_level":"CRITICAL"},
+    "risk.max_consecutive_losses":{"type":"int","min":1,"max":RISK_MAX_CONSECUTIVE_LOSSES,"hard_ceiling":RISK_MAX_CONSECUTIVE_LOSSES,"risk_level":"HIGH_RISK"},
+    "risk.max_correlated_positions":{"type":"int","min":1,"max":RISK_MAX_CORRELATED_POSITIONS,"hard_ceiling":RISK_MAX_CORRELATED_POSITIONS,"risk_level":"CRITICAL"},
+
+    # Deployment gates. Changes cannot silently make gates looser than V3.18 defaults.
+    "deployment.min_validation_score":{"type":"float","min":DEPLOYMENT_MIN_VALIDATION_SCORE,"max":0.99,"risk_level":"CRITICAL"},
+    "deployment.canary_min_trades":{"type":"int","min":DEPLOYMENT_CANARY_MIN_TRADES,"max":10000,"risk_level":"HIGH_RISK"},
+    "deployment.limited_min_trades":{"type":"int","min":DEPLOYMENT_LIMITED_MIN_TRADES,"max":10000,"risk_level":"HIGH_RISK"},
+    "deployment.min_live_days":{"type":"int","min":DEPLOYMENT_MIN_LIVE_DAYS,"max":365,"risk_level":"HIGH_RISK"},
+    "deployment.promotion_cooldown_hours":{"type":"int","min":DEPLOYMENT_PROMOTION_COOLDOWN_HOURS,"max":8760,"risk_level":"CRITICAL"},
+    "deployment.max_promotions_7d":{"type":"int","min":1,"max":DEPLOYMENT_MAX_PROMOTIONS_PER_7D,"hard_ceiling":DEPLOYMENT_MAX_PROMOTIONS_PER_7D,"risk_level":"CRITICAL"},
+    "deployment.max_exposure_increase":{"type":"float","min":0.01,"max":DEPLOYMENT_MAX_EXPOSURE_INCREASE,"hard_ceiling":DEPLOYMENT_MAX_EXPOSURE_INCREASE,"risk_level":"CRITICAL"},
+
+    # Non-capital controls.
+    "director.active_threshold":{"type":"float","min":0.50,"max":0.95,"risk_level":"MEDIUM_RISK"},
+    "director.reduced_threshold":{"type":"float","min":0.30,"max":0.90,"risk_level":"MEDIUM_RISK"},
+    "regime.trend_threshold":{"type":"float","min":0.25,"max":0.80,"risk_level":"MEDIUM_RISK"},
+    "regime.range_threshold":{"type":"float","min":0.15,"max":0.60,"risk_level":"MEDIUM_RISK"},
+    "adaptive_learning.min_trades":{"type":"int","min":ADAPTIVE_LEARNING_MIN_TRADES,"max":100000,"risk_level":"HIGH_RISK"},
+    "adaptive_learning.cooldown_hours":{"type":"int","min":ADAPTIVE_LEARNING_COOLDOWN_HOURS,"max":8760,"risk_level":"HIGH_RISK"},
+    "observability.alert_cooldown_seconds":{"type":"int","min":30,"max":3600,"risk_level":"LOW_RISK"},
+    "observability.loop_interval_seconds":{"type":"int","min":2,"max":60,"risk_level":"LOW_RISK"},
+    "system_evaluation.min_samples":{"type":"int","min":5,"max":1000,"risk_level":"LOW_RISK"},
+    "system_evaluation.period_hours":{"type":"int","min":1,"max":168,"risk_level":"LOW_RISK"},
+    "system_evaluation.trading_weight":{"type":"float","min":0.0,"max":1.0,"risk_level":"MEDIUM_RISK"},
+    "system_evaluation.risk_weight":{"type":"float","min":0.0,"max":1.0,"risk_level":"MEDIUM_RISK"},
+    "system_evaluation.operational_weight":{"type":"float","min":0.0,"max":1.0,"risk_level":"MEDIUM_RISK"},
+    "system_evaluation.stability_weight":{"type":"float","min":0.0,"max":1.0,"risk_level":"MEDIUM_RISK"},
+    "governance.mode":{"type":"str","allowed":["SHADOW","ADVISORY","PARTIAL_ENFORCEMENT","FULL_POLICY_ENFORCEMENT"],"risk_level":"CRITICAL"},
+    "governance.min_stability_hours":{"type":"int","min":1,"max":720,"risk_level":"HIGH_RISK"},
+    "governance.limited_review_hours":{"type":"int","min":1,"max":720,"risk_level":"HIGH_RISK"},
+    "governance.max_major_changes_7d":{"type":"int","min":1,"max":12,"risk_level":"CRITICAL"},
+    "governance.max_strategy_changes_7d":{"type":"int","min":1,"max":20,"risk_level":"HIGH_RISK"},
+    "governance.max_parameter_changes_7d":{"type":"int","min":1,"max":30,"risk_level":"HIGH_RISK"},
+    "governance.max_deployments_7d":{"type":"int","min":1,"max":10,"risk_level":"CRITICAL"},
+    "governance.max_promotions_7d":{"type":"int","min":1,"max":8,"risk_level":"CRITICAL"},
+    "governance.max_global_changes_7d":{"type":"int","min":1,"max":30,"risk_level":"HIGH_RISK"},
+    "governance.meta_risk_high":{"type":"float","min":40.0,"max":90.0,"risk_level":"HIGH_RISK"},
+    "governance.meta_risk_critical":{"type":"float","min":60.0,"max":100.0,"risk_level":"CRITICAL"},
+    "governance.decision_freshness_hours":{"type":"int","min":1,"max":72,"risk_level":"MEDIUM_RISK"},
+    "production.minimal_risk_multiplier":{"type":"float","min":0.01,"max":PRODUCTION_MINIMAL_RISK_MULTIPLIER,"hard_ceiling":PRODUCTION_MINIMAL_RISK_MULTIPLIER,"risk_level":"CRITICAL"},
+    "production.limited_risk_multiplier":{"type":"float","min":0.01,"max":PRODUCTION_LIMITED_RISK_MULTIPLIER,"hard_ceiling":PRODUCTION_LIMITED_RISK_MULTIPLIER,"risk_level":"CRITICAL"},
+    "production.controlled_risk_multiplier":{"type":"float","min":0.01,"max":PRODUCTION_CONTROLLED_RISK_MULTIPLIER,"hard_ceiling":PRODUCTION_CONTROLLED_RISK_MULTIPLIER,"risk_level":"CRITICAL"},
+    "production.minimal_min_trades":{"type":"int","min":PRODUCTION_MINIMAL_MIN_TRADES,"max":10000,"risk_level":"HIGH_RISK"},
+    "production.minimal_min_days":{"type":"int","min":PRODUCTION_MINIMAL_MIN_DAYS,"max":365,"risk_level":"HIGH_RISK"},
+    "production.limited_min_trades":{"type":"int","min":PRODUCTION_LIMITED_MIN_TRADES,"max":10000,"risk_level":"HIGH_RISK"},
+    "production.limited_min_days":{"type":"int","min":PRODUCTION_LIMITED_MIN_DAYS,"max":365,"risk_level":"HIGH_RISK"},
+    "production.controlled_min_trades":{"type":"int","min":PRODUCTION_CONTROLLED_MIN_TRADES,"max":10000,"risk_level":"HIGH_RISK"},
+    "production.controlled_min_days":{"type":"int","min":PRODUCTION_CONTROLLED_MIN_DAYS,"max":365,"risk_level":"HIGH_RISK"},
+    "execution.auto_trade":{"type":"bool","risk_level":"CRITICAL"},
+    "execution.trade_units":{"type":"int","min":1,"max":UNITS,"hard_ceiling":UNITS,"risk_level":"CRITICAL"},
+
+    # Dynamic strategy/research recommendations are versioned and reviewed,
+    # but are not allowed to touch secrets, permissions, hard risk limits or deployment authority.
+    "strategy.*":{"type":"any","risk_level":"HIGH_RISK"},
+    "research_rule.*":{"type":"bool","risk_level":"HIGH_RISK"},
+
+    # Secrets are explicitly outside in-app Change Management.
+    "broker.credentials":{"type":"str","secret":True,"risk_level":"CRITICAL"},
+    "security.credentials":{"type":"str","secret":True,"risk_level":"CRITICAL"},
+}
+
+SECURITY_INITIAL_CONFIG = {
+    "risk.base_fraction":RISK_BASE_FRACTION,
+    "risk.max_trade_fraction":RISK_MAX_TRADE_FRACTION,
+    "risk.max_strategy_fraction":RISK_MAX_STRATEGY_FRACTION,
+    "risk.max_portfolio_fraction":RISK_MAX_PORTFOLIO_FRACTION,
+    "risk.max_margin_usage":RISK_MAX_MARGIN_USAGE,
+    "risk.drawdown_warning":RISK_DRAWDOWN_WARN,
+    "risk.drawdown_stop":RISK_DRAWDOWN_STOP,
+    "risk.max_consecutive_losses":RISK_MAX_CONSECUTIVE_LOSSES,
+    "risk.max_correlated_positions":RISK_MAX_CORRELATED_POSITIONS,
+    "deployment.min_validation_score":DEPLOYMENT_MIN_VALIDATION_SCORE,
+    "deployment.canary_min_trades":DEPLOYMENT_CANARY_MIN_TRADES,
+    "deployment.limited_min_trades":DEPLOYMENT_LIMITED_MIN_TRADES,
+    "deployment.min_live_days":DEPLOYMENT_MIN_LIVE_DAYS,
+    "deployment.promotion_cooldown_hours":DEPLOYMENT_PROMOTION_COOLDOWN_HOURS,
+    "deployment.max_promotions_7d":DEPLOYMENT_MAX_PROMOTIONS_PER_7D,
+    "deployment.max_exposure_increase":DEPLOYMENT_MAX_EXPOSURE_INCREASE,
+    "director.active_threshold":AI_DIRECTOR_ACTIVE_THRESHOLD,
+    "director.reduced_threshold":AI_DIRECTOR_REDUCED_THRESHOLD,
+    "regime.trend_threshold":MARKET_REGIME_TREND_THRESHOLD,
+    "regime.range_threshold":MARKET_REGIME_RANGE_THRESHOLD,
+    "adaptive_learning.min_trades":ADAPTIVE_LEARNING_MIN_TRADES,
+    "adaptive_learning.cooldown_hours":ADAPTIVE_LEARNING_COOLDOWN_HOURS,
+    "observability.alert_cooldown_seconds":OBSERVABILITY_ALERT_COOLDOWN_SECONDS,
+    "observability.loop_interval_seconds":OBSERVABILITY_LOOP_INTERVAL_SECONDS,
+    "system_evaluation.min_samples":SYSTEM_EVALUATION_MIN_SAMPLES,
+    "system_evaluation.period_hours":SYSTEM_EVALUATION_PERIOD_HOURS,
+    "system_evaluation.trading_weight":SYSTEM_EVALUATION_TRADING_WEIGHT,
+    "system_evaluation.risk_weight":SYSTEM_EVALUATION_RISK_WEIGHT,
+    "system_evaluation.operational_weight":SYSTEM_EVALUATION_OPERATIONAL_WEIGHT,
+    "system_evaluation.stability_weight":SYSTEM_EVALUATION_STABILITY_WEIGHT,
+    "governance.mode":GOVERNANCE_MODE if GOVERNANCE_MODE in ("SHADOW","ADVISORY","PARTIAL_ENFORCEMENT","FULL_POLICY_ENFORCEMENT") else "SHADOW",
+    "governance.min_stability_hours":GOVERNANCE_MIN_STABILITY_HOURS,
+    "governance.limited_review_hours":GOVERNANCE_LIMITED_REVIEW_HOURS,
+    "governance.max_major_changes_7d":GOVERNANCE_MAX_MAJOR_CHANGES_7D,
+    "governance.max_strategy_changes_7d":GOVERNANCE_MAX_STRATEGY_CHANGES_7D,
+    "governance.max_parameter_changes_7d":GOVERNANCE_MAX_PARAMETER_CHANGES_7D,
+    "governance.max_deployments_7d":GOVERNANCE_MAX_DEPLOYMENTS_7D,
+    "governance.max_promotions_7d":GOVERNANCE_MAX_PROMOTIONS_7D,
+    "governance.max_global_changes_7d":GOVERNANCE_MAX_GLOBAL_CHANGES_7D,
+    "governance.meta_risk_high":GOVERNANCE_META_RISK_HIGH,
+    "governance.meta_risk_critical":GOVERNANCE_META_RISK_CRITICAL,
+    "governance.decision_freshness_hours":GOVERNANCE_DECISION_FRESHNESS_HOURS,
+    "production.minimal_risk_multiplier":PRODUCTION_MINIMAL_RISK_MULTIPLIER,
+    "production.limited_risk_multiplier":PRODUCTION_LIMITED_RISK_MULTIPLIER,
+    "production.controlled_risk_multiplier":PRODUCTION_CONTROLLED_RISK_MULTIPLIER,
+    "production.minimal_min_trades":PRODUCTION_MINIMAL_MIN_TRADES,
+    "production.minimal_min_days":PRODUCTION_MINIMAL_MIN_DAYS,
+    "production.limited_min_trades":PRODUCTION_LIMITED_MIN_TRADES,
+    "production.limited_min_days":PRODUCTION_LIMITED_MIN_DAYS,
+    "production.controlled_min_trades":PRODUCTION_CONTROLLED_MIN_TRADES,
+    "production.controlled_min_days":PRODUCTION_CONTROLLED_MIN_DAYS,
+    "execution.auto_trade":AUTO,
+    "execution.trade_units":UNITS,
+}
+
+security_manager = SecurityManager(
+    DB,VERSION_TAG,TRADING_ENVIRONMENT,SECURITY_ACTORS_JSON,
+    allow_unauthenticated_reads=SECURITY_ALLOW_UNAUTHENTICATED_READS
+)
+security_manager.configure(
+    SECURITY_CONFIG_SCHEMA,SECURITY_INITIAL_CONFIG,
+    code_root=str(Path(__file__).resolve().parent),
+    dependency_file=str(Path(__file__).resolve().parent/"requirements.txt")
+)
+
+def managed_value(key: str, fallback):
+    try:
+        return security_manager.get(key,fallback)
+    except Exception:
+        return fallback
+
+def _security_actor(authorization: Optional[str], permission: Optional[str]=None, allow_read: bool=False):
+    try:
+        actor=security_manager.authenticate(authorization,allow_anonymous_read=allow_read)
+        if permission: security_manager.require(actor,permission)
+        return actor
+    except PermissionError as e:
+        code=401 if "AUTHENTICATION" in str(e) or "INVALID_CREDENTIALS" in str(e) else 403
+        raise HTTPException(code,str(e))
+
+def sync_security_runtime_config():
+    # The Change Manager never raises a hard limit above code/env ceilings.
+    deployment_manager.min_validation_score=float(managed_value("deployment.min_validation_score",DEPLOYMENT_MIN_VALIDATION_SCORE))
+    deployment_manager.min_live_trades=int(managed_value("deployment.canary_min_trades",DEPLOYMENT_CANARY_MIN_TRADES))
+    deployment_manager.min_limited_trades=int(managed_value("deployment.limited_min_trades",DEPLOYMENT_LIMITED_MIN_TRADES))
+    deployment_manager.min_live_days=int(managed_value("deployment.min_live_days",DEPLOYMENT_MIN_LIVE_DAYS))
+    deployment_manager.promotion_cooldown_hours=int(managed_value("deployment.promotion_cooldown_hours",DEPLOYMENT_PROMOTION_COOLDOWN_HOURS))
+    deployment_manager.max_promotions_7d=int(managed_value("deployment.max_promotions_7d",DEPLOYMENT_MAX_PROMOTIONS_PER_7D))
+    deployment_manager.max_exposure_increase=float(managed_value("deployment.max_exposure_increase",DEPLOYMENT_MAX_EXPOSURE_INCREASE))
+    try:
+        observability_manager.alert_cooldown_seconds=int(managed_value("observability.alert_cooldown_seconds",OBSERVABILITY_ALERT_COOLDOWN_SECONDS))
+    except Exception:
+        pass
+
+def sync_governance_runtime_config():
+    if not GOVERNANCE_ENABLED:
+        return None
+    return governance_engine.set_runtime(
+        mode=str(managed_value("governance.mode","SHADOW")),
+        policies=governance_policy_config(),
+        config_version=security_manager.current_version()
+    )
+
+def sync_production_readiness_config():
+    if not PRODUCTION_READINESS_ENABLED:
+        return None
+    production_readiness_gate.stage_limits.update(production_stage_limits())
+    return production_readiness_gate.stage_limits
+
+def security_version_context(r: Optional[Dict[str,Any]]=None) -> Dict[str,Any]:
+    integrity=security_manager.last_integrity or {}
+    strategy=setup_variant(r) if r else "UNKNOWN"
+    cfgv=security_manager.current_version()
+    try:prod=production_readiness_gate.state()
+    except Exception:prod={}
+    return {
+        "strategy_version":f"{strategy}@{VERSION_TAG}",
+        "risk_config_version":f"config_v{cfgv}",
+        "director_version":f"director@{VERSION_TAG}:config_v{cfgv}",
+        "regime_model_version":f"regime@{VERSION_TAG}:config_v{cfgv}",
+        "deployment_version":f"deployment@{VERSION_TAG}",
+        "runtime_code_hash":integrity.get("code_hash"),
+        "dependency_lock_hash":integrity.get("dependency_hash"),
+        "config_snapshot_hash":security_manager.current_hash(),
+        "release_id":prod.get("release_id"),
+        "production_certification_id":prod.get("certification_id"),
+        "production_stage":prod.get("production_stage"),
+    }
+
+
+def running_under_test() -> bool:
+    return bool(os.getenv("PYTEST_CURRENT_TEST") or os.getenv("UNIT_TEST")=="1" or TRADING_ENVIRONMENT=="TEST")
+
+def security_risk_limits_valid() -> bool:
+    cfg=security_manager.current_config()
+    try:
+        return (
+            0 < float(cfg["risk.base_fraction"]) <= float(cfg["risk.max_trade_fraction"])
+            <= float(cfg["risk.max_strategy_fraction"]) <= float(cfg["risk.max_portfolio_fraction"])
+            and 0 < float(cfg["risk.drawdown_warning"]) <= float(cfg["risk.drawdown_stop"])
+            and float(cfg["risk.max_trade_fraction"]) <= RISK_MAX_TRADE_FRACTION
+            and float(cfg["risk.max_strategy_fraction"]) <= RISK_MAX_STRATEGY_FRACTION
+            and float(cfg["risk.max_portfolio_fraction"]) <= RISK_MAX_PORTFOLIO_FRACTION
+        )
+    except Exception:
+        return False
+
+def security_startup_check() -> Dict[str,Any]:
+    secrets_ok=bool(ACCOUNT and TOKEN)
+    if DEPLOYMENT_LIVE_EXECUTION_ENABLED or CANARY_OANDA_ENV=="live":
+        secrets_ok=secrets_ok and bool(CANARY_ACCOUNT and CANARY_TOKEN)
+    try:
+        deployments=deployment_manager.dashboard().get("deployments",[])
+        stages_ok=all(x.get("current_stage") in (
+            "READY_FOR_REVIEW","APPROVED_FOR_CANARY","CANARY_LIVE","LIMITED_PRODUCTION",
+            "FULL_PRODUCTION_ELIGIBLE","CANARY_PAUSED","ROLLED_BACK","CANARY_REJECTED"
+        ) for x in deployments)
+        c=conn()
+        bad_versions=c.execute("""SELECT COUNT(*) n FROM deployment_registry dr
+          LEFT JOIN candidate_strategies cs ON cs.candidate_id=dr.candidate_id
+          WHERE cs.candidate_id IS NULL
+             OR dr.candidate_version!=cs.candidate_version
+             OR dr.production_version!=cs.production_version""").fetchone()["n"]
+        c.close()
+        dep_state_valid=bool(stages_ok and int(bad_versions)==0)
+    except Exception:
+        dep_state_valid=False
+    try:
+        audit_ok=security_manager.verify_audit_chain().get("verified",False)
+    except Exception:
+        audit_ok=False
+    result=security_manager.startup_security_check(
+        secrets_available=secrets_ok,
+        canary_live_enabled=DEPLOYMENT_LIVE_EXECUTION_ENABLED,
+        canary_env=CANARY_OANDA_ENV,
+        risk_limits_valid=security_risk_limits_valid(),
+        deployment_state_valid=dep_state_valid,
+        audit_available=audit_ok,
+        running_under_test=running_under_test()
+    )
+    actor=security_manager.internal_actor("STARTUP_SECURITY","SYSTEM_RECOMMENDER")
+    if result.get("integrity",{}).get("role_config_changed"):
+        security_manager.audit(actor,"ADMIN_PERMISSION_CHANGED","security.actor_roles",None,
+                               {"role_config_hash":result["integrity"].get("role_config_hash")},
+                               "role configuration changed outside runtime change manager",
+                               "UNVERIFIED")
+    return result
+
+
+
 deployment_manager = DeploymentManager(
     DB,CANARY_OANDA,CANARY_ACCOUNT,CANARY_TOKEN,
-    live_enabled=bool(DEPLOYMENT_LIVE_EXECUTION_ENABLED and CANARY_OANDA_ENV=="live"),
+    live_enabled=bool(DEPLOYMENT_LIVE_EXECUTION_ENABLED and CANARY_OANDA_ENV=="live" and TRADING_ENVIRONMENT=="PRODUCTION"),
     allowed_symbols=INSTRUMENTS,
     allowed_regimes=("BULL_TREND","BEAR_TREND","RANGE"),
     min_validation_score=DEPLOYMENT_MIN_VALIDATION_SCORE,
@@ -303,6 +655,235 @@ deployment_manager = DeploymentManager(
     max_latency_seconds=DEPLOYMENT_MAX_LATENCY_SECONDS,
     base_risk_fraction=RISK_BASE_FRACTION
 )
+observability_manager = ObservabilityManager(
+    DB, VERSION_TAG, alert_cooldown_seconds=OBSERVABILITY_ALERT_COOLDOWN_SECONDS
+)
+system_evaluation_engine = SystemEvaluationEngine(
+    DB, VERSION_TAG,
+    min_samples=SYSTEM_EVALUATION_MIN_SAMPLES,
+    report_period_hours=SYSTEM_EVALUATION_PERIOD_HOURS,
+    score_weights={
+        "trading":SYSTEM_EVALUATION_TRADING_WEIGHT,
+        "risk":SYSTEM_EVALUATION_RISK_WEIGHT,
+        "operational":SYSTEM_EVALUATION_OPERATIONAL_WEIGHT,
+        "stability":SYSTEM_EVALUATION_STABILITY_WEIGHT
+    },
+    risk_drawdown_limit=float(managed_value("risk.drawdown_stop",RISK_DRAWDOWN_STOP))
+)
+
+def governance_policy_config() -> Dict[str,Any]:
+    return {
+        "MIN_STABILITY_HOURS":int(managed_value("governance.min_stability_hours",GOVERNANCE_MIN_STABILITY_HOURS)),
+        "LIMITED_ADAPTATION_REVIEW_HOURS":int(managed_value("governance.limited_review_hours",GOVERNANCE_LIMITED_REVIEW_HOURS)),
+        "MAX_MAJOR_CHANGES_PER_WEEK":int(managed_value("governance.max_major_changes_7d",GOVERNANCE_MAX_MAJOR_CHANGES_7D)),
+        "MAX_STRATEGY_CHANGES_PER_WEEK":int(managed_value("governance.max_strategy_changes_7d",GOVERNANCE_MAX_STRATEGY_CHANGES_7D)),
+        "MAX_PARAMETER_CHANGES_PER_WEEK":int(managed_value("governance.max_parameter_changes_7d",GOVERNANCE_MAX_PARAMETER_CHANGES_7D)),
+        "MAX_DEPLOYMENTS_PER_WEEK":int(managed_value("governance.max_deployments_7d",GOVERNANCE_MAX_DEPLOYMENTS_7D)),
+        "MAX_PROMOTIONS_PER_WEEK":int(managed_value("governance.max_promotions_7d",GOVERNANCE_MAX_PROMOTIONS_7D)),
+        "MAX_GLOBAL_CHANGES_PER_WEEK":int(managed_value("governance.max_global_changes_7d",GOVERNANCE_MAX_GLOBAL_CHANGES_7D)),
+        "META_RISK_HIGH":float(managed_value("governance.meta_risk_high",GOVERNANCE_META_RISK_HIGH)),
+        "META_RISK_CRITICAL":float(managed_value("governance.meta_risk_critical",GOVERNANCE_META_RISK_CRITICAL)),
+        "MODULE_DECISION_FRESHNESS_HOURS":int(managed_value("governance.decision_freshness_hours",GOVERNANCE_DECISION_FRESHNESS_HOURS)),
+    }
+
+governance_engine = GovernanceEngine(
+    DB, VERSION_TAG,
+    mode=str(managed_value("governance.mode","SHADOW")),
+    policies=governance_policy_config()
+)
+governance_engine.ensure_schema()
+governance_engine.set_runtime(
+    mode=str(managed_value("governance.mode","SHADOW")),
+    policies=governance_policy_config(),
+    config_version=security_manager.current_version()
+)
+
+def production_stage_limits() -> Dict[str,Dict[str,Any]]:
+    return {
+        "MINIMAL_LIVE":{
+            "risk_cap_multiplier":float(managed_value("production.minimal_risk_multiplier",PRODUCTION_MINIMAL_RISK_MULTIPLIER)),
+            "max_trade_risk_fraction":min(float(managed_value("risk.max_trade_fraction",RISK_MAX_TRADE_FRACTION)),0.0005),
+            "max_portfolio_exposure_fraction":min(float(managed_value("risk.max_portfolio_fraction",RISK_MAX_PORTFOLIO_FRACTION)),0.005),
+            "max_drawdown_fraction":min(float(managed_value("risk.drawdown_stop",RISK_DRAWDOWN_STOP)),0.005),
+            "min_trades_for_promotion":int(managed_value("production.minimal_min_trades",PRODUCTION_MINIMAL_MIN_TRADES)),
+            "min_days_for_promotion":int(managed_value("production.minimal_min_days",PRODUCTION_MINIMAL_MIN_DAYS)),
+        },
+        "LIMITED_LIVE":{
+            "risk_cap_multiplier":float(managed_value("production.limited_risk_multiplier",PRODUCTION_LIMITED_RISK_MULTIPLIER)),
+            "max_trade_risk_fraction":min(float(managed_value("risk.max_trade_fraction",RISK_MAX_TRADE_FRACTION)),0.001),
+            "max_portfolio_exposure_fraction":min(float(managed_value("risk.max_portfolio_fraction",RISK_MAX_PORTFOLIO_FRACTION)),0.01),
+            "max_drawdown_fraction":min(float(managed_value("risk.drawdown_stop",RISK_DRAWDOWN_STOP)),0.01),
+            "min_trades_for_promotion":int(managed_value("production.limited_min_trades",PRODUCTION_LIMITED_MIN_TRADES)),
+            "min_days_for_promotion":int(managed_value("production.limited_min_days",PRODUCTION_LIMITED_MIN_DAYS)),
+        },
+        "CONTROLLED_LIVE":{
+            "risk_cap_multiplier":float(managed_value("production.controlled_risk_multiplier",PRODUCTION_CONTROLLED_RISK_MULTIPLIER)),
+            "max_trade_risk_fraction":min(float(managed_value("risk.max_trade_fraction",RISK_MAX_TRADE_FRACTION)),0.0025),
+            "max_portfolio_exposure_fraction":min(float(managed_value("risk.max_portfolio_fraction",RISK_MAX_PORTFOLIO_FRACTION)),0.025),
+            "max_drawdown_fraction":min(float(managed_value("risk.drawdown_stop",RISK_DRAWDOWN_STOP)),0.02),
+            "min_trades_for_promotion":int(managed_value("production.controlled_min_trades",PRODUCTION_CONTROLLED_MIN_TRADES)),
+            "min_days_for_promotion":int(managed_value("production.controlled_min_days",PRODUCTION_CONTROLLED_MIN_DAYS)),
+        }
+    }
+
+production_readiness_gate = ProductionReadinessGate(DB,VERSION_TAG,stage_limits=production_stage_limits())
+production_readiness_gate.ensure_schema()
+
+sync_security_runtime_config()
+
+OBSERVABILITY_DEPENDENCIES = {
+    "Database":DEPENDENCY_CRITICAL,
+    "Market Data":DEPENDENCY_CRITICAL,
+    "Market Regime Detector":DEPENDENCY_IMPORTANT,
+    "Broker Connection":DEPENDENCY_CRITICAL,
+    "Risk Engine":DEPENDENCY_CRITICAL,
+    "Execution Engine":DEPENDENCY_CRITICAL,
+    "Recovery Manager":DEPENDENCY_CRITICAL,
+    "Security Manager":DEPENDENCY_CRITICAL,
+    "System Evaluation Engine":DEPENDENCY_IMPORTANT,
+    "Governance Engine":DEPENDENCY_IMPORTANT,
+    "Production Readiness Gate":DEPENDENCY_CRITICAL,
+    "Strategies":DEPENDENCY_IMPORTANT,
+    "AI Strategy Director":DEPENDENCY_IMPORTANT,
+    "Trade Memory":DEPENDENCY_IMPORTANT,
+    "Adaptive Learning":DEPENDENCY_NON_CRITICAL,
+    "Validation Pipeline":DEPENDENCY_NON_CRITICAL,
+    "Paper Trading":DEPENDENCY_NON_CRITICAL,
+    "Deployment Manager":DEPENDENCY_IMPORTANT,
+}
+
+
+recovery_manager = RecoveryManager(
+    DB,OANDA,ACCOUNT,TOKEN,account_scope="PRIMARY",
+    use_client_extensions=RECOVERY_USE_CLIENT_EXTENSIONS,
+    circuit_failure_threshold=RECOVERY_CIRCUIT_FAILURE_THRESHOLD,
+    circuit_open_seconds=RECOVERY_CIRCUIT_OPEN_SECONDS,
+    request_min_interval_ms=RECOVERY_REQUEST_MIN_INTERVAL_MS,
+    max_read_retries=RECOVERY_MAX_READ_RETRIES,
+    backoff_base_seconds=RECOVERY_BACKOFF_BASE_SECONDS,
+    backoff_cap_seconds=RECOVERY_BACKOFF_CAP_SECONDS
+)
+
+canary_recovery_manager = RecoveryManager(
+    DB,CANARY_OANDA,CANARY_ACCOUNT,CANARY_TOKEN,account_scope="CANARY",
+    use_client_extensions=RECOVERY_USE_CLIENT_EXTENSIONS,
+    circuit_failure_threshold=RECOVERY_CIRCUIT_FAILURE_THRESHOLD,
+    circuit_open_seconds=RECOVERY_CIRCUIT_OPEN_SECONDS,
+    request_min_interval_ms=RECOVERY_REQUEST_MIN_INTERVAL_MS,
+    max_read_retries=RECOVERY_MAX_READ_RETRIES,
+    backoff_base_seconds=RECOVERY_BACKOFF_BASE_SECONDS,
+    backoff_cap_seconds=RECOVERY_BACKOFF_CAP_SECONDS
+)
+
+def production_hard_limits() -> Dict[str,Any]:
+    return {
+        "max_trade_risk_fraction":float(managed_value("risk.max_trade_fraction",RISK_MAX_TRADE_FRACTION)),
+        "max_portfolio_exposure_fraction":float(managed_value("risk.max_portfolio_fraction",RISK_MAX_PORTFOLIO_FRACTION)),
+        "max_drawdown_fraction":float(managed_value("risk.drawdown_stop",RISK_DRAWDOWN_STOP)),
+    }
+
+def production_runtime_context() -> Dict[str,Any]:
+    rec={}
+    try: rec=recovery_manager.state()
+    except Exception: rec={}
+    gov={}
+    try: gov=governance_engine.state()
+    except Exception: gov={}
+    latest_eval=None
+    try: latest_eval=system_evaluation_engine.latest()
+    except Exception: latest_eval=None
+    monitoring_ready=False
+    try:
+        dash=observability_manager.dashboard()
+        monitoring_ready=(dash.get("system_health") not in ("CRITICAL","TRADING_PAUSED","EMERGENCY_STOP"))
+    except Exception:
+        monitoring_ready=False
+    dep_state={}
+    if DEPLOYMENT_MANAGER_ENABLED:
+        try: dep_state=deployment_manager.dashboard()
+        except Exception: dep_state={}
+    return {
+        "environment":TRADING_ENVIRONMENT,
+        "production_authorized":bool(PRODUCTION_AUTHORIZED),
+        "account_scope":"PRIMARY",
+        "risk_engine_ready":bool(RISK_ENGINE_ENABLED),
+        "risk_engine_shadow_mode":bool(RISK_ENGINE_SHADOW_MODE),
+        "broker_reconciled":bool(rec.get("last_reconciliation_status") in ("MATCHED","MINOR_MISMATCH","READY")),
+        "market_data_fresh":bool(rec.get("last_market_data_ts")) and not bool(rec.get("safe_mode")),
+        "last_data_ts":rec.get("last_market_data_ts"),
+        "audit_ready":bool((security_manager.verify_audit_chain() or {}).get("verified",False)) if hasattr(security_manager,"verify_audit_chain") else False,
+        "deployment_state_consistent":True,
+        "deployment_state":dep_state,
+        "no_state_corruption":not bool(rec.get("state") in ("CRITICAL_FAILURE","RECONCILING")),
+        "canary_controls_ready":bool(DEPLOYMENT_MANAGER_ENABLED),
+        "recovery_tests_pass":False,  # Certification must bind immutable Step14 evidence; runtime does not self-assert tests.
+        "security_tests_pass":False,
+        "change_management_ready":True,
+        "monitoring_ready":monitoring_ready,
+        "no_risk_bypass_known":False,
+        "no_duplicate_order_vulnerability":False,
+        "emergency_stop_test_pass":False,
+        "system_ready":bool(rec.get("state") in ("READY","NORMAL")) and not bool(rec.get("safe_mode")),
+        "risk_ready":bool(RISK_ENGINE_ENABLED and not RISK_ENGINE_SHADOW_MODE),
+        "broker_ready":bool(rec.get("state") in ("READY","NORMAL")) and not bool(rec.get("safe_mode")),
+        "data_ready":bool(rec.get("last_market_data_ts")) and not bool(rec.get("safe_mode")),
+        "reconciliation_ok":bool(rec.get("last_reconciliation_status") in ("MATCHED","MINOR_MISMATCH","READY")),
+        "governance_ok":bool(gov and not int(gov.get("governance_lock") or 0) and gov.get("adaptation_state")!="ADAPTATION_FROZEN"),
+        "governance_lock":bool(gov and int(gov.get("governance_lock") or 0)),
+        "emergency_stop":bool(rec.get("emergency_stop")),
+        "system_status":(latest_eval or {}).get("system_status"),
+        "system_evaluation":latest_eval or {},
+        "governance_state":gov.get("adaptation_state"),
+        "data_quality":float((latest_eval or {}).get("data_quality_score") or 0.0),
+        "hard_limits":production_hard_limits(),
+    }
+
+def production_certification_context() -> Dict[str,Any]:
+    ctx=production_runtime_context()
+    try:
+        report=json.loads(Path(PRODUCTION_STEP14_REPORT_PATH).read_text())
+    except Exception:
+        report={}
+    gates=(report.get("pass_fail_gate") or {}).get("gates") or {}
+    ctx.update({
+        "recovery_tests_pass":bool(gates.get("restart_recovery_successful") and gates.get("reconciliation_passes") and gates.get("database_failure_recovery_passes")),
+        "security_tests_pass":bool(gates.get("governance_protections_pass") and gates.get("zero_risk_limit_bypasses")),
+        "no_risk_bypass_known":bool(gates.get("zero_risk_limit_bypasses")),
+        "no_duplicate_order_vulnerability":bool(gates.get("zero_duplicate_order_vulnerabilities")),
+        "emergency_stop_test_pass":bool(gates.get("emergency_stop_survives_restart")),
+        "canary_controls_ready":bool(gates.get("canary_rollback_pass")),
+        "step14_report_version":report.get("framework_version"),
+    })
+    return ctx
+
+def production_release_files() -> List[str]:
+    root=Path(__file__).resolve().parent
+    names=[
+        "server.py","production_readiness.py","governance_engine.py","system_evaluation.py",
+        "security_manager.py","recovery_manager.py","order_state.py","observability.py",
+        "adaptive_learning.py","validation_pipeline.py","deployment_manager.py","deployment_runtime.py",
+        "requirements.txt","Dockerfile"
+    ]
+    return [str(root/n) for n in names]
+
+def production_release_versions() -> Dict[str,Any]:
+    return {
+        "system_release":VERSION_TAG,
+        "strategy_versions":[f"{x}@{VERSION_TAG}" for x in sorted(INSTRUMENTS)],
+        "risk_config_version":f"config_v{security_manager.current_version()}",
+        "governance_version":f"governance@{VERSION_TAG}:config_v{security_manager.current_version()}",
+        "deployment_version":f"deployment@{VERSION_TAG}",
+        "execution_version":f"execution@{VERSION_TAG}",
+        "broker_adapter_version":f"oanda-adapter@{VERSION_TAG}",
+        "data_pipeline_version":f"market-data@{VERSION_TAG}",
+        "dependencies":security_manager.last_integrity.get("dependency_hash") if getattr(security_manager,"last_integrity",None) else None,
+    }
+
+def freeze_current_release_candidate(actor: str="SYSTEM") -> Dict[str,Any]:
+    return production_readiness_gate.create_release_candidate(
+        files=production_release_files(),config=security_manager.current_config(),versions=production_release_versions(),
+        step14_report_path=PRODUCTION_STEP14_REPORT_PATH,actor=actor)
+
 
 def conn() -> sqlite3.Connection:
     c = sqlite3.connect(DB)
@@ -718,6 +1299,16 @@ def conn() -> sqlite3.Connection:
             exit_context_json TEXT NOT NULL DEFAULT '{}',
             risk_recommendation_json TEXT NOT NULL DEFAULT '{}',
             data_quality_json TEXT NOT NULL DEFAULT '{}',
+            execution_quality_compromised INTEGER NOT NULL DEFAULT 0,
+            operational_incident_id TEXT,
+            strategy_version TEXT,
+            risk_config_version TEXT,
+            director_version TEXT,
+            regime_model_version TEXT,
+            deployment_version TEXT,
+            runtime_code_hash TEXT,
+            dependency_lock_hash TEXT,
+            config_snapshot_hash TEXT,
             created_ts TEXT NOT NULL,
             updated_ts TEXT NOT NULL,
             FOREIGN KEY(signal_id) REFERENCES signals(id)
@@ -1024,7 +1615,8 @@ def conn() -> sqlite3.Connection:
             profit_lock_applied INTEGER NOT NULL DEFAULT 0,
             trailing_applied INTEGER NOT NULL DEFAULT 0,
             closed INTEGER NOT NULL DEFAULT 0,
-            updated_ts TEXT NOT NULL
+            updated_ts TEXT NOT NULL,
+            current_units REAL
         )
     """)
     c.execute("""
@@ -1154,18 +1746,28 @@ def session_info(dt: datetime) -> Dict[str, Any]:
 
 
 async def req(client: httpx.AsyncClient, method: str, path: str, params=None, body=None) -> Dict[str, Any]:
+    if RECOVERY_MANAGER_ENABLED:
+        return await recovery_manager.broker_request(
+            client,method,path,params=params,body=body,
+            critical=path in (
+                "/v3/accounts/{account}",
+                "/v3/accounts/{account}/openTrades",
+                "/v3/accounts/{account}/openPositions",
+                "/v3/accounts/{account}/pendingOrders",
+            ),
+            allow_retry=(method.upper()=="GET")
+        )
     if not ACCOUNT or not TOKEN:
         raise RuntimeError("Faltan OANDA_ACCOUNT_ID/OANDA_TOKEN")
-    url = OANDA + path.replace("{account}", ACCOUNT)
-    r = await client.request(method, url, params=params, json=body, headers={"Authorization": f"Bearer {TOKEN}", "Content-Type": "application/json"}, timeout=15)
-    if r.status_code >= 400:
-        try:
-            msg = r.json().get("errorMessage") or r.json().get("errorCode")
-        except Exception:
-            msg = r.text[:250]
+    url=OANDA+path.replace("{account}",ACCOUNT)
+    r=await client.request(method,url,params=params,json=body,
+                           headers={"Authorization":f"Bearer {TOKEN}","Content-Type":"application/json"},
+                           timeout=15)
+    if r.status_code>=400:
+        try: msg=r.json().get("errorMessage") or r.json().get("errorCode")
+        except Exception: msg=r.text[:250]
         raise RuntimeError(f"OANDA Practice HTTP {r.status_code}: {msg}")
     return r.json()
-
 
 async def candles(client: httpx.AsyncClient, inst: str, granularity: str, count: int) -> List[Dict[str, Any]]:
     d = await req(client, "GET", f"/v3/accounts/{{account}}/instruments/{inst}/candles", {"price": "M", "granularity": granularity, "count": count})
@@ -1648,9 +2250,9 @@ def detect_market_regime(h1: List[Dict[str, Any]], m15: List[Dict[str, Any]],
         ordered=sorted(candidates.items(),key=lambda x:x[1],reverse=True)
         regime,winning=ordered[0]
         margin=winning-ordered[1][1]
-        if regime in ("BULL_TREND","BEAR_TREND") and trend_strength<MARKET_REGIME_TREND_THRESHOLD:
-            regime="RANGE" if range_score>=MARKET_REGIME_RANGE_THRESHOLD else "UNCERTAIN"
-        elif regime=="RANGE" and range_score<MARKET_REGIME_RANGE_THRESHOLD:
+        if regime in ("BULL_TREND","BEAR_TREND") and trend_strength<float(managed_value("regime.trend_threshold",MARKET_REGIME_TREND_THRESHOLD)):
+            regime="RANGE" if range_score>=float(managed_value("regime.range_threshold",MARKET_REGIME_RANGE_THRESHOLD)) else "UNCERTAIN"
+        elif regime=="RANGE" and range_score<float(managed_value("regime.range_threshold",MARKET_REGIME_RANGE_THRESHOLD)):
             regime="UNCERTAIN"
 
     # Confidence combines score margin, timeframe agreement, data sufficiency and anomaly penalty.
@@ -2539,9 +3141,9 @@ def _director_state_from_score(score: float, health_status: Optional[str]) -> st
         return "DISABLED"
     if hs=="RECOVERING":
         return "PAUSED"
-    if score>=AI_DIRECTOR_ACTIVE_THRESHOLD:
+    if score>=float(managed_value("director.active_threshold",AI_DIRECTOR_ACTIVE_THRESHOLD)):
         return "ACTIVE"
-    if score>=AI_DIRECTOR_REDUCED_THRESHOLD:
+    if score>=float(managed_value("director.reduced_threshold",AI_DIRECTOR_REDUCED_THRESHOLD)):
         return "REDUCED"
     if score>=0.35:
         return "PAUSED"
@@ -2814,16 +3416,20 @@ def _executed_loss_streak() -> int:
 
 def _strategy_open_risk_proxy(variant: str) -> float:
     """
-    Until broker reconciliation stores realized monetary risk per trade,
-    strategy open risk is represented conservatively as a fraction-of-NAV proxy:
-    each tracked open trade consumes one max-per-trade risk allowance.
+    Conservative fraction-of-NAV proxy using REAL filled units when available.
     """
     c=conn()
-    n=c.execute("""SELECT COUNT(*) n FROM active_trade_management
-                   WHERE setup_variant=? AND closed=0""",(variant,)).fetchone()["n"]
+    try:
+        rows=c.execute("""SELECT current_units FROM active_trade_management
+                          WHERE setup_variant=? AND closed=0""",(variant,)).fetchall()
+        raw=sum((abs(float(x["current_units"] or UNITS))/max(abs(float(UNITS)),1.0))*float(managed_value("risk.max_trade_fraction",RISK_MAX_TRADE_FRACTION))
+                for x in rows)
+    except sqlite3.OperationalError:
+        n=c.execute("""SELECT COUNT(*) n FROM active_trade_management
+                       WHERE setup_variant=? AND closed=0""",(variant,)).fetchone()["n"]
+        raw=int(n)*float(managed_value("risk.max_trade_fraction",RISK_MAX_TRADE_FRACTION))
     c.close()
-    return float(min(RISK_MAX_STRATEGY_FRACTION, int(n)*RISK_MAX_TRADE_FRACTION))
-
+    return float(min(float(managed_value("risk.max_strategy_fraction",RISK_MAX_STRATEGY_FRACTION)),raw))
 
 def _shared_currency_correlation(instrument: str, open_instruments: List[str]) -> Dict[str, Any]:
     """
@@ -2881,12 +3487,15 @@ async def build_broker_risk_context(client: httpx.AsyncClient) -> Dict[str, Any]
         pos=await req(client,"GET","/v3/accounts/{account}/openPositions")
         positions=pos.get("positions") or []
         ctx["open_instruments"]=[x.get("instrument") for x in positions if x.get("instrument")]
-        ctx["open_positions"]=len(ctx["open_instruments"])
-        # Risk fraction proxy is deliberately capped and marked as a proxy.
+        trades_payload=await req(client,"GET","/v3/accounts/{account}/openTrades")
+        open_trades=trades_payload.get("trades") or []
+        ctx["open_positions"]=len(open_trades)
+        unit_factor=sum(abs(float(x.get("currentUnits") or 0))/max(abs(float(UNITS)),1.0) for x in open_trades)
         ctx["portfolio_open_risk"]=min(
-            RISK_MAX_PORTFOLIO_FRACTION,
-            ctx["open_positions"]*RISK_MAX_TRADE_FRACTION
+            float(managed_value("risk.max_portfolio_fraction",RISK_MAX_PORTFOLIO_FRACTION)),
+            unit_factor*float(managed_value("risk.max_trade_fraction",RISK_MAX_TRADE_FRACTION))
         )
+        ctx["broker_open_trade_units"]={str(x.get("id")):abs(float(x.get("currentUnits") or 0)) for x in open_trades}
     except Exception as e:
         errors.append(f"open_positions:{e}")
 
@@ -2952,6 +3561,16 @@ def adaptive_risk_recommendation(
     The multiplier is capped at 1.0, so strong performance can never increase
     risk above the existing configured position size.
     """
+    risk_base=float(managed_value("risk.base_fraction",RISK_BASE_FRACTION))
+    max_trade=float(managed_value("risk.max_trade_fraction",RISK_MAX_TRADE_FRACTION))
+    max_strategy=float(managed_value("risk.max_strategy_fraction",RISK_MAX_STRATEGY_FRACTION))
+    max_portfolio=float(managed_value("risk.max_portfolio_fraction",RISK_MAX_PORTFOLIO_FRACTION))
+    max_margin=float(managed_value("risk.max_margin_usage",RISK_MAX_MARGIN_USAGE))
+    dd_warn=float(managed_value("risk.drawdown_warning",RISK_DRAWDOWN_WARN))
+    dd_stop=float(managed_value("risk.drawdown_stop",RISK_DRAWDOWN_STOP))
+    max_losses=int(managed_value("risk.max_consecutive_losses",RISK_MAX_CONSECUTIVE_LOSSES))
+    max_correlated=int(managed_value("risk.max_correlated_positions",RISK_MAX_CORRELATED_POSITIONS))
+
     market_regime=(regime or {}).get("market_regime")
     volatility_state=(regime or {}).get("volatility_state")
     regime_conf=_risk_float((regime or {}).get("confidence"),0.0) or 0.0
@@ -2991,13 +3610,13 @@ def adaptive_risk_recommendation(
         hard=True; allow=False; emergency=True
         reasons.append("abnormal_system_behavior")
 
-    if dd is not None and dd>=RISK_DRAWDOWN_STOP:
+    if dd is not None and dd>=dd_stop:
         hard=True; allow=False; emergency=True; reduce_existing=True
         reasons.append("drawdown_hard_limit")
-    elif dd is not None and dd>=RISK_DRAWDOWN_WARN:
+    elif dd is not None and dd>=dd_warn:
         reasons.append("drawdown_warning")
 
-    if loss_streak>=RISK_MAX_CONSECUTIVE_LOSSES:
+    if loss_streak>=max_losses:
         hard=True; allow=False
         reasons.append("consecutive_loss_limit")
 
@@ -3005,15 +3624,15 @@ def adaptive_risk_recommendation(
         hard=True; allow=False; emergency=True; reduce_existing=True
         reasons.append("abnormal_market_volatility")
 
-    if portfolio_open_risk>=RISK_MAX_PORTFOLIO_FRACTION:
+    if portfolio_open_risk>=max_portfolio:
         hard=True; allow=False; reduce_existing=True
         reasons.append("portfolio_risk_limit")
 
-    if strategy_open_risk>=RISK_MAX_STRATEGY_FRACTION:
+    if strategy_open_risk>=max_strategy:
         hard=True; allow=False
         reasons.append("strategy_risk_limit")
 
-    if margin_usage is not None and margin_usage>=RISK_MAX_MARGIN_USAGE:
+    if margin_usage is not None and margin_usage>=max_margin:
         hard=True; allow=False; reduce_existing=True
         reasons.append("margin_usage_limit")
 
@@ -3056,12 +3675,12 @@ def adaptive_risk_recommendation(
     if vol_mult<1.0: reasons.append("volatility_reduction")
 
     # Progressive drawdown taper before hard stop.
-    if dd is not None and 0<dd<RISK_DRAWDOWN_STOP:
-        if dd<RISK_DRAWDOWN_WARN:
-            dd_mult=max(0.75,1.0-0.25*(dd/RISK_DRAWDOWN_WARN))
+    if dd is not None and 0<dd<dd_stop:
+        if dd<dd_warn:
+            dd_mult=max(0.75,1.0-0.25*(dd/dd_warn))
         else:
-            span=max(RISK_DRAWDOWN_STOP-RISK_DRAWDOWN_WARN,1e-9)
-            progress=(dd-RISK_DRAWDOWN_WARN)/span
+            span=max(dd_stop-dd_warn,1e-9)
+            progress=(dd-dd_warn)/span
             dd_mult=max(0.20,0.75-0.55*progress)
         mult*=dd_mult
         if dd_mult<1.0: reasons.append("drawdown_progressive_reduction")
@@ -3075,10 +3694,10 @@ def adaptive_risk_recommendation(
         mult=0.0
 
     # ---------- separate risk layers ----------
-    requested_risk=RISK_BASE_FRACTION
-    trade_cap=RISK_MAX_TRADE_FRACTION
-    strategy_remaining=max(0.0,RISK_MAX_STRATEGY_FRACTION-strategy_open_risk)
-    portfolio_remaining=max(0.0,RISK_MAX_PORTFOLIO_FRACTION-portfolio_open_risk)
+    requested_risk=risk_base
+    trade_cap=max_trade
+    strategy_remaining=max(0.0,max_strategy-strategy_open_risk)
+    portfolio_remaining=max(0.0,max_portfolio-portfolio_open_risk)
 
     approved_risk=0.0 if not allow else min(
         requested_risk*mult,
@@ -3097,7 +3716,7 @@ def adaptive_risk_recommendation(
         "shadow_mode":True,
         "risk_multiplier":float(mult),
         "max_position_size":float(shadow_max_units),
-        "max_exposure":float(RISK_MAX_MARGIN_USAGE),
+        "max_exposure":float(max_margin),
         "allow_new_trades":bool(allow),
         "reduce_existing_positions":bool(reduce_existing),
         "emergency_stop":bool(emergency),
@@ -3123,8 +3742,8 @@ def adaptive_risk_recommendation(
             "correlation":corr,
             "requested_units":float(requested_units),
             "risk_per_trade_cap":trade_cap,
-            "risk_per_strategy_cap":RISK_MAX_STRATEGY_FRACTION,
-            "risk_portfolio_cap":RISK_MAX_PORTFOLIO_FRACTION
+            "risk_per_strategy_cap":max_strategy,
+            "risk_portfolio_cap":max_portfolio
         },
         "timestamp":now_iso()
     }
@@ -3325,6 +3944,14 @@ def record_trade_memory_entry(
        _tm_json(entry_reasons,[]),_tm_json(entry_context,{}),_tm_json(execution_context,{}),
        _tm_json(risk_shadow,{}),_tm_json(data_quality,{}),now_iso(),now_iso()
       ))
+    version_ctx=security_version_context(r)
+    c.execute("""UPDATE trade_memory SET strategy_version=?,risk_config_version=?,director_version=?,
+                 regime_model_version=?,deployment_version=?,runtime_code_hash=?,dependency_lock_hash=?,
+                 config_snapshot_hash=?,release_id=?,production_certification_id=?,production_stage=? WHERE trade_id=?""",
+              (version_ctx["strategy_version"],version_ctx["risk_config_version"],version_ctx["director_version"],
+               version_ctx["regime_model_version"],version_ctx["deployment_version"],version_ctx["runtime_code_hash"],
+               version_ctx["dependency_lock_hash"],version_ctx["config_snapshot_hash"],version_ctx.get("release_id"),
+               version_ctx.get("production_certification_id"),version_ctx.get("production_stage"),str(trade_id)))
     row=c.execute("SELECT id FROM trade_memory WHERE trade_id=?",(str(trade_id),)).fetchone()
     c.commit();c.close()
 
@@ -3487,6 +4114,11 @@ async def reconcile_trade_memory(client: httpx.AsyncClient, instrument: Optional
             closed+=1
             log.info("TRADE_MEMORY CLOSED trade=%s net=%s realized_r=%s reason=%s",
                      mem["trade_id"],net,realized_r,";".join(exit_reasons))
+            if RECOVERY_MANAGER_ENABLED:
+                recovery_manager.journal("POSITION_CLOSED",trade_id=mem["trade_id"],
+                                         order_id=mem.get("order_id"),strategy_id=mem.get("strategy"),
+                                         payload={"net_result":net,"realized_r":realized_r,
+                                                  "exit_reasons":exit_reasons})
         except Exception as e:
             errors.append({"trade_id":mem["trade_id"],"error":str(e)})
             log.warning("TRADE_MEMORY reconcile failed trade=%s err=%s",mem["trade_id"],e)
@@ -3587,6 +4219,8 @@ def _tm_closed_rows(
     since: Optional[str]=None
 ) -> List[Dict[str, Any]]:
     where=["status='CLOSED'"]
+    if RECOVERY_BLOCK_ADAPTIVE_LEARNING_COMPROMISED:
+        where.append("COALESCE(execution_quality_compromised,0)=0")
     params=[]
     if strategy:where.append("strategy=?");params.append(strategy)
     if regime:where.append("market_regime_entry=?");params.append(regime)
@@ -3846,10 +4480,12 @@ def _al_trade_rows(strategy: Optional[str]=None) -> List[Dict[str,Any]]:
     if strategy:
         rows=[dict(x) for x in c.execute(
             """SELECT * FROM trade_memory WHERE status='CLOSED' AND strategy=?
+               AND COALESCE(execution_quality_compromised,0)=0
                ORDER BY entry_ts,id""",(strategy,)).fetchall()]
     else:
         rows=[dict(x) for x in c.execute(
             """SELECT * FROM trade_memory WHERE status='CLOSED'
+               AND COALESCE(execution_quality_compromised,0)=0
                ORDER BY entry_ts,id""").fetchall()]
     c.close()
     return rows
@@ -3900,11 +4536,11 @@ def _al_cooldown_allows(strategy: str, parameter_name: str,
         generated=datetime.fromisoformat(prev["generated_at"].replace("Z","+00:00"))
         hours=(datetime.now(timezone.utc)-generated).total_seconds()/3600
     except Exception:
-        hours=ADAPTIVE_LEARNING_COOLDOWN_HOURS+1
+        hours=int(managed_value("adaptive_learning.cooldown_hours",ADAPTIVE_LEARNING_COOLDOWN_HOURS))+1
     new_count=sum(1 for r in rows if r.get("entry_ts") and r["entry_ts"]>str(prev.get("period_end") or ""))
-    ok=hours>=ADAPTIVE_LEARNING_COOLDOWN_HOURS and new_count>=ADAPTIVE_LEARNING_MIN_NEW_TRADES
+    ok=hours>=int(managed_value("adaptive_learning.cooldown_hours",ADAPTIVE_LEARNING_COOLDOWN_HOURS)) and new_count>=ADAPTIVE_LEARNING_MIN_NEW_TRADES
     return {"ok":ok,"hours_since":hours,"new_trades":new_count,
-            "required_hours":ADAPTIVE_LEARNING_COOLDOWN_HOURS,
+            "required_hours":int(managed_value("adaptive_learning.cooldown_hours",ADAPTIVE_LEARNING_COOLDOWN_HOURS)),
             "required_new_trades":ADAPTIVE_LEARNING_MIN_NEW_TRADES}
 
 
@@ -3951,7 +4587,7 @@ def _al_store_candidate(run_id: str, strategy: str, candidate: Dict[str,Any],
                           "value":candidate["proposed_value"]
                       }}
 
-    cooldown_until=(datetime.now(timezone.utc)+timedelta(hours=ADAPTIVE_LEARNING_COOLDOWN_HOURS)).isoformat()
+    cooldown_until=(datetime.now(timezone.utc)+timedelta(hours=int(managed_value("adaptive_learning.cooldown_hours",ADAPTIVE_LEARNING_COOLDOWN_HOURS)))).isoformat()
     c=conn()
     c.execute("""INSERT OR IGNORE INTO candidate_strategies(
       candidate_id,run_id,strategy_id,production_version,candidate_version,status,
@@ -3978,7 +4614,7 @@ def _al_generate_proposals_for_strategy(run_id: str, strategy: str,
     Generate only changes reconstructible from entry-time Trade Memory.
     No blind parameter grid search.
     """
-    if len(rows)<ADAPTIVE_LEARNING_MIN_TRADES:
+    if len(rows)<int(managed_value("adaptive_learning.min_trades",ADAPTIVE_LEARNING_MIN_TRADES)):
         _al_event(run_id,"ANALYZE","INSUFFICIENT_DATA",strategy,None,
                   {"samples":len(rows),"minimum":ADAPTIVE_LEARNING_MIN_TRADES})
         return []
@@ -4061,7 +4697,7 @@ def _al_generate_proposals_for_strategy(run_id: str, strategy: str,
     # subset actually shows stronger performance; this preserves NO_CHANGE_RECOMMENDED.
     vals=[_risk_float(r.get("director_confidence_entry")) for r in rows]
     vals=[v for v in vals if v is not None]
-    if len(vals)>=ADAPTIVE_LEARNING_MIN_TRADES:
+    if len(vals)>=int(managed_value("adaptive_learning.min_trades",ADAPTIVE_LEARNING_MIN_TRADES)):
         q=sorted(vals)[int(0.35*(len(vals)-1))]
         proposed=min(0.95,max(0.50,round(q,2)))
         low_dc=[r for r in rows if _risk_float(r.get("director_confidence_entry")) is not None
@@ -4141,12 +4777,12 @@ def run_adaptive_learning(force: bool=False) -> Dict[str,Any]:
     period=_al_period(all_rows)
     run_id=f"al_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%f')}_{dataset_hash[:10]}"
     config={
-        "min_trades":ADAPTIVE_LEARNING_MIN_TRADES,
+        "min_trades":int(managed_value("adaptive_learning.min_trades",ADAPTIVE_LEARNING_MIN_TRADES)),
         "min_observation_days":ADAPTIVE_LEARNING_MIN_OBSERVATION_DAYS,
         "min_oos_trades":ADAPTIVE_LEARNING_MIN_OOS_TRADES,
         "folds":ADAPTIVE_LEARNING_WALK_FORWARD_FOLDS,
         "embargo_minutes":ADAPTIVE_LEARNING_EMBARGO_MINUTES,
-        "cooldown_hours":ADAPTIVE_LEARNING_COOLDOWN_HOURS,
+        "cooldown_hours":int(managed_value("adaptive_learning.cooldown_hours",ADAPTIVE_LEARNING_COOLDOWN_HOURS)),
         "max_confidence_step":ADAPTIVE_LEARNING_MAX_CONFIDENCE_STEP,
         "observation_only":True
     }
@@ -4173,7 +4809,7 @@ def run_adaptive_learning(force: bool=False) -> Dict[str,Any]:
     accepted=[];rejected=[];insufficient=[];no_change=[]
     for strategy in strategies:
         rows=_al_trade_rows(strategy)
-        if len(rows)<ADAPTIVE_LEARNING_MIN_TRADES:
+        if len(rows)<int(managed_value("adaptive_learning.min_trades",ADAPTIVE_LEARNING_MIN_TRADES)):
             insufficient.append({"strategy":strategy,"samples":len(rows)})
             _al_event(run_id,"ANALYZE","INSUFFICIENT_DATA",strategy,None,
                       {"samples":len(rows)})
@@ -4210,6 +4846,26 @@ def run_adaptive_learning(force: bool=False) -> Dict[str,Any]:
                 float(validation.get("candidate_score") or 0)<ADAPTIVE_LEARNING_ACCEPT_SCORE):
                 validation["status"]="REJECTED_AS_CANDIDATE"
                 validation["reason"]="candidate score below configured acceptance threshold"
+
+            governance_candidate=None
+            if GOVERNANCE_ENABLED and validation.get("status")=="ACCEPTED_AS_CANDIDATE":
+                magnitude=governance_engine.classify_change_magnitude(
+                    f"strategy.{strategy}.{prop['parameter_name']}",
+                    prop.get("current_value"),prop.get("proposed_value"),"HIGH_RISK")
+                governance_candidate=governance_engine.check_action(
+                    "CANDIDATE_CRITICAL_CREATE" if magnitude in ("MAJOR","CRITICAL") else "CANDIDATE_CREATE",
+                    target=strategy,
+                    context={"trigger":"ADAPTIVE_LEARNING_CANDIDATE","component":f"strategy.{strategy}.{prop['parameter_name']}",
+                             "current_value":prop.get("current_value"),"proposed_value":prop.get("proposed_value"),
+                             "risk_level":"HIGH_RISK","magnitude":magnitude,
+                             "affected_modules":["ADAPTIVE_LEARNING_ENGINE","VALIDATION_PIPELINE"]})
+                if governance_candidate.get("enforced"):
+                    _al_event(run_id,"GOVERNANCE","BLOCKED",strategy,None,
+                              {"proposal":prop,"governance":governance_candidate})
+                    rejected.append({"strategy":strategy,"status":"GOVERNANCE_BLOCKED",
+                                     "proposal":prop,"governance":governance_candidate})
+                    continue
+
             stored=_al_store_candidate(
                 run_id,strategy,prop,prop["reason"],prop.get("evidence") or {},
                 validation,rows
@@ -4217,7 +4873,7 @@ def run_adaptive_learning(force: bool=False) -> Dict[str,Any]:
             generated_for_strategy+=1
             cid=stored.get("candidate_id")
             _al_event(run_id,"VALIDATE",validation.get("status","UNKNOWN"),
-                      strategy,cid,validation)
+                      strategy,cid,{**validation,"governance":governance_candidate})
 
             if validation.get("status")=="ACCEPTED_AS_CANDIDATE":
                 accepted.append(stored)
@@ -4229,6 +4885,19 @@ def run_adaptive_learning(force: bool=False) -> Dict[str,Any]:
                           {"candidate_version":stored.get("candidate_version"),
                            "score":validation.get("candidate_score"),
                            "auto_deploy":False})
+                try:
+                    ai_actor=security_manager.internal_actor("ADAPTIVE_LEARNING_ENGINE","SYSTEM_RECOMMENDER")
+                    change_key=f"strategy.{strategy}.{prop['parameter_name']}"
+                    cr=security_manager.create_change_request(
+                        ai_actor,component=f"strategy_candidate.{cid}",key=change_key,
+                        proposed=prop["proposed_value"],reason=prop["reason"],
+                        expected_impact=f"Candidate {stored.get('candidate_version')} validated in research only; deployment still forbidden until Validation Pipeline and human approval.",
+                        rollback_plan=f"Keep {stored.get('production_version')} untouched; rollback configuration snapshot and/or Deployment Manager to previous production version.")
+                    _al_event(run_id,"CHANGE_REQUEST","PENDING_REVIEW",strategy,cid,
+                              {"change_id":(cr.get("change") or {}).get("change_id"),
+                               "self_approval":False})
+                except Exception as e:
+                    log.warning("Adaptive candidate change request creation failed candidate=%s err=%s",cid,e)
             else:
                 rejected.append(stored)
                 _al_event(run_id,"REJECT_AS_CANDIDATE",validation.get("status","REJECTED"),
@@ -4771,6 +5440,186 @@ async def verify_trade_protection(client, trade_id: str):
                 "detail":f"stopLossOrder={sl}; takeProfitOrder={tp}"}
     except Exception as e:
         return {"status":"PROTECTION_ERROR","sl_ok":False,"tp_ok":False,"detail":str(e)}
+
+async def recovery_reconcile_primary(client: httpx.AsyncClient, reason: str="periodic") -> Dict[str,Any]:
+    if not RECOVERY_MANAGER_ENABLED:
+        return {"enabled":False}
+    try:
+        result=await recovery_manager.reconnect_and_reconcile(client,max_attempts=3)
+        if OBSERVABILITY_ENABLED:
+            rec=result.get("reconciliation") or {}
+            status=rec.get("status")
+            _obs_module("Recovery Manager","OK" if status in ("MATCHED","MINOR_MISMATCH") else "DEGRADED",
+                        last_operation=f"reconcile:{reason}",details=rec)
+            if status in ("RECONCILIATION_REQUIRED","CRITICAL_MISMATCH"):
+                observability_manager.alert("RECOVERY_RECONCILIATION",
+                    "CRITICAL" if status=="CRITICAL_MISMATCH" else "HIGH",
+                    "Recovery Manager","STATE_RECONCILIATION_REQUIRED",
+                    f"Recovery reconciliation returned {status}",details=rec)
+            else:
+                observability_manager.recover("RECOVERY_RECONCILIATION",
+                                              "Recovery reconciliation matched broker state",rec)
+        return result
+    except Exception as e:
+        recovery_manager.enter_safe_mode(f"reconciliation failed: {e}",severity="CRITICAL")
+        if OBSERVABILITY_ENABLED:
+            _obs_module("Recovery Manager","ERROR",errors=[str(e)])
+            observability_manager.alert("RECOVERY_FAILURE","CRITICAL","Recovery Manager","RECOVERY_FAILURE",
+                                        "Recovery/reconciliation failed",details={"reason":reason,"error":str(e)})
+        return {"connected":False,"error":str(e)}
+
+
+async def recovery_startup_sequence() -> Dict[str,Any]:
+    if not RECOVERY_MANAGER_ENABLED:
+        return {"status":"DISABLED"}
+    recovery_manager.ensure_schema()
+    recovery_manager.set_state("RECOVERING","BOOT",safe_mode=True,new_trades_allowed=False)
+    recovery_manager.startup_stage("BOOT")
+    recovery_manager.startup_stage("LOAD_PERSISTED_STATE","OK",{"previous":recovery_manager.state()})
+    try:
+        c=conn();c.execute("SELECT 1").fetchone();c.close()
+        recovery_manager.startup_stage("CONNECT_DATABASE","OK")
+    except Exception as e:
+        recovery_manager.set_state("CRITICAL_FAILURE",f"database unavailable: {e}",safe_mode=True,new_trades_allowed=False)
+        recovery_manager.startup_stage("CONNECT_DATABASE","ERROR",{"error":str(e)})
+        return {"status":"CRITICAL_FAILURE","stage":"CONNECT_DATABASE","error":str(e)}
+
+    async with httpx.AsyncClient() as client:
+        market_ok=False;market_error=None;market_ts=None
+        try:
+            m1=await candles(client,INSTRUMENTS[0],"M1",5)
+            if m1:
+                market_ts=m1[-1]["t"]
+                dt=_parse_iso(market_ts)
+                age=(datetime.now(timezone.utc)-dt).total_seconds() if dt else 999999
+                market_ok=age<=RECOVERY_MARKET_DATA_MAX_AGE_SECONDS or not fx_market_open()
+                recovery_manager.market_data_update(market_ts,market_ok)
+            recovery_manager.startup_stage("CONNECT_MARKET_DATA","OK" if market_ok else "ERROR",
+                                           {"timestamp":market_ts})
+        except Exception as e:
+            market_error=str(e)
+            recovery_manager.startup_stage("CONNECT_MARKET_DATA","ERROR",{"error":market_error})
+
+        recovery_manager.startup_stage("CONNECT_BROKER")
+        rr=await recovery_reconcile_primary(client,"startup")
+        if not rr.get("connected"):
+            return {"status":"SAFE_MODE","stage":"CONNECT_BROKER","error":rr.get("error")}
+        rec=rr.get("reconciliation") or {}
+        recovery_manager.startup_stage("FETCH_BROKER_STATE","OK")
+        recovery_manager.startup_stage("RECONCILE",rec.get("status","UNKNOWN"),rec)
+        recovery_manager.startup_stage("VERIFY_OPEN_POSITIONS",
+            "OK" if rec.get("status") in ("MATCHED","MINOR_MISMATCH") else "ERROR",rec)
+        protective_bad=(rec.get("counts") or {}).get("CRITICAL_MISMATCH",0)>0
+        recovery_manager.startup_stage("VERIFY_PROTECTIVE_ORDERS","ERROR" if protective_bad else "OK")
+        risk_ok=False
+        try:
+            ctx=await build_broker_risk_context(client)
+            risk_ok=not bool(ctx.get("system_abnormal")) and ctx.get("nav") is not None
+            recovery_manager.verify_risk(risk_ok,ctx)
+        except Exception as e:
+            recovery_manager.verify_risk(False,{"error":str(e)})
+        recovery_manager.startup_stage("VERIFY_RISK_ENGINE","OK" if risk_ok else "ERROR")
+        try:
+            dep=deployment_manager.dashboard()
+            recovery_manager.startup_stage("VERIFY_DEPLOYMENT_STATE","OK",
+                                           {"deployments":len(dep.get("deployments",[]))})
+        except Exception as e:
+            recovery_manager.startup_stage("VERIFY_DEPLOYMENT_STATE","ERROR",{"error":str(e)})
+            recovery_manager.enter_safe_mode("Deployment state verification failed",severity="CRITICAL")
+            return {"status":"SAFE_MODE","stage":"VERIFY_DEPLOYMENT_STATE","error":str(e)}
+        recovery_manager.startup_stage("VERIFY_MARKET_DATA_FRESHNESS","OK" if market_ok else "ERROR",
+                                       {"timestamp":market_ts,"error":market_error})
+        if market_ok and risk_ok and rec.get("status") in ("MATCHED","MINOR_MISMATCH") and not recovery_manager.state().get("emergency_stop"):
+            recovery_manager.exit_safe_mode("startup recovery sequence passed")
+            return {"status":"READY","reconciliation":rec,"market_timestamp":market_ts}
+        recovery_manager.enter_safe_mode("Startup recovery incomplete; no new trades",severity="CRITICAL")
+        return {"status":"SAFE_MODE","reconciliation":rec,"market_ok":market_ok,"risk_ok":risk_ok}
+
+
+async def recovery_price_preflight(client: httpx.AsyncClient, r: Dict[str,Any]) -> Dict[str,Any]:
+    """
+    Deterministic execution sanity check using broker pricing immediately before submission.
+    If bid/ask/timestamp/spread look unreliable, no order is sent.
+    """
+    try:
+        d=await req(client,"GET","/v3/accounts/{account}/pricing",params={"instruments":r["instrument"]})
+        prices=d.get("prices") or []
+        if not prices:
+            return {"ok":False,"reason":"NO_BROKER_PRICE"}
+        q=prices[0]
+        bid=_risk_float(q.get("closeoutBid"))
+        ask=_risk_float(q.get("closeoutAsk"))
+        if bid is None:
+            bids=q.get("bids") or [];bid=_risk_float((bids[0] if bids else {}).get("price"))
+        if ask is None:
+            asks=q.get("asks") or [];ask=_risk_float((asks[0] if asks else {}).get("price"))
+        if bid is None or ask is None or ask<=bid:
+            return {"ok":False,"reason":"INVALID_BID_ASK","quote":q}
+        qt=_parse_iso(q.get("time"))
+        age=(datetime.now(timezone.utc)-qt).total_seconds() if qt else 999999
+        spread=(ask-bid)/pip_size(r["instrument"])
+        mid=(ask+bid)/2.0
+        deviation=abs(mid-float(r["entry"]))/pip_size(r["instrument"])
+        market_status=str(q.get("status") or "tradeable").lower()
+        ok=(age<=RECOVERY_MAX_QUOTE_AGE_SECONDS and spread<=RECOVERY_MAX_SPREAD_PIPS
+            and deviation<=RECOVERY_MAX_PRICE_DEVIATION_PIPS
+            and market_status not in ("non-tradeable","halted","closed"))
+        return {"ok":ok,"bid":bid,"ask":ask,"mid":mid,"spread_pips":spread,
+                "quote_age_seconds":age,"deviation_pips":deviation,"market_status":market_status,
+                "reason":"OK" if ok else "REQUIRE_REVALIDATION"}
+    except Exception as e:
+        return {"ok":False,"reason":"PRICE_PREFLIGHT_ERROR","error":str(e)}
+
+
+async def execute_recoverable(client: httpx.AsyncClient, r: Dict[str,Any],
+                              correlation_id: Optional[str], decision_id: Optional[str],
+                              risk_decision_id: Optional[str]) -> Dict[str,Any]:
+    if SINGLE and await haspos(client,r["instrument"]):
+        return {"skipped":"existing_position"}
+    preflight=await recovery_price_preflight(client,r)
+    if not preflight.get("ok"):
+        recovery_manager.enter_safe_mode(f"Execution price preflight rejected: {preflight.get('reason')}",
+                                         correlation_id=correlation_id,severity="CRITICAL")
+        recovery_manager.journal("REJECT_EXECUTION",correlation_id,strategy_id=setup_variant(r),
+                                 payload={"reason":"PRICE_PREFLIGHT","preflight":preflight})
+        return {"skipped":"REQUIRE_REVALIDATION","price_preflight":preflight}
+    d=3 if "JPY" in r["instrument"] else 5
+    effective_units=min(UNITS,int(managed_value("execution.trade_units",UNITS)))
+    if TRADING_ENVIRONMENT=="PRODUCTION" and PRODUCTION_READINESS_ENABLED:
+        pst=production_readiness_gate.state();stage=pst.get("production_stage")
+        if stage in production_readiness_gate.stage_limits:
+            cap=float(production_readiness_gate.effective_stage_limits(stage,production_hard_limits()).get("risk_cap_multiplier") or 0.0)
+            effective_units=max(1,int(effective_units*cap))
+    u=effective_units if r["signal"]=="BUY" else -effective_units
+    body={"order":{"instrument":r["instrument"],"units":str(u),"type":"MARKET","timeInForce":"FOK",
+                   "positionFill":"DEFAULT",
+                   "stopLossOnFill":{"price":f"{r['stop']:.{d}f}","timeInForce":"GTC"},
+                   "takeProfitOnFill":{"price":f"{r.get('managed_target',r['target']):.{d}f}","timeInForce":"GTC"}}}
+    key=deterministic_intent_key(
+        recovery_manager.account_scope,r["instrument"],r["signal"],setup_variant(r),
+        r.get("candle_ts") or now_iso(),r["entry"],r["stop"],r.get("managed_target",r["target"]))
+    version_ctx=security_version_context(r)
+    metadata={
+        **version_ctx,
+        "market_regime":(r.get("market_regime") or {}).get("market_regime") if isinstance(r.get("market_regime"),dict) else None,
+        "volatility_state":(r.get("market_regime") or {}).get("volatility_state") if isinstance(r.get("market_regime"),dict) else None,
+        "trend_strength":(r.get("market_regime") or {}).get("trend_strength") if isinstance(r.get("market_regime"),dict) else None,
+        "strategy_confidence":r.get("dynamic_confidence"),
+        "director_state":(r.get("ai_strategy_director") or {}).get("recommended_state"),
+        "director_confidence":(r.get("ai_strategy_director") or {}).get("confidence"),
+        "risk_multiplier":(r.get("adaptive_risk_engine") or {}).get("risk_multiplier"),
+        "requested_risk":(r.get("adaptive_risk_engine") or {}).get("requested_risk"),
+        "approved_risk":(r.get("adaptive_risk_engine") or {}).get("approved_risk"),
+        "risk":r.get("adaptive_risk_engine") or {}
+    }
+    return await recovery_manager.submit_order(
+        client,idempotency_key=key,correlation_id=correlation_id or key,
+        decision_id=str(decision_id) if decision_id is not None else None,
+        risk_decision_id=str(risk_decision_id) if risk_decision_id is not None else None,
+        strategy_id=setup_variant(r),symbol=r["instrument"],side=r["signal"],requested_units=abs(u),
+        entry_price=r["entry"],stop_loss=r["stop"],take_profit=r.get("managed_target",r["target"]),
+        order_body=body,metadata=metadata)
+
 
 async def execute(client: httpx.AsyncClient, r: Dict[str, Any]):
     if SINGLE and await haspos(client, r["instrument"]):
@@ -5595,6 +6444,82 @@ def _validated_promotion_candidates():
                     "score":float(r["score"] or 0),"baseline":float(r["pass_win_rate"]) if r["pass_win_rate"] is not None else None})
     c.close();return out
 
+def security_queue_validated_research_changes() -> Dict[str,Any]:
+    actor=security_manager.internal_actor("RESEARCH_ENGINE","SYSTEM_RECOMMENDER")
+    created=[];existing=[];errors=[]
+    for x in _validated_promotion_candidates():
+        key=f"research_rule.{x['source']}.{x['rule_key']}"
+        c=conn()
+        prev=c.execute("""SELECT change_id,status FROM security_change_requests
+                          WHERE config_key=? AND status IN ('PENDING_REVIEW','APPROVED','APPLIED')
+                          ORDER BY requested_ts DESC LIMIT 1""",(key,)).fetchone()
+        c.close()
+        if prev:
+            existing.append({"config_key":key,"change_id":prev["change_id"],"status":prev["status"]})
+            continue
+        try:
+            cr=security_manager.create_change_request(
+                actor,component="strategy.research_filters",key=key,proposed=True,
+                reason=f"Validated research rule recommendation: {x.get('description')}",
+                expected_impact=f"Potential filter edge={x.get('edge')} samples={x.get('samples')}; no execution change until human approval.",
+                rollback_plan="Deactivate the approved research rule and rollback the previous configuration snapshot."
+            )
+            created.append({"candidate":x,"change_request":cr})
+        except Exception as e:
+            errors.append({"candidate":x,"error":str(e)})
+    return {"created":created,"existing":existing,"errors":errors,"auto_activation":False}
+
+
+def activate_research_rule_from_applied_change(change_id: str, actor: Dict[str,str]) -> Dict[str,Any]:
+    bundle=security_manager.change_request(change_id);req=bundle.get("change")
+    if not req or req.get("status")!="APPLIED":
+        return {"activated":False,"reason":"CHANGE_NOT_APPLIED"}
+    key=req.get("config_key") or ""
+    if not key.startswith("research_rule."):
+        return {"activated":False,"reason":"NOT_RESEARCH_RULE"}
+    rest=key[len("research_rule."):]
+    source,sep,rule_key=rest.partition(".")
+    if not sep:
+        return {"activated":False,"reason":"INVALID_RESEARCH_RULE_KEY"}
+    proposed=json.loads(req.get("proposed_value_json") or "null")
+    if proposed is False:
+        c=conn()
+        row=c.execute("""SELECT * FROM active_research_rules WHERE source=? AND rule_key=?
+                         AND status IN ('ACTIVE','CONFIRMED') ORDER BY id DESC LIMIT 1""",
+                      (source,rule_key)).fetchone()
+        if not row:
+            c.close();return {"deactivated":True,"already_inactive":True}
+        c.execute("""UPDATE active_research_rules SET status='REVERTED',deactivated_ts=?,reason=?
+                     WHERE id=?""",(now_iso(),f"Deactivated by approved Change Request {change_id}",row["id"]))
+        c.commit();c.close()
+        _audit_research_rule("REVERTED",source,rule_key,{"change_id":change_id,"actor":actor["actor"]})
+        security_manager.audit(actor,"STRATEGY_CONFIGURATION_APPLIED",f"research_rule:{source}:{rule_key}",
+                               True,False,f"approved Change Request {change_id}","APPLIED")
+        return {"deactivated":True,"change_id":change_id}
+
+    candidates=[x for x in _validated_promotion_candidates() if x["source"]==source and x["rule_key"]==rule_key]
+    if not candidates:
+        return {"activated":False,"reason":"RULE_NO_LONGER_VALIDATED"}
+    x=candidates[0]
+    active=get_active_research_rules()
+    if any(r["source"]==source and r["rule_key"]==rule_key for r in active):
+        return {"activated":True,"already_active":True}
+    compat=assess_rule_compatibility(x,active)
+    if not compat["compatible"]:
+        return {"activated":False,"reason":"INCOMPATIBLE_WITH_CURRENT_RULES","compatibility":compat}
+    c=conn()
+    c.execute("""INSERT INTO active_research_rules(
+      source,rule_key,description,status,activated_ts,evidence_samples,evidence_edge,baseline_win_rate,
+      review_after_samples,post_samples,post_wins,reviewed_matches,reason)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+      (x["source"],x["rule_key"],x["description"],"ACTIVE",now_iso(),x["samples"],x["edge"],x["baseline"],
+       AUTO_PROMOTE_REVIEW_SAMPLES,0,0,0,f"Activated by approved Change Request {change_id}"))
+    c.commit();c.close()
+    _audit_research_rule("PROMOTED",x["source"],x["rule_key"],{**x,"compatibility":compat,"change_id":change_id})
+    security_manager.audit(actor,"STRATEGY_CONFIGURATION_APPLIED",f"research_rule:{source}:{rule_key}",
+                           False,True,f"approved Change Request {change_id}","APPLIED")
+    return {"activated":True,"rule":x,"compatibility":compat,"change_id":change_id}
+
 def promote_validated_research_rules():
     if not AUTO_PROMOTE_RESEARCH:return {"promoted":[],"skipped":[],"reason":"disabled"}
     active=get_active_research_rules();active_keys={(x["source"],x["rule_key"]) for x in active}
@@ -5656,6 +6581,11 @@ def _matching_rows_since(rule):
     return [r for r in rows if _signal_passes_rule_for_review(rule["source"],rule["rule_key"],r) is True]
 
 def review_one_active_research_rule(rule):
+    """
+    V3.19 observation-only strategy health review.
+    It may recommend deactivation through Change Management, but never changes
+    an active rule's behavioral state by itself.
+    """
     matched=_matching_rows_since(rule);total=len(matched);reviewed=int(rule.get("reviewed_matches") or 0)
     if total<reviewed+ACTIVE_RULE_HEALTH_BLOCK:
         return {"reviewed":False,"source":rule["source"],"rule_key":rule["rule_key"],
@@ -5670,28 +6600,36 @@ def review_one_active_research_rule(rule):
     c.commit();c.close()
     baseline=rule.get("baseline_win_rate")
     if baseline is not None and wr is not None and wr<float(baseline):
+        key=f"research_rule.{rule['source']}.{rule['rule_key']}"
         c=conn()
-        c.execute("""UPDATE active_research_rules SET status='REVERTED',deactivated_ts=?,reason=? WHERE id=?""",
-                  (now_iso(),f"Independent health rollback: {wr:.3f} < baseline {float(baseline):.3f}",rule["id"]))
-        c.commit();c.close()
+        prior=c.execute("""SELECT change_id,status FROM security_change_requests
+                           WHERE config_key=? AND proposed_value_json='false'
+                           AND status IN ('PENDING_REVIEW','APPROVED','APPLIED')
+                           ORDER BY requested_ts DESC LIMIT 1""",(key,)).fetchone()
+        c.close()
+        change=None
+        if not prior:
+            actor=security_manager.internal_actor("STRATEGY_HEALTH_MONITOR","SYSTEM_RECOMMENDER")
+            change=security_manager.create_change_request(
+                actor,component="strategy.research_filters",key=key,proposed=False,
+                reason=f"Independent health block degraded: {wr:.3f} < baseline {float(baseline):.3f}",
+                expected_impact="Reduce reliance on a degraded learned filter; no automatic deactivation.",
+                rollback_plan="Restore the prior config snapshot and reactivate only after human review.")
         d={"block_samples":n,"block_win_rate":wr,"baseline_win_rate":baseline,
-           "reviewed_matches":reviewed+n,"phase":"initial" if reviewed==0 else "ongoing_health"}
-        _audit_research_rule("REVERTED",rule["source"],rule["rule_key"],d)
-        return {"reviewed":True,"status":"REVERTED","source":rule["source"],"rule_key":rule["rule_key"],**d}
-    if rule["status"]=="ACTIVE":
-        c=conn()
-        c.execute("UPDATE active_research_rules SET status='CONFIRMED',confirmed_ts=?,reason=? WHERE id=?",
-                  (now_iso(),"Passed first independent 50-evidence block",rule["id"]))
-        c.commit();c.close();action="CONFIRMED"
-    else:action="HEALTH_CONFIRMED"
+           "reviewed_matches":reviewed+n,"change_request":change or dict(prior) if prior else change,
+           "auto_deactivation":False}
+        _audit_research_rule("DEACTIVATION_RECOMMENDED",rule["source"],rule["rule_key"],d)
+        return {"reviewed":True,"status":"DEACTIVATION_RECOMMENDED","source":rule["source"],"rule_key":rule["rule_key"],**d}
     d={"block_samples":n,"block_win_rate":wr,"baseline_win_rate":baseline,
-       "reviewed_matches":reviewed+n,"phase":"initial" if reviewed==0 else "ongoing_health"}
-    _audit_research_rule(action,rule["source"],rule["rule_key"],d)
-    return {"reviewed":True,"status":"CONFIRMED","source":rule["source"],"rule_key":rule["rule_key"],**d}
+       "reviewed_matches":reviewed+n,"status":"HEALTH_CONFIRMED","behavior_changed":False}
+    _audit_research_rule("HEALTH_CONFIRMED",rule["source"],rule["rule_key"],d)
+    return {"reviewed":True,"status":"HEALTH_CONFIRMED","source":rule["source"],"rule_key":rule["rule_key"],**d}
 
 def review_active_research_rules():
     results=[review_one_active_research_rule(r) for r in get_active_research_rules()]
-    return {"reviewed_rules":results,"reverted":[x for x in results if x.get("status")=="REVERTED"],
+    return {"reviewed_rules":results,
+            "deactivation_recommendations":[x for x in results if x.get("status")=="DEACTIVATION_RECOMMENDED"],
+            "behavior_changed":False,
             "active_after":len(get_active_research_rules())}
 
 def review_active_research_rule():
@@ -5896,19 +6834,29 @@ async def replace_trade_stop(client: httpx.AsyncClient, trade_id: str, price: fl
     body = {"stopLoss": {"price": f"{price:.5f}", "timeInForce": "GTC"}}
     return await req(client, "PUT", f"/v3/accounts/{{account}}/trades/{trade_id}/orders", body)
 
-def register_trade_management(trade_id: str, r: Dict[str, Any], target: float):
+def register_trade_management(trade_id: str, r: Dict[str, Any], target: float,
+                              filled_units: Optional[float]=None):
     if not trade_id:
         return
-    tscore = trend_runner_score(r)
-    policy = "BE_PROFIT_TRAIL"
-    c = conn()
-    c.execute("""INSERT OR REPLACE INTO active_trade_management(
-        trade_id,instrument,side,entry,initial_stop,initial_target,current_stop,setup_variant,policy,trend_score,
-        opened_ts,last_r,last_action,updated_ts,closed)
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,0)""",
-        (trade_id,r["instrument"],r["signal"],float(r["entry"]),float(r["stop"]),float(target),
-         float(r["stop"]),setup_variant(r),policy,tscore,now_iso(),0.0,"OPEN",now_iso()))
-    c.commit(); c.close()
+    tscore=trend_runner_score(r)
+    policy="BE_PROFIT_TRAIL"
+    c=conn()
+    try:
+        c.execute("""INSERT OR REPLACE INTO active_trade_management(
+          trade_id,instrument,side,entry,initial_stop,initial_target,current_stop,setup_variant,policy,trend_score,
+          opened_ts,last_r,last_action,updated_ts,closed,current_units)
+          VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,?)""",
+          (trade_id,r["instrument"],r["signal"],float(r["entry"]),float(r["stop"]),float(target),
+           float(r["stop"]),setup_variant(r),policy,tscore,now_iso(),0.0,"OPEN",now_iso(),
+           abs(float(filled_units if filled_units is not None else UNITS))))
+    except sqlite3.OperationalError:
+        c.execute("""INSERT OR REPLACE INTO active_trade_management(
+          trade_id,instrument,side,entry,initial_stop,initial_target,current_stop,setup_variant,policy,trend_score,
+          opened_ts,last_r,last_action,updated_ts,closed)
+          VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,0)""",
+          (trade_id,r["instrument"],r["signal"],float(r["entry"]),float(r["stop"]),float(target),
+           float(r["stop"]),setup_variant(r),policy,tscore,now_iso(),0.0,"OPEN",now_iso()))
+    c.commit();c.close()
 
 async def manage_open_trades(client: httpx.AsyncClient, instrument: str, current_price: float) -> int:
     c=conn()
@@ -5949,28 +6897,557 @@ async def manage_open_trades(client: httpx.AsyncClient, instrument: str, current
             c.commit(); c.close()
     return changed
 
+
+def _obs_module(module,status="OK",latency_ms=None,errors=None,warnings=None,last_operation=None,details=None):
+    if not OBSERVABILITY_ENABLED:return None
+    result=observability_manager.heartbeat(
+        module,OBSERVABILITY_DEPENDENCIES.get(module,DEPENDENCY_NON_CRITICAL),status,
+        latency_ms=latency_ms,errors=errors,warnings=warnings,
+        last_successful_operation=last_operation,details=details)
+    if status=="OK": observability_manager.recover(f"HEARTBEAT:{module}",f"{module} heartbeat recovered")
+    return result
+
+
+def _obs_latest_market_age(candles_: List[Dict[str,Any]]) -> Optional[float]:
+    if not candles_:return None
+    t=candles_[-1].get("t")
+    if isinstance(t,datetime):dt=t
+    else:dt=_parse_iso(str(t))
+    return (datetime.now(timezone.utc)-dt).total_seconds() if dt else None
+
+
+def observability_market_data_update(inst: str,m1: List[Dict[str,Any]],fetch_latency_ms: float) -> Dict[str,Any]:
+    age=_obs_latest_market_age(m1)
+    market_closed=market_is_weekend_closed()
+    stale=(not market_closed) and (age is None or age>OBSERVABILITY_MARKET_STALE_SECONDS)
+    status="STALE" if stale else "OK"
+    _obs_module("Market Data",status,fetch_latency_ms,
+                errors=["MARKET_DATA_STALE"] if stale else [],
+                last_operation="M1 candle batch received" if not stale else None,
+                details={"instrument":inst,"last_candle":m1[-1]["t"].isoformat() if m1 else None,
+                         "market_data_age_seconds":age,"market_closed":market_closed,"tick_feed":"NOT_AVAILABLE",
+                         "order_book":"NOT_AVAILABLE"})
+    key=f"MARKET_DATA_STALE:{inst}"
+    if stale:
+        observability_manager.alert(key,"CRITICAL","Market Data","MARKET_DATA_STALE",
+                                    f"{inst} market data is stale",group_key="MARKET_DATA_STALE",
+                                    details={"age_seconds":age,"threshold":OBSERVABILITY_MARKET_STALE_SECONDS})
+    else:
+        observability_manager.recover(key,f"{inst} market data recovered",{"age_seconds":age})
+    return {"stale":stale,"age_seconds":age,"fetch_latency_ms":fetch_latency_ms}
+
+
+def _obs_realized_period_pnl(days: int) -> float:
+    cutoff=(datetime.now(timezone.utc)-timedelta(days=days)).isoformat()
+    c=conn();row=c.execute("SELECT COALESCE(SUM(net_result),0) v FROM trade_memory WHERE status='CLOSED' AND exit_ts>=?",(cutoff,)).fetchone();c.close()
+    return float(row["v"] or 0)
+
+
+async def observability_broker_snapshot(client: httpx.AsyncClient) -> Dict[str,Any]:
+    t0=time.perf_counter()
+    try:
+        summary,positions=await asyncio.gather(
+            req(client,"GET","/v3/accounts/{account}/summary"),
+            req(client,"GET","/v3/accounts/{account}/openPositions")
+        )
+        latency=(time.perf_counter()-t0)*1000
+        a=summary.get("account") or {}
+        nav=_risk_float(a.get("NAV"));balance=_risk_float(a.get("balance"));margin=_risk_float(a.get("marginUsed"),0.0)
+        margin_usage=(margin/nav) if nav and nav>0 and margin is not None else None
+        broker_instruments=[x.get("instrument") for x in positions.get("positions",[]) if x.get("instrument")]
+        c=conn();internal=[x["instrument"] for x in c.execute("SELECT DISTINCT instrument FROM active_trade_management WHERE closed=0").fetchall()]
+        ps=c.execute("SELECT * FROM portfolio_risk_state WHERE id=1").fetchone()
+        prev_cap=c.execute("SELECT MAX(COALESCE(peak_equity,equity)) peak FROM observability_capital_history").fetchone();c.close()
+        peak=max(nav or 0,float(prev_cap["peak"] or 0)) if nav is not None else _risk_float(prev_cap["peak"])
+        drawdown=max(0.0,(peak-nav)/peak) if nav is not None and peak and peak>0 else None
+        open_risk=float(ps["portfolio_open_risk"] or 0) if ps else 0.0
+        exposure=_risk_float(a.get("positionValue"),margin)
+        snap={"ok":True,"latency_ms":latency,"equity":nav,"cash":balance,
+              "unrealized_pnl":_risk_float(a.get("unrealizedPL")),"realized_pnl":_risk_float(a.get("pl")),
+              "daily_pnl":_obs_realized_period_pnl(1),"weekly_pnl":_obs_realized_period_pnl(7),
+              "drawdown":drawdown,"peak_equity":peak,"exposure":exposure,"margin_usage":margin_usage,
+              "open_risk":open_risk,"remaining_risk_budget":max(0.0,float(managed_value("risk.max_portfolio_fraction",RISK_MAX_PORTFOLIO_FRACTION))-open_risk),
+              "broker_instruments":broker_instruments,"internal_instruments":internal,"account":a}
+        observability_manager.record_capital(snap,"OANDA_PRACTICE")
+        _obs_module("Broker Connection","OK",latency,last_operation="account summary/open positions",
+                    details={"nav":nav,"margin_usage":margin_usage,"open_positions":len(broker_instruments),"broker_instruments":broker_instruments})
+        observability_manager.recover("BROKER_DISCONNECTED","Broker connection recovered",{"latency_ms":latency})
+        rec=observability_reconciliation_status(internal,broker_instruments)
+        snap["reconciliation"]=rec
+        if rec["status"]!="CONSISTENT":
+            observability_manager.alert("POSITION_STATE_MISMATCH","HIGH","Execution Engine","STATE_RECONCILIATION_REQUIRED",
+                "Broker positions differ from internal managed positions",details=rec)
+        else:
+            observability_manager.recover("POSITION_STATE_MISMATCH","Broker/internal position state reconciled",rec)
+        if ps and ps["margin_usage"] is not None and margin_usage is not None and abs(float(ps["margin_usage"])-float(margin_usage))>.05:
+            observability_manager.alert("RISK_BROKER_STATE_MISMATCH","HIGH","Risk Engine","STATE_RECONCILIATION_REQUIRED",
+                "Risk Engine margin state differs materially from broker account state",
+                details={"risk_margin_usage":ps["margin_usage"],"broker_margin_usage":margin_usage})
+        else:
+            observability_manager.recover("RISK_BROKER_STATE_MISMATCH","Risk/broker exposure state reconciled")
+        if drawdown is not None:
+            if drawdown>=float(managed_value("risk.drawdown_stop",RISK_DRAWDOWN_STOP)):
+                observability_manager.alert("DRAWDOWN_CRITICAL","CRITICAL","Risk Engine","CRITICAL_DRAWDOWN",
+                    "Account drawdown reached critical risk limit",details={"drawdown":drawdown,"limit":float(managed_value("risk.drawdown_stop",RISK_DRAWDOWN_STOP))})
+            elif drawdown>=OBSERVABILITY_DRAWDOWN_WARNING_FRACTION:
+                observability_manager.alert("DRAWDOWN_WARNING","HIGH","Risk Engine","DRAWDOWN_WARNING",
+                    "Account drawdown is approaching the hard limit",details={"drawdown":drawdown,"hard_limit":float(managed_value("risk.drawdown_stop",RISK_DRAWDOWN_STOP))})
+                observability_manager.recover("DRAWDOWN_CRITICAL")
+            else:
+                observability_manager.recover("DRAWDOWN_WARNING");observability_manager.recover("DRAWDOWN_CRITICAL")
+        return snap
+    except Exception as e:
+        latency=(time.perf_counter()-t0)*1000
+        _obs_module("Broker Connection","ERROR",latency,errors=[str(e)])
+        observability_manager.alert("BROKER_DISCONNECTED","CRITICAL","Broker Connection","BROKER_DISCONNECTED",
+                                    "Broker connection/read failed",details={"error":str(e),"latency_ms":latency})
+        return {"ok":False,"latency_ms":latency,"error":str(e),"broker_instruments":[]}
+
+
+def observability_silent_anomalies() -> List[Dict[str,Any]]:
+    findings=[]
+    if market_is_weekend_closed():return findings
+    c=conn()
+    latest_signal=c.execute("SELECT ts FROM signals WHERE signal IN ('BUY','SELL') ORDER BY id DESC LIMIT 1").fetchone()
+    latest_tm=c.execute("SELECT updated_ts FROM trade_memory ORDER BY id DESC LIMIT 1").fetchone()
+    latest_exec=c.execute("SELECT ts FROM execution_audit ORDER BY id DESC LIMIT 1").fetchone()
+    risk_rows=[dict(x) for x in c.execute("SELECT risk_multiplier,market_regime,ts FROM adaptive_risk_decisions ORDER BY id DESC LIMIT ?",(OBSERVABILITY_RISK_CONSTANT_WINDOW,)).fetchall()]
+    regime_rows=[dict(x) for x in c.execute("SELECT market_regime,ts FROM market_regime_history ORDER BY id DESC LIMIT 100").fetchall()]
+    c.close()
+    sigdt=_parse_iso(latest_signal["ts"]) if latest_signal else None
+    if sigdt and (datetime.now(timezone.utc)-sigdt).total_seconds()>OBSERVABILITY_SIGNAL_SILENCE_HOURS*3600:
+        x={"event":"NO_STRATEGY_SIGNALS","age_hours":(datetime.now(timezone.utc)-sigdt).total_seconds()/3600};findings.append(x)
+        observability_manager.alert("NO_STRATEGY_SIGNALS","WARNING","Strategies","SILENT_BEHAVIOR_ANOMALY",
+                                    "No BUY/SELL strategy signals for an unusually long period",details=x)
+    else:observability_manager.recover("NO_STRATEGY_SIGNALS")
+    if len(risk_rows)>=OBSERVABILITY_RISK_CONSTANT_WINDOW:
+        vals=[round(float(x["risk_multiplier"] or 0),8) for x in risk_rows];regimes={x.get("market_regime") for x in risk_rows}
+        if len(set(vals))==1 and len(regimes)>=2:
+            x={"event":"RISK_OUTPUT_CONSTANT","value":vals[0],"samples":len(vals),"regimes":sorted(str(r) for r in regimes)};findings.append(x)
+            observability_manager.alert("RISK_OUTPUT_CONSTANT","WARNING","Risk Engine","SILENT_BEHAVIOR_ANOMALY",
+                                        "Risk Engine output has remained exactly constant across different regimes",details=x)
+        else:observability_manager.recover("RISK_OUTPUT_CONSTANT")
+    if len(regime_rows)>=20:
+        unique={x["market_regime"] for x in regime_rows};old=_parse_iso(regime_rows[-1]["ts"])
+        span=(datetime.now(timezone.utc)-old).total_seconds()/3600 if old else 0
+        if len(unique)==1 and span>=OBSERVABILITY_REGIME_STATIC_HOURS:
+            x={"event":"REGIME_STATIC_TOO_LONG","regime":next(iter(unique)),"hours":span};findings.append(x)
+            observability_manager.alert("REGIME_STATIC_TOO_LONG","WARNING","Market Regime Detector","SILENT_BEHAVIOR_ANOMALY",
+                                        "Market regime has not changed for an unusually long observation span",details=x)
+        else:observability_manager.recover("REGIME_STATIC_TOO_LONG")
+    # Trade Memory should follow executed trades.
+    if latest_exec:
+        exdt=_parse_iso(latest_exec["ts"]);tmdt=_parse_iso(latest_tm["updated_ts"]) if latest_tm else None
+        if exdt and (tmdt is None or tmdt<exdt-timedelta(minutes=5)):
+            x={"event":"TRADE_MEMORY_LAGGING","execution_ts":latest_exec["ts"],"memory_ts":latest_tm["updated_ts"] if latest_tm else None};findings.append(x)
+            observability_manager.alert("TRADE_MEMORY_LAGGING","HIGH","Trade Memory","SILENT_BEHAVIOR_ANOMALY",
+                                        "Executed trades are newer than Trade Memory persistence",details=x)
+        else:observability_manager.recover("TRADE_MEMORY_LAGGING")
+    return findings
+
+
+def observability_refresh_noncritical_modules():
+    c=conn()
+    al=c.execute("SELECT completed_ts,status,summary_json FROM adaptive_learning_runs ORDER BY id DESC LIMIT 1").fetchone()
+    vr=c.execute("SELECT completed_ts,final_status FROM candidate_validation_runs ORDER BY id DESC LIMIT 1").fetchone()
+    paper=c.execute("SELECT MAX(created_ts) ts,COUNT(*) n FROM candidate_paper_trades").fetchone()
+    c.close()
+    _obs_module("Adaptive Learning","OK" if ADAPTIVE_LEARNING_ENABLED else "PAUSED",last_operation=al["completed_ts"] if al else None,
+                details={"latest_status":al["status"] if al else "NO_RUN_YET"})
+    _obs_module("Validation Pipeline","OK" if VALIDATION_PIPELINE_ENABLED else "PAUSED",last_operation=vr["completed_ts"] if vr else None,
+                details={"latest_status":vr["final_status"] if vr else "NO_VALIDATION_YET"})
+    _obs_module("Paper Trading","OK" if VALIDATION_PIPELINE_ENABLED else "PAUSED",last_operation=paper["ts"] if paper else None,
+                details={"paper_records":int(paper["n"] or 0) if paper else 0})
+    try:
+        d=deployment_manager.dashboard();_obs_module("Deployment Manager","OK",last_operation=now_iso(),details={"deployments":len(d.get("deployments",[]))})
+    except Exception as e:
+        _obs_module("Deployment Manager","ERROR",errors=[str(e)])
+        observability_manager.alert("DEPLOYMENT_MANAGER_ERROR","HIGH","Deployment Manager","MODULE_ERROR",
+                                    "Deployment Manager state could not be read",details={"error":str(e)})
+
+
+def observability_strategy_degradation_summary() -> List[Dict[str,Any]]:
+    c=conn();rows=[dict(x) for x in c.execute("SELECT * FROM trade_memory_degradation ORDER BY ts DESC").fetchall()]
+    drift={x["scope_key"]:dict(x) for x in c.execute("SELECT * FROM concept_drift_alerts").fetchall()};c.close()
+    out=[]
+    for r in rows:
+        st=observability_degradation_state(r.get("historical_expectancy"),r.get("recent_expectancy"),
+                                           r.get("historical_profit_factor"),r.get("recent_profit_factor"),
+                                           bool(drift.get(r["scope_key"],{}).get("status")=="POSSIBLE_CONCEPT_DRIFT"))
+        x={"scope_key":r["scope_key"],"strategy":r["strategy"],"regime":r.get("market_regime"),"state":st,
+           "historical_pf":r.get("historical_profit_factor"),"recent_pf":r.get("recent_profit_factor"),
+           "historical_expectancy":r.get("historical_expectancy"),"recent_expectancy":r.get("recent_expectancy"),
+           "degradation_status":r.get("status"),"concept_drift":drift.get(r["scope_key"])}
+        out.append(x)
+        key="STRATEGY_DEGRADATION:"+r["scope_key"]
+        if st=="CRITICAL_DEGRADATION":
+            observability_manager.alert(key,"HIGH","Strategies","CRITICAL_DEGRADATION",
+                                        "Strategy/regime behavior shows critical degradation",details=x)
+        elif st=="DEGRADING":
+            observability_manager.alert(key,"WARNING","Strategies","STRATEGY_DEGRADING",
+                                        "Strategy/regime behavior is degrading",details=x)
+        else:observability_manager.recover(key)
+    return out
+
+
+def observability_trace_bundle(identifier: str) -> Dict[str,Any]:
+    c=conn()
+    tr=c.execute("""SELECT * FROM observability_traces WHERE correlation_id=? OR trade_id=? OR order_id=? OR CAST(signal_id AS TEXT)=?
+                    ORDER BY created_ts DESC LIMIT 1""",(identifier,identifier,identifier,identifier)).fetchone()
+    if not tr:
+        live=c.execute("SELECT signal_id FROM deployment_live_trades WHERE trade_id=? OR order_id=? ORDER BY id DESC LIMIT 1",(identifier,identifier)).fetchone()
+        if live: tr=c.execute("SELECT * FROM observability_traces WHERE signal_id=? ORDER BY created_ts DESC LIMIT 1",(live["signal_id"],)).fetchone()
+    if not tr:c.close();return {"error":"TRACE_NOT_FOUND","identifier":identifier}
+    t=dict(tr);sid=t.get("signal_id");did=t.get("decision_id");rid=t.get("risk_decision_id");trade=t.get("trade_id")
+    def one(sql,args):
+        r=c.execute(sql,args).fetchone();return dict(r) if r else None
+    bundle={"trace":t,
+            "signal":one("SELECT * FROM signals WHERE id=?",(sid,)) if sid else None,
+            "ai_director":one("SELECT * FROM ai_strategy_director_decisions WHERE id=?",(did,)) if did else None,
+            "risk_engine":one("SELECT * FROM adaptive_risk_decisions WHERE id=?",(rid,)) if rid else None,
+            "execution":one("SELECT * FROM execution_audit WHERE signal_id=? ORDER BY id DESC LIMIT 1",(sid,)) if sid else None,
+            "trade_memory":one("SELECT * FROM trade_memory WHERE trade_id=? OR signal_id=? ORDER BY id DESC LIMIT 1",(trade,sid)) if (trade or sid) else None,
+            "candidate_paper":[dict(x) for x in c.execute("SELECT * FROM candidate_paper_trades WHERE signal_id=? ORDER BY id",(sid,)).fetchall()] if sid else [],
+            "candidate_live":[dict(x) for x in c.execute("SELECT * FROM deployment_live_trades WHERE signal_id=? ORDER BY id",(sid,)).fetchall()] if sid else [],
+            "decision_log":one("SELECT * FROM decision_log WHERE instrument=? AND candle_ts=(SELECT candle_ts FROM signals WHERE id=?) ORDER BY id DESC LIMIT 1",(t.get("symbol"),sid)) if sid else None,
+            "structured_logs":[dict(x) for x in c.execute("SELECT * FROM observability_structured_logs WHERE correlation_id=? ORDER BY id",(t["correlation_id"],)).fetchall()]}
+    c.close();return bundle
+
+
+async def observability_startup_health_check() -> Dict[str,Any]:
+    checks={};reconciliation={};broker={}
+    # Database
+    t=time.perf_counter()
+    try:
+        c=conn();c.execute("SELECT 1").fetchone();c.close();lat=(time.perf_counter()-t)*1000
+        checks["database"]={"ok":True,"latency_ms":lat};_obs_module("Database","OK",lat,last_operation="startup SELECT 1")
+    except Exception as e:
+        checks["database"]={"ok":False,"error":str(e)};_obs_module("Database","ERROR",errors=[str(e)])
+    async with httpx.AsyncClient() as client:
+        broker=await observability_broker_snapshot(client);checks["broker"]={"ok":bool(broker.get("ok")),"latency_ms":broker.get("latency_ms")}
+        # Market data on first configured instrument.
+        try:
+            t=time.perf_counter();m1=await candles(client,INSTRUMENTS[0],"M1",60);lat=(time.perf_counter()-t)*1000
+            mh=observability_market_data_update(INSTRUMENTS[0],m1,lat);checks["market_data"]={"ok":not mh["stale"],**mh}
+        except Exception as e:
+            checks["market_data"]={"ok":False,"error":str(e)};_obs_module("Market Data","ERROR",errors=[str(e)])
+            observability_manager.alert("STARTUP_MARKET_DATA","CRITICAL","Market Data","STARTUP_HEALTH_FAILURE","Startup market data check failed",details={"error":str(e)})
+    # Positions reconciliation is broker source of truth when available.
+    reconciliation=broker.get("reconciliation") or {"status":"UNKNOWN"}
+    checks["positions_reconciled"]={"ok":reconciliation.get("status")=="CONSISTENT","detail":reconciliation}
+    # Risk Engine readiness: pure calculation with conservative startup context.
+    try:
+        test=adaptive_risk_recommendation(INSTRUMENTS[0],"STARTUP_HEALTH",
+            {"market_regime":"RANGE","confidence":.5,"volatility_state":"NORMAL","trend_strength":0},
+            {"confidence":.5},.5,
+            {"nav":broker.get("equity"),"current_drawdown":broker.get("drawdown"),"margin_usage":broker.get("margin_usage"),
+             "portfolio_open_risk":broker.get("open_risk",0),"open_instruments":broker.get("broker_instruments",[]),
+             "consecutive_losses":0,"data_stale":not broker.get("ok",False),"system_abnormal":not broker.get("ok",False)},UNITS)
+        checks["risk_engine"]={"ok":bool(test.get("enabled")),"allow":test.get("allow_new_trades")};_obs_module("Risk Engine","OK",last_operation="startup risk calculation")
+    except Exception as e:
+        checks["risk_engine"]={"ok":False,"error":str(e)};_obs_module("Risk Engine","ERROR",errors=[str(e)])
+    try:
+        c=conn();n=c.execute("SELECT COUNT(*) n FROM strategy_health").fetchone()["n"];c.close()
+        checks["strategies_loaded"]={"ok":True,"strategy_health_records":n};_obs_module("Strategies","OK",last_operation="strategy states loaded")
+    except Exception as e:checks["strategies_loaded"]={"ok":False,"error":str(e)}
+    try:
+        d=deployment_manager.dashboard();checks["deployments_loaded"]={"ok":True,"deployments":len(d.get("deployments",[]))};_obs_module("Deployment Manager","OK",last_operation="deployment states loaded")
+    except Exception as e:
+        checks["deployments_loaded"]={"ok":False,"error":str(e)};_obs_module("Deployment Manager","ERROR",errors=[str(e)])
+    critical_keys=("database","broker","market_data","positions_reconciled","risk_engine","strategies_loaded","deployments_loaded")
+    ready=all(bool(checks.get(k,{}).get("ok")) for k in critical_keys)
+    status="SYSTEM_READY" if ready else "STARTUP_HEALTH_FAILED"
+    state["system_ready"]=ready;state["startup_health"]={"status":status,"checks":checks,"reconciliation":reconciliation,"ts":now_iso()}
+    observability_manager.startup_record(status,checks,reconciliation,{"startup_block_trading":OBSERVABILITY_STARTUP_BLOCK_TRADING})
+    if ready:
+        observability_manager.recover("STARTUP_HEALTH_FAILED","Startup health recovered; SYSTEM_READY",checks)
+    else:
+        observability_manager.alert("STARTUP_HEALTH_FAILED","CRITICAL","System","STARTUP_HEALTH_FAILURE",
+                                    "Startup health check did not reach SYSTEM_READY",details=checks)
+    return state["startup_health"]
+
+
+
+def run_system_evaluation(as_of: Optional[str]=None,source: str="periodic") -> Dict[str,Any]:
+    if not SYSTEM_EVALUATION_ENABLED:
+        return {"enabled":False,"status":"DISABLED","autonomous_actions":False}
+    try:
+        system_evaluation_engine.risk_drawdown_limit=float(managed_value("risk.drawdown_stop",RISK_DRAWDOWN_STOP))
+        system_evaluation_engine.min_samples=int(managed_value("system_evaluation.min_samples",SYSTEM_EVALUATION_MIN_SAMPLES))
+        system_evaluation_engine.report_period_hours=int(managed_value("system_evaluation.period_hours",SYSTEM_EVALUATION_PERIOD_HOURS))
+        raw_weights={
+            "trading":float(managed_value("system_evaluation.trading_weight",SYSTEM_EVALUATION_TRADING_WEIGHT)),
+            "risk":float(managed_value("system_evaluation.risk_weight",SYSTEM_EVALUATION_RISK_WEIGHT)),
+            "operational":float(managed_value("system_evaluation.operational_weight",SYSTEM_EVALUATION_OPERATIONAL_WEIGHT)),
+            "stability":float(managed_value("system_evaluation.stability_weight",SYSTEM_EVALUATION_STABILITY_WEIGHT))
+        }
+        total_w=sum(max(0.0,v) for v in raw_weights.values())
+        if total_w<=0:
+            raw_weights={"trading":.30,"risk":.30,"operational":.25,"stability":.15};total_w=1.0
+        system_evaluation_engine.score_weights={k:max(0.0,v)/total_w for k,v in raw_weights.items()}
+        result=system_evaluation_engine.evaluate(as_of)
+        if OBSERVABILITY_ENABLED:
+            _obs_module("System Evaluation Engine","OK",
+                        last_operation=f"evaluate:{source}",
+                        details={"system_status":result["system_status"],
+                                 "system_score":result["system_score"],
+                                 "main_degradation":(result["degradation"]["types"] or [None])[0],
+                                 "recommendations":[x["recommendation"] for x in result["recommendations"][:5]],
+                                 "observation_only":True})
+            deg=result.get("degradation") or {}
+            if deg.get("detected"):
+                observability_manager.alert(
+                    "SYSTEM_DEGRADATION_DETECTED","HIGH","System Evaluation Engine",
+                    "SYSTEM_DEGRADATION_DETECTED",
+                    f"System evaluation detected {deg.get('classification')}",
+                    details={"evaluation_id":result["evaluation_id"],
+                             "types":deg.get("types"),"factors":deg.get("factors"),
+                             "system_score":result.get("system_score")})
+            else:
+                observability_manager.recover("SYSTEM_DEGRADATION_DETECTED",
+                                              "System evaluation no longer detects material degradation",
+                                              {"evaluation_id":result["evaluation_id"]})
+            if result.get("system_status") in ("CRITICAL","PAUSED"):
+                observability_manager.alert(
+                    "SYSTEM_EVALUATION_CRITICAL","CRITICAL","System Evaluation Engine",
+                    "SYSTEM_CRITICAL",
+                    f"System evaluation status is {result.get('system_status')}",
+                    details={"evaluation_id":result["evaluation_id"],
+                             "system_score":result.get("system_score"),
+                             "dimensions":result.get("dimensions")})
+            else:
+                observability_manager.recover("SYSTEM_EVALUATION_CRITICAL",
+                                              "System evaluation is not CRITICAL/PAUSED",
+                                              {"evaluation_id":result["evaluation_id"]})
+            if (result.get("model_reality_gap") or {}).get("status")=="MODEL_REALITY_GAP":
+                observability_manager.alert(
+                    "MODEL_REALITY_GAP","HIGH","System Evaluation Engine","MODEL_REALITY_GAP",
+                    "Backtest/paper/live performance divergence is material",
+                    details=result["model_reality_gap"])
+            else:
+                observability_manager.recover("MODEL_REALITY_GAP","Model/reality gap recovered")
+            if (result.get("diversification") or {}).get("status")=="HIDDEN_CONCENTRATION_RISK":
+                observability_manager.alert(
+                    "HIDDEN_CONCENTRATION_RISK","HIGH","System Evaluation Engine","HIDDEN_CONCENTRATION_RISK",
+                    "Highly correlated strategy return streams detected",
+                    details=result["diversification"])
+            else:
+                observability_manager.recover("HIDDEN_CONCENTRATION_RISK","Hidden concentration is below alert threshold")
+            if (result.get("regime_coverage") or {}).get("status")=="REGIME_COVERAGE_GAP":
+                observability_manager.alert(
+                    "REGIME_COVERAGE_GAP","WARNING","System Evaluation Engine","REGIME_COVERAGE_GAP",
+                    "Observed market regimes contain strategy coverage gaps",
+                    details=result["regime_coverage"])
+            else:
+                observability_manager.recover("REGIME_COVERAGE_GAP","Regime coverage gap recovered")
+            if (result.get("data_quality") or {}).get("score",1.0)<.75:
+                observability_manager.alert(
+                    "DATA_QUALITY_DEGRADATION","HIGH","System Evaluation Engine","DATA_QUALITY_DEGRADATION",
+                    "Data quality reduced evaluation confidence",
+                    details=result["data_quality"])
+            else:
+                observability_manager.recover("DATA_QUALITY_DEGRADATION","Data quality score recovered")
+            if "EXECUTION_DEGRADATION" in (result.get("degradation") or {}).get("types",[]):
+                observability_manager.alert(
+                    "EXECUTION_DEGRADATION","HIGH","System Evaluation Engine","EXECUTION_DEGRADATION",
+                    "Execution quality degradation detected",
+                    details={"trading":result.get("trading"),"operational":result.get("operational")})
+            else:
+                observability_manager.recover("EXECUTION_DEGRADATION","Execution quality is within expected range")
+        return result
+    except Exception as e:
+        if OBSERVABILITY_ENABLED:
+            _obs_module("System Evaluation Engine","ERROR",errors=[str(e)])
+            observability_manager.alert("SYSTEM_EVALUATION_FAILED","HIGH","System Evaluation Engine",
+                                        "SYSTEM_EVALUATION_FAILED",
+                                        "System evaluation cycle failed",
+                                        details={"error":str(e),"source":source})
+        return {"enabled":True,"status":"FAILED","error":str(e),"autonomous_actions":False}
+
+
+
+def run_governance_cycle(trigger: str="periodic") -> Dict[str,Any]:
+    if not GOVERNANCE_ENABLED:
+        return {"enabled":False,"mode":"DISABLED"}
+    try:
+        sync_governance_runtime_config()
+        result=governance_engine.evaluate(trigger)
+        meta=result.get("meta") or {}
+        if OBSERVABILITY_ENABLED:
+            _obs_module("Governance Engine","OK",last_operation=f"governance:{trigger}",
+                        details={"mode":result.get("governance_mode"),
+                                 "meta_risk_score":result.get("meta_risk_score"),
+                                 "meta_risk_state":result.get("meta_risk_state"),
+                                 "adaptation_state":result.get("adaptation_state"),
+                                 "recommended_state":result.get("recommended_state"),
+                                 "decision":result.get("decision"),
+                                 "would_block":result.get("would_block"),
+                                 "enforced":result.get("enforced")})
+            alert_specs=[
+                ("ADAPTATION_LOOP_DETECTED",bool((meta.get("adaptation_loop") or {}).get("detected")),"HIGH",
+                 "Adaptation loop/churn pattern detected",meta.get("adaptation_loop")),
+                ("MODULE_DECISION_CONFLICT",bool(meta.get("conflicts")),"HIGH",
+                 "Adaptive modules have materially conflicting decisions",meta.get("conflicts")),
+                ("META_RISK_HIGH",meta.get("state")=="HIGH","HIGH",
+                 "Meta-risk is HIGH",{"score":meta.get("score"),"components":meta.get("components")}),
+                ("META_RISK_CRITICAL",meta.get("state")=="CRITICAL","CRITICAL",
+                 "Meta-risk is CRITICAL",{"score":meta.get("score"),"components":meta.get("components")}),
+                ("STRATEGY_CHURN_DETECTED",bool((meta.get("strategy_churn") or {}).get("detected")),"WARNING",
+                 "AI Strategy Director state churn detected",meta.get("strategy_churn")),
+                ("PARAMETER_CHURN_DETECTED",bool((meta.get("parameter_churn") or {}).get("detected")),"WARNING",
+                 "Parameter/configuration churn detected",meta.get("parameter_churn")),
+                ("DEPLOYMENT_CHURN_DETECTED",bool((meta.get("deployment_churn") or {}).get("detected")),"HIGH",
+                 "Candidate deployment churn detected",meta.get("deployment_churn")),
+                ("OBJECTIVE_DRIFT_DETECTED",bool((meta.get("objective_drift") or {}).get("detected")),"HIGH",
+                 "Optimization objective drift detected",meta.get("objective_drift")),
+                ("HIGH_MODEL_DISAGREEMENT",(meta.get("model_disagreement") or {}).get("status")=="HIGH_MODEL_DISAGREEMENT","HIGH",
+                 "Multiple adaptive modules materially disagree",meta.get("model_disagreement")),
+                ("CONFIDENCE_MIS_CALIBRATION",bool((meta.get("confidence_calibration") or {}).get("detected")),"WARNING",
+                 "Predicted confidence is poorly calibrated to realized outcomes",meta.get("confidence_calibration")),
+            ]
+            for key,active,sev,msg,details in alert_specs:
+                if active:
+                    observability_manager.alert(key,sev,"Governance Engine",key,msg,details=details or {})
+                else:
+                    observability_manager.recover(key,f"{key} no longer detected")
+            st=governance_engine.state()
+            if int(st.get("governance_lock") or 0):
+                observability_manager.alert("GOVERNANCE_LOCK_ACTIVATED","CRITICAL","Governance Engine",
+                                            "GOVERNANCE_LOCK_ACTIVATED",
+                                            "Persistent Governance Lock is active",
+                                            details={"reason":st.get("lock_reason"),"source":st.get("lock_source")})
+            else:
+                observability_manager.recover("GOVERNANCE_LOCK_ACTIVATED","Governance Lock is not active")
+        return result
+    except Exception as e:
+        if OBSERVABILITY_ENABLED:
+            _obs_module("Governance Engine","ERROR",errors=[str(e)])
+            observability_manager.alert("GOVERNANCE_EVALUATION_FAILED","HIGH","Governance Engine",
+                                        "GOVERNANCE_EVALUATION_FAILED",
+                                        "Governance evaluation cycle failed",details={"error":str(e)})
+        return {"enabled":True,"status":"FAILED","error":str(e),"mode":governance_engine.mode}
+
+
+async def observability_loop_monitor():
+    obs_loop_interval=int(managed_value("observability.loop_interval_seconds",OBSERVABILITY_LOOP_INTERVAL_SECONDS)); expected=time.monotonic()+obs_loop_interval
+    while True:
+        await asyncio.sleep(int(managed_value("observability.loop_interval_seconds",OBSERVABILITY_LOOP_INTERVAL_SECONDS)))
+        now=time.monotonic();lag=max(0.0,(now-expected)*1000);expected=now+int(managed_value("observability.loop_interval_seconds",OBSERVABILITY_LOOP_INTERVAL_SECONDS))
+        observability_manager.set_event_loop_lag(lag)
+        if lag>=OBSERVABILITY_LOOP_LAG_CRITICAL_MS:
+            observability_manager.alert("EVENT_LOOP_LAG","CRITICAL","System","EVENT_LOOP_LAG_HIGH",
+                                        "Event loop lag is critical",details={"lag_ms":lag})
+        elif lag>=OBSERVABILITY_LOOP_LAG_WARNING_MS:
+            observability_manager.alert("EVENT_LOOP_LAG","WARNING","System","EVENT_LOOP_LAG_HIGH",
+                                        "Event loop lag is elevated",details={"lag_ms":lag})
+        else:observability_manager.recover("EVENT_LOOP_LAG","Event loop lag recovered",{"lag_ms":lag})
+        try:
+            if SYSTEM_EVALUATION_ENABLED and system_evaluation_engine.due():
+                run_system_evaluation(source="periodic")
+            if GOVERNANCE_ENABLED and governance_engine.due(GOVERNANCE_EVALUATION_INTERVAL_MINUTES):
+                run_governance_cycle("periodic")
+            if PRODUCTION_READINESS_ENABLED:
+                pst=production_readiness_gate.state()
+                if pst.get("production_stage") in ("MINIMAL_LIVE","LIMITED_LIVE","CONTROLLED_LIVE","PRODUCTION_APPROVED","SUSPENDED"):
+                    pctx=production_runtime_context()
+                    pctx.update({
+                        "risk_ready":bool(RISK_ENGINE_ENABLED and not RISK_ENGINE_SHADOW_MODE),
+                        "broker_stable":bool(pctx.get("broker_ready")),
+                        "data_quality_ok":float(pctx.get("data_quality") or 0)>=.75,
+                        "p0_incident":False,
+                        "critical_incident":pctx.get("system_status")=="CRITICAL",
+                    })
+                    rid=pst.get("release_id")
+                    if rid:
+                        unchanged=production_readiness_gate.verify_release_unchanged(rid,production_release_files(),security_manager.current_config(),production_release_versions())
+                        if not unchanged.get("passed"):
+                            cres={"status":"CERTIFICATION_INVALIDATED","triggers":["RELEASE_FINGERPRINT_CHANGED"],"release_check":unchanged}
+                            production_readiness_gate.invalidate_certification("RELEASE_FINGERPRINT_CHANGED","CONTINUOUS_CERTIFICATION",rid)
+                        else:
+                            cres=production_readiness_gate.continuous_certification(pctx)
+                    else:
+                        cres={"status":"NO_CERTIFIED_RELEASE"}
+                    if cres.get("status") in ("CERTIFICATION_INVALIDATED","DEGRADED") and OBSERVABILITY_ENABLED:
+                        observability_manager.alert("PRODUCTION_READINESS_LOST","CRITICAL","Production Readiness Gate",
+                                                    "PRODUCTION_READINESS_LOST",
+                                                    "Continuous certification detected loss of production readiness",details=cres)
+                        if cres.get("status")=="CERTIFICATION_INVALIDATED":
+                            observability_manager.alert("CERTIFICATION_INVALIDATED","CRITICAL","Production Readiness Gate",
+                                                        "CERTIFICATION_INVALIDATED","Production certification is no longer valid",details=cres)
+                        safety=(cres.get("safety_action") or {})
+                        if safety.get("action")=="DOWNGRADE":
+                            observability_manager.alert("PRODUCTION_STAGE_DOWNGRADED","HIGH","Production Readiness Gate",
+                                                        "PRODUCTION_STAGE_DOWNGRADED","Production stage reduced by deterministic safety gate",details=safety)
+                        elif safety.get("action")=="SUSPEND":
+                            observability_manager.alert("PRODUCTION_SUSPENDED","CRITICAL","Production Readiness Gate",
+                                                        "PRODUCTION_SUSPENDED","Production suspended by deterministic safety gate",details=safety)
+                    _obs_module("Production Readiness Gate","OK" if cres.get("status")=="VALID" else "DEGRADED",
+                                last_operation="continuous certification",details=cres)
+        except Exception:
+            pass
+        try:
+            thresholds={"Market Data":OBSERVABILITY_HEARTBEAT_STALE_SECONDS,"Broker Connection":OBSERVABILITY_BROKER_STALE_SECONDS,
+                        "Risk Engine":OBSERVABILITY_HEARTBEAT_STALE_SECONDS,"Execution Engine":OBSERVABILITY_HEARTBEAT_STALE_SECONDS,
+                        "AI Strategy Director":OBSERVABILITY_HEARTBEAT_STALE_SECONDS*2,
+                        "Market Regime Detector":OBSERVABILITY_HEARTBEAT_STALE_SECONDS*2,
+                        "Trade Memory":OBSERVABILITY_HEARTBEAT_STALE_SECONDS*3,
+                        "System Evaluation Engine":max(OBSERVABILITY_HEARTBEAT_STALE_SECONDS*3,SYSTEM_EVALUATION_PERIOD_HOURS*3600*2),
+                        "Governance Engine":max(OBSERVABILITY_HEARTBEAT_STALE_SECONDS*3,GOVERNANCE_EVALUATION_INTERVAL_MINUTES*60*2),
+                        "Production Readiness Gate":max(OBSERVABILITY_HEARTBEAT_STALE_SECONDS*3,3600)}
+            observability_manager.mark_stale_modules(thresholds)
+        except Exception:pass
+
+
 async def scan(client: httpx.AsyncClient, inst: str) -> Dict[str, Any]:
+    obs_scan_started=time.perf_counter()
+    obs_trace_id=observability_manager.new_trace(inst,context={"instrument":inst,"cycle":state.get("cycles")}) if OBSERVABILITY_ENABLED else None
+    obs_market_started=time.perf_counter()
     h1, m15, m5, m1 = await asyncio.gather(
         candles(client, inst, "H1", 140),
         candles(client, inst, "M15", 140),
         candles(client, inst, "M5", 130),
         candles(client, inst, "M1", max(220, OUTCOME_HORIZON_MIN + 30))
     )
+    obs_market_ms=(time.perf_counter()-obs_market_started)*1000
+    obs_market_health=observability_market_data_update(inst,m1,obs_market_ms) if OBSERVABILITY_ENABLED else {"stale":False,"age_seconds":None}
+    if RECOVERY_MANAGER_ENABLED and m1:
+        recovery_manager.market_data_update(m1[-1]["t"],not bool(obs_market_health.get("stale")))
+    if obs_trace_id: observability_manager.trace_phase(obs_trace_id,"market_data")
     current_price=float(m1[-1]["c"]) if m1 else 0.0
     trade_memory_excursions=update_trade_memory_excursions(inst,m1) if TRADE_MEMORY_ENABLED else 0
     trade_memory_reconcile=await reconcile_trade_memory(client,inst) if TRADE_MEMORY_ENABLED else {"enabled":False}
+    if OBSERVABILITY_ENABLED:
+        _obs_module("Trade Memory","OK" if TRADE_MEMORY_ENABLED else "PAUSED",last_operation="reconcile/observe",
+                    details={"instrument":inst,"reconcile":trade_memory_reconcile,"excursion_updates":trade_memory_excursions})
     managed_changes=await manage_open_trades(client,inst,current_price) if current_price else 0
     resolved = resolve_pending(inst, m1)
     shadow_resolved = resolve_shadow_trials(inst, m1)
     candidate_paper_resolved = resolve_candidate_paper_trades(inst,m1) if VALIDATION_PIPELINE_ENABLED else 0
     deployment_live_reconcile = await deployment_manager.reconcile(client) if DEPLOYMENT_MANAGER_ENABLED and CANARY_ACCOUNT and CANARY_TOKEN else {"checked":0,"closed":0,"errors":[]}
+    recovery_periodic={"skipped":True}
+    if RECOVERY_MANAGER_ENABLED:
+        rst=recovery_manager.state();lastrec=_parse_iso(rst.get("last_reconciliation_ts"))
+        if lastrec is None or (datetime.now(timezone.utc)-lastrec).total_seconds()>=RECOVERY_RECONCILE_INTERVAL_SECONDS:
+            recovery_periodic=await recovery_reconcile_primary(client,"periodic")
+            rec=(recovery_periodic.get("reconciliation") or {}) if isinstance(recovery_periodic,dict) else {}
+            if recovery_periodic.get("connected") and rec.get("status") in ("MATCHED","MINOR_MISMATCH") and not bool(obs_market_health.get("stale")):
+                try:
+                    rctx=await build_broker_risk_context(client)
+                    rok=not bool(rctx.get("system_abnormal")) and rctx.get("nav") is not None
+                    recovery_manager.verify_risk(rok,rctx)
+                    if rok and not recovery_manager.state().get("emergency_stop") and recovery_manager.state().get("safe_mode"):
+                        recovery_manager.exit_safe_mode("periodic broker/position/risk recovery passed")
+                        if OBSERVABILITY_ENABLED:
+                            observability_manager.recover("RECOVERY_FAILURE","Recovery Manager returned to READY",rec)
+                except Exception as e:
+                    recovery_manager.verify_risk(False,{"error":str(e)})
     if resolved or shadow_resolved or candidate_paper_resolved:
         refresh_discovered_patterns()
         refresh_filter_hypotheses()
         refresh_external_hypotheses()
         autonomous_discovery_refresh()
         review_active_research_rules()
-        promote_validated_research_rules()
+        security_queue_validated_research_changes()
         state["strategy_health"]=evaluate_all_strategy_health()
         reconcile_ai_director_outcomes()
         # Close the learning loop as soon as enough labeled outcomes exist instead
@@ -5980,17 +7457,36 @@ async def scan(client: httpx.AsyncClient, inst: str) -> Dict[str, Any]:
         if retrain["ready"]:
             try: state["learning"]={**train_shadow_model(force=False),"last_train":now_iso(),"model_ready":Path(MODEL_PATH).exists(),"retrain_policy":retrain}
             except Exception as e: log.exception("evidence-gated learning refresh failed: %s",e)
+    # V3.19: autonomous research cannot self-activate rules.
     if AUTO_PROMOTE_RESEARCH:
-        promote_validated_research_rules()
+        security_queue_validated_research_changes()
     if STRATEGY_SELF_EVAL_ENABLED:
         state["strategy_health"]=evaluate_all_strategy_health()
 
+    obs_strategy_started=time.perf_counter()
     r = analyze(h1, m15, m5, m1, inst)
+    obs_strategy_ms=(time.perf_counter()-obs_strategy_started)*1000
+    r["market_data_stale"]=bool(obs_market_health.get("stale"))
+    r["correlation_id"]=obs_trace_id
+    if obs_trace_id: observability_manager.trace_phase(obs_trace_id,"signal",strategy_id=setup_variant(r))
+    if OBSERVABILITY_ENABLED:
+        _obs_module("Strategies","OK",obs_strategy_ms,last_operation="strategy analysis",
+                    details={"instrument":inst,"signal":r.get("signal"),"score":r.get("score"),"variant":setup_variant(r)})
 
     if MARKET_REGIME_ENABLED:
+        prev_regime=(state.get("market_regimes",{}).get(inst) or {}).get("market_regime")
         log_market_regime(inst,r["market_regime"])
         state.setdefault("market_regimes",{})[inst]=r["market_regime"]
         record_market_regime(inst,r.get("candle_ts"),r["market_regime"])
+        if OBSERVABILITY_ENABLED:
+            _obs_module("Market Regime Detector","OK",last_operation="regime classified",details={"instrument":inst,**r["market_regime"]})
+            new_regime=r["market_regime"].get("market_regime")
+            if prev_regime and new_regime and prev_regime!=new_regime:
+                observability_manager.structured_log("INFO","Market Regime Detector","REGIME_CHANGED",
+                    f"{inst} regime changed {prev_regime} -> {new_regime}",correlation_id=obs_trace_id,symbol=inst,
+                    metrics={"previous":prev_regime,"current":new_regime,"confidence":r["market_regime"].get("confidence")})
+    elif OBSERVABILITY_ENABLED:
+        _obs_module("Market Regime Detector","PAUSED",warnings=["detector disabled"])
 
     weekend_session=ensure_weekend_session(inst,current_price)
     weekend_reaction=update_weekend_reactions(inst,current_price) if current_price else {"updated":False}
@@ -6031,6 +7527,7 @@ async def scan(client: httpx.AsyncClient, inst: str) -> Dict[str, Any]:
     current_regime = r.get("market_regime")
     if not isinstance(current_regime, dict):
         current_regime = state.get("market_regimes",{}).get(inst)
+    obs_director_started=time.perf_counter()
     director = ai_strategy_director_recommendation(
         instrument=inst,
         variant=setup_variant(r),
@@ -6038,6 +7535,12 @@ async def scan(client: httpx.AsyncClient, inst: str) -> Dict[str, Any]:
         signal_confidence=conf.get("dynamic_confidence")
     )
     director_id = log_ai_director_decision(director)
+    obs_director_ms=(time.perf_counter()-obs_director_started)*1000
+    if obs_trace_id: observability_manager.trace_phase(obs_trace_id,"director",decision_id=director_id)
+    if OBSERVABILITY_ENABLED:
+        _obs_module("AI Strategy Director","OK" if director.get("enabled",True) else "PAUSED",obs_director_ms,
+                    last_operation="strategy recommendation",details={"instrument":inst,"variant":setup_variant(r),
+                    "recommended_state":director.get("recommended_state"),"confidence":director.get("confidence"),"decision_id":director_id})
     r["ai_strategy_director"] = director
     r["ai_strategy_director_decision_id"] = director_id
 
@@ -6056,6 +7559,7 @@ async def scan(client: httpx.AsyncClient, inst: str) -> Dict[str, Any]:
         }
         persist_portfolio_risk_context(broker_risk_context)
 
+    obs_risk_started=time.perf_counter()
     risk_shadow = adaptive_risk_recommendation(
         instrument=inst,
         variant=setup_variant(r),
@@ -6066,34 +7570,147 @@ async def scan(client: httpx.AsyncClient, inst: str) -> Dict[str, Any]:
         requested_units=UNITS
     )
     risk_shadow_id = log_adaptive_risk_decision(risk_shadow)
+    obs_risk_ms=(time.perf_counter()-obs_risk_started)*1000
+    if obs_trace_id: observability_manager.trace_phase(obs_trace_id,"risk",risk_decision_id=risk_shadow_id)
+    if OBSERVABILITY_ENABLED:
+        _obs_module("Risk Engine","OK",obs_risk_ms,last_operation="risk recommendation",details={"instrument":inst,
+                    "risk_multiplier":risk_shadow.get("risk_multiplier"),"allow_new_trades":risk_shadow.get("allow_new_trades"),
+                    "emergency_stop":risk_shadow.get("emergency_stop"),"risk_decision_id":risk_shadow_id})
     r["adaptive_risk_engine"] = risk_shadow
     r["adaptive_risk_decision_id"] = risk_shadow_id
 
     decision = execution_decision(r, conf)
+    if RECOVERY_MANAGER_ENABLED and not recovery_manager.new_trades_allowed():
+        decision={"execute":False,"reason":"RECOVERY_SAFE_MODE: broker/internal state not sufficiently certain"}
+    if OBSERVABILITY_STARTUP_BLOCK_TRADING and not state.get("system_ready"):
+        decision={"execute":False,"reason":"SYSTEM_NOT_READY: startup health check incomplete/failed"}
+    if r.get("market_data_stale"):
+        decision={"execute":False,"reason":"MARKET_DATA_STALE: current data rejected by fail-safe"}
     if DEPLOYMENT_MANAGER_ENABLED and deployment_manager.kill("SYSTEM").get("active"):
         decision={"execute":False,"reason":"GLOBAL KILL SWITCH: new trades blocked"}
+    if TRADING_ENVIRONMENT=="PRODUCTION" and PRODUCTION_READINESS_ENABLED and decision.get("execute"):
+        prod_ctx=production_runtime_context()
+        if PRODUCTION_DRY_RUN_MODE:
+            pst=production_readiness_gate.state();rid=pst.get("release_id")
+            if rid:
+                production_readiness_gate.record_dry_run(
+                    rid,
+                    {"market_data":not bool(r.get("market_data_stale")),"signal":r.get("signal") in ("BUY","SELL"),
+                     "director":director.get("recommended_state") is not None,"risk":risk_shadow_id is not None,
+                     "governance":GOVERNANCE_ENABLED,"execution_prepared":True},
+                    {"instrument":inst,"side":r.get("signal"),"units":min(UNITS,int(managed_value("execution.trade_units",UNITS))),
+                     "entry":r.get("entry"),"stop":r.get("stop"),"target":r.get("managed_target",r.get("target"))},
+                    blocked_before_send=True,real_broker_request_count=0,actor="EXECUTION_DRY_RUN")
+            decision={"execute":False,"reason":"PRODUCTION_DRY_RUN_MODE: full decision pipeline prepared; real order send blocked"}
+        else:
+            prod_gate=production_readiness_gate.pretrade_health_gate(prod_ctx)
+            r["production_readiness_gate"]=prod_gate
+            if not prod_gate.get("allow_new_real_order"):
+                decision={"execute":False,"reason":"PRODUCTION_READINESS_GATE: "+", ".join(prod_gate.get("reasons") or [])}
+            else:
+                sec_guard=security_manager.real_order_guard(
+                    broker_account_verified=bool(production_readiness_gate._latest("production_account_verification","WHERE release_id=? AND passed=1 ORDER BY ts DESC LIMIT 1",(production_readiness_gate.state().get("release_id"),))),
+                    risk_engine_ready=bool(RISK_ENGINE_ENABLED and not RISK_ENGINE_SHADOW_MODE),
+                    reconciliation_complete=bool(prod_ctx.get("reconciliation_ok")),
+                    emergency_stop=bool(prod_ctx.get("emergency_stop")),
+                    deployment_authorized=production_readiness_gate.state().get("production_stage") in ("MINIMAL_LIVE","LIMITED_LIVE","CONTROLLED_LIVE","PRODUCTION_APPROVED"),
+                    runtime_verified=bool(security_manager.last_integrity.get("verified")),
+                    running_under_test=running_under_test())
+                if not sec_guard.get("allow"):
+                    decision={"execute":False,"reason":"SECURITY_REAL_ORDER_GUARD: "+", ".join(sec_guard.get("reasons") or [])}
+    if OBSERVABILITY_ENABLED:
+        _obs_module("Execution Engine","OK",last_operation="execution decision evaluated",details={"instrument":inst,"execute":decision.get("execute"),"reason":decision.get("reason")})
     pre_execution_reason = str(decision["reason"])
     executed, oid = 0, ""
     trade_id=""; fill={}; fill_price=None; slippage=None
-    if AUTO and decision["execute"]:
-        x = await execute(client, r)
-        if x and not x.get("skipped"):
+    if AUTO and bool(managed_value("execution.auto_trade",AUTO)) and decision["execute"]:
+        if obs_trace_id: observability_manager.trace_phase(obs_trace_id,"order_created")
+        obs_order_sent=now_iso();obs_broker_started=time.perf_counter()
+        if obs_trace_id: observability_manager.trace_phase(obs_trace_id,"order_sent",ts=obs_order_sent)
+        try:
+            x=await execute_recoverable(client,r,obs_trace_id,director_id,risk_shadow_id) if RECOVERY_MANAGER_ENABLED else await execute(client,r)
+        except Exception as e:
+            if RECOVERY_MANAGER_ENABLED:
+                recovery_manager.enter_safe_mode(f"execution exception before confirmed broker state: {e}",
+                                                 correlation_id=obs_trace_id,severity="CRITICAL")
+            if OBSERVABILITY_ENABLED:
+                observability_manager.alert(f"ORDER_ERROR:{obs_trace_id}","CRITICAL","Execution Engine","ORDER_REJECTED_OR_UNCONFIRMED",
+                                            "Order submission failed; trading moved to safe mode",
+                                            correlation_id=obs_trace_id,details={"instrument":inst,"error":str(e)})
+                _obs_module("Execution Engine","ERROR",errors=[str(e)])
+            x={"status_unknown":True,"error":str(e)}
+        obs_broker_ms=(time.perf_counter()-obs_broker_started)*1000
+        if x and x.get("status_unknown"):
+            decision["reason"] += "; ORDER_STATUS_UNKNOWN: no automatic resend; reconciliation required"
+            if OBSERVABILITY_ENABLED:
+                observability_manager.alert(f"ORDER_UNKNOWN:{obs_trace_id}","CRITICAL","Recovery Manager","ORDER_STATUS_UNKNOWN",
+                    "Order outcome is unknown; duplicate resend prevented until reconciliation",
+                    correlation_id=obs_trace_id,details=x)
+                _obs_module("Recovery Manager","DEGRADED",errors=[str(x.get("error") or "ORDER_STATUS_UNKNOWN")])
+        elif x and x.get("duplicate_prevented"):
+            decision["reason"] += "; DUPLICATE_ORDER_PREVENTED"
+        elif x and x.get("rejected"):
+            decision["reason"] += "; ORDER_REJECTED"
+        elif x and not x.get("skipped"):
+            if obs_trace_id: observability_manager.trace_phase(obs_trace_id,"broker_ack")
             executed = 1
             fill=(x.get("orderFillTransaction") or {})
             oid=str(fill.get("id","")); trade_id=str((fill.get("tradeOpened") or {}).get("tradeID",""))
             fill_price=float(fill.get("price") or r["entry"]); slippage=(fill_price-r["entry"])/pip_size(inst)
             if r["signal"]=="SELL": slippage=-slippage
+            if OBSERVABILITY_ENABLED:
+                if not oid or not trade_id:
+                    observability_manager.alert(f"ORDER_NO_CONFIRM:{obs_trace_id}","CRITICAL","Execution Engine","ORDER_CONFIRMATION_MISSING",
+                        "Broker response did not contain expected fill/trade identifiers",correlation_id=obs_trace_id,details={"fill":fill})
+                if oid:
+                    cdup=conn();dup=cdup.execute("SELECT COUNT(*) n FROM execution_audit WHERE order_id=?",(oid,)).fetchone()["n"];cdup.close()
+                    if dup:
+                        observability_manager.alert(f"DUPLICATE_ORDER:{oid}","CRITICAL","Execution Engine","DUPLICATE_ORDER",
+                            "Order identifier already exists in execution audit",correlation_id=obs_trace_id,details={"order_id":oid,"existing":dup})
+                actual_units=_risk_float((fill.get("tradeOpened") or {}).get("units"))
+                if actual_units is None and x.get("filled_units") is not None:
+                    actual_units=float(x.get("filled_units"))
+                if actual_units is not None and abs(abs(actual_units)-UNITS)>0.5:
+                    observability_manager.alert(f"PARTIAL_FILL:{oid or obs_trace_id}","HIGH","Execution Engine","PARTIAL_FILL_UNEXPECTED",
+                        "Filled units differ from requested units; remaining amount will not be resent automatically",correlation_id=obs_trace_id,details={"requested_units":UNITS,"filled_units":actual_units,"remaining_units":x.get("remaining_units")})
+            if obs_trace_id:
+                observability_manager.trace_phase(obs_trace_id,"fill",order_id=oid,trade_id=trade_id)
+                observability_manager.link_trace(obs_trace_id,order_id=oid,trade_id=trade_id)
+            if OBSERVABILITY_ENABLED:
+                if abs(float(slippage or 0))>DEPLOYMENT_MAX_SLIPPAGE_PIPS:
+                    observability_manager.alert(f"SLIPPAGE:{oid or obs_trace_id}","HIGH","Execution Engine","EXCESSIVE_SLIPPAGE",
+                        "Fill price deviated materially from expected entry",correlation_id=obs_trace_id,
+                        details={"slippage_pips":slippage,"expected_entry":r["entry"],"fill_price":fill_price})
+                if obs_broker_ms>OBSERVABILITY_BROKER_LATENCY_WARNING_MS:
+                    observability_manager.alert("BROKER_LATENCY","WARNING","Broker Connection","BROKER_LATENCY_HIGH",
+                        "Broker order acknowledgement latency is elevated",correlation_id=obs_trace_id,details={"latency_ms":obs_broker_ms})
+                else:observability_manager.recover("BROKER_LATENCY","Broker order latency recovered",{"latency_ms":obs_broker_ms})
             protection=await verify_trade_protection(client,trade_id)
             if protection["status"]!="OK": decision["reason"] += "; PROTECTION_ERROR"
-            register_trade_management(trade_id,r,float(r.get("managed_target",r["target"])))
-            log.info("PRACTICE EXECUTED %s %s quality=%s confidence=%s order=%s slippage=%.2f protection=%s",
+            actual_filled_units=_risk_float((fill.get("tradeOpened") or {}).get("units"))
+            if actual_filled_units is None:
+                actual_filled_units=_risk_float(x.get("filled_units"),UNITS)
+            register_trade_management(trade_id,r,float(r.get("managed_target",r["target"])),actual_filled_units)
+            log.info("EXECUTED %s %s quality=%s confidence=%s order=%s slippage=%.2f protection=%s",
                      r["signal"], inst, r["score"], conf.get("probability"), oid, slippage, protection["status"])
         elif x and x.get("skipped"):
             decision["reason"] += "; no ejecutada: posición existente"
-    elif decision["execute"] and not AUTO:
+    elif decision["execute"] and not (AUTO and bool(managed_value("execution.auto_trade",AUTO))):
         decision["reason"] += "; AUTO_TRADE=false"
 
     signal_id = save_signal(r, executed, oid, mlp, conf, decision["reason"])
+    if RECOVERY_MANAGER_ENABLED and locals().get("x") and isinstance(x,dict):
+        intent_obj=x.get("intent") or {}
+        if intent_obj.get("execution_intent_id"):
+            try: recovery_manager.link_signal(intent_obj["execution_intent_id"],signal_id)
+            except Exception as e:
+                recovery_manager.enter_safe_mode(f"failed to link signal to execution intent: {e}",severity="HIGH")
+    if obs_trace_id:
+        observability_manager.link_trace(obs_trace_id,signal_id=signal_id,decision_id=director_id,risk_decision_id=risk_shadow_id,
+                                         order_id=oid or None,trade_id=trade_id or None,strategy_id=setup_variant(r),symbol=inst)
+        observability_manager.structured_log("INFO","Execution Engine","DECISION_RECORDED",decision.get("reason",""),
+            strategy_id=setup_variant(r),trade_id=trade_id or None,decision_id=director_id,correlation_id=obs_trace_id,symbol=inst,
+            metrics={"signal_id":signal_id,"risk_decision_id":risk_shadow_id,"executed":bool(executed),"confidence":conf.get("probability")})
     candidate_paper_created = record_candidate_paper_signals(signal_id,r,conf,director,risk_shadow,current_price) if VALIDATION_PIPELINE_ENABLED else 0
 
     candidate_live_results=[]
@@ -6105,6 +7722,10 @@ async def scan(client: httpx.AsyncClient, inst: str) -> Dict[str, Any]:
             except Exception as e:
                 canary_health={"broker_ok":False,"data_ok":False,"system_abnormal":True,"errors":[str(e)]}
             for dep in live_deps:
+                if not canary_recovery_manager.new_trades_allowed():
+                    candidate_live_results.append({"candidate_id":dep["candidate_id"],"executed":False,
+                                                   "reasons":["CANARY_RECOVERY_SAFE_MODE"]})
+                    continue
                 ctx={"instrument":inst,"strategy_confidence_entry":conf.get("probability"),
                      "director_confidence_entry":director.get("confidence"),
                      "director_state":director.get("recommended_state"),
@@ -6119,24 +7740,53 @@ async def scan(client: httpx.AsyncClient, inst: str) -> Dict[str, Any]:
                                       "open_instruments":canary_health.get("open_instruments") or [],
                                       "consecutive_losses":0,"data_stale":not canary_health.get("data_ok"),
                                       "system_abnormal":canary_health.get("system_abnormal")},
-                        requested_units=UNITS)
+                        requested_units=min(UNITS,int(managed_value("execution.trade_units",UNITS))))
                     gate=deployment_manager.signal_gate(dep,ctx,canary_risk,canary_health)
+                    sec_guard=security_manager.real_order_guard(
+                        broker_account_verified=BROKER_ACCOUNT_VERIFIED,
+                        risk_engine_ready=bool(canary_risk.get("allow_new_trades") and not canary_risk.get("emergency_stop")),
+                        reconciliation_complete=canary_recovery_manager.state().get("last_reconciliation_status") in ("MATCHED","MINOR_MISMATCH"),
+                        emergency_stop=bool(canary_recovery_manager.state().get("emergency_stop")),
+                        deployment_authorized=dep.get("current_stage") in ("CANARY_LIVE","LIMITED_PRODUCTION"),
+                        runtime_verified=bool(security_manager.last_integrity.get("verified")),
+                        running_under_test=running_under_test()
+                    )
+                    if not sec_guard["allow"]:
+                        gate["allow"]=False
+                        gate["reasons"].extend(sec_guard["reasons"])
+                        if OBSERVABILITY_ENABLED:
+                            observability_manager.alert(f"REAL_ORDER_GUARD:{dep['candidate_id']}","CRITICAL",
+                                "Security Manager","PRODUCTION_GUARDRAIL_BLOCK",
+                                "Real-order guardrail blocked Candidate execution",
+                                correlation_id=obs_trace_id,details={"candidate_id":dep["candidate_id"],"reasons":sec_guard["reasons"]})
                     if not gate["allow"]:
                         candidate_live_results.append({"candidate_id":dep["candidate_id"],"executed":False,"reasons":gate["reasons"]})
                         continue
                     allocation=float(dep["allocation_fraction"])
-                    approved=min(RISK_BASE_FRACTION*allocation,float(canary_risk.get("approved_risk") or 0))
+                    approved=min(float(managed_value("risk.base_fraction",RISK_BASE_FRACTION))*allocation,float(canary_risk.get("approved_risk") or 0))
                     if approved<=0:
                         candidate_live_results.append({"candidate_id":dep["candidate_id"],"executed":False,"reasons":["RISK_ENGINE_APPROVED_ZERO"]})
                         continue
-                    units=max(1,int(math.floor(UNITS*min(1.0,approved/max(RISK_BASE_FRACTION,1e-9)))))
+                    units=max(1,int(math.floor(min(UNITS,int(managed_value("execution.trade_units",UNITS)))*min(1.0,approved/max(float(managed_value("risk.base_fraction",RISK_BASE_FRACTION)),1e-9)))))
                     sig={"signal_id":signal_id,"instrument":inst,"signal":r["signal"],"entry":r["entry"],"stop":r["stop"],
                          "target":r["target"],"managed_target":r.get("managed_target",r["target"]),
                          "market_regime":ctx["market_regime_entry"],"volatility_state":ctx["volatility_state_entry"],
                          "director_state":ctx["director_state"],"director_confidence":ctx["director_confidence_entry"],
                          "risk_multiplier":canary_risk.get("risk_multiplier")}
-                    x=await deployment_manager.execute(client,dep,sig,units,approved)
-                    candidate_live_results.append({"executed":True,**x})
+                    canary_key=deterministic_intent_key(
+                        "CANARY",inst,r["signal"],dep["candidate_version"],r.get("candle_ts") or now_iso(),
+                        r["entry"],r["stop"],r.get("managed_target",r["target"]))
+                    async def _canary_submitter(body):
+                        return await canary_recovery_manager.submit_order(
+                            client,idempotency_key=canary_key,correlation_id=obs_trace_id or canary_key,
+                            decision_id=str(director_id) if director_id is not None else None,
+                            risk_decision_id=str(risk_shadow_id) if risk_shadow_id is not None else None,
+                            strategy_id=dep["candidate_version"],symbol=inst,side=r["signal"],requested_units=units,
+                            entry_price=r["entry"],stop_loss=r["stop"],take_profit=r.get("managed_target",r["target"]),
+                            order_body=body,metadata={"candidate_id":dep["candidate_id"],
+                            "deployment_stage":dep["current_stage"],"allocation_fraction":dep["allocation_fraction"]})
+                    x=await deployment_manager.execute(client,dep,sig,units,approved,submitter=_canary_submitter)
+                    candidate_live_results.append({"executed":bool(x.get("trade_id")),**x})
                 except Exception as e:
                     deployment_manager.pause(dep["candidate_id"],f"fail-safe execution error: {e}","EXECUTION_FAIL_SAFE")
                     candidate_live_results.append({"candidate_id":dep["candidate_id"],"executed":False,"error":str(e)})
@@ -6151,10 +7801,39 @@ async def scan(client: httpx.AsyncClient, inst: str) -> Dict[str, Any]:
             pre_execution_reason=pre_execution_reason,fill=fill,
             fill_price=float(fill_price),entry_slippage_pips=slippage
         )
+        if obs_trace_id: observability_manager.trace_phase(obs_trace_id,"trade_memory",trade_id=trade_id)
+        if TRADING_ENVIRONMENT=="PRODUCTION" and PRODUCTION_READINESS_ENABLED:
+            pst=production_readiness_gate.state()
+            if pst.get("production_stage") in ("MINIMAL_LIVE","LIMITED_LIVE","CONTROLLED_LIVE","PRODUCTION_APPROVED"):
+                post_fill_rec=await recovery_reconcile_primary(client,"post_real_fill") if RECOVERY_MANAGER_ENABLED else {"reconciliation":{"status":"UNKNOWN"}}
+                rec_status=((post_fill_rec or {}).get("reconciliation") or {}).get("status")
+                production_readiness_gate.record_live_execution({
+                    "trade_id":trade_id,
+                    "expected_order":{"instrument":inst,"side":r.get("signal"),"entry":r.get("entry"),"stop":r.get("stop"),
+                                      "target":r.get("managed_target",r.get("target"))},
+                    "actual_order":{"order_id":oid,"trade_id":trade_id},"fill":fill,
+                    "slippage_pips":slippage,"latency_ms":locals().get("obs_broker_ms"),
+                    "fees":_risk_float(fill.get("commission"),0.0),
+                    "partial_fill":bool(locals().get("actual_filled_units") is not None and abs(abs(float(actual_filled_units))-abs(float(UNITS)))>0.5),
+                    "rejected":False,"reconciliation_ok":rec_status in ("MATCHED","MINOR_MISMATCH"),
+                    "protection_ok":protection.get("status")=="OK","audit_ok":True,"trade_memory_ok":True,
+                    "details":{"correlation_id":obs_trace_id,"risk_decision_id":risk_shadow_id,"director_decision_id":director_id,
+                               "reconciliation_status":rec_status}
+                })
     save_decision(r, conf, executed, decision["reason"])
+    obs_total_ms=(time.perf_counter()-obs_scan_started)*1000
+    if OBSERVABILITY_ENABLED:
+        observability_manager.sample_system_metrics(processing_time_ms=obs_total_ms,
+            broker_latency_ms=locals().get("obs_broker_ms"),market_data_latency_ms=(obs_market_health.get("age_seconds") or 0)*1000,
+            details={"instrument":inst,"signal":r.get("signal"),"executed":bool(executed)})
+        if obs_total_ms>15000:
+            observability_manager.alert("SCAN_PROCESSING_SLOW","WARNING","System","PROCESSING_LATENCY_HIGH",
+                                        "End-to-end scan processing time is elevated",correlation_id=obs_trace_id,details={"processing_ms":obs_total_ms})
+        else:observability_manager.recover("SCAN_PROCESSING_SLOW","Scan processing latency recovered",{"processing_ms":obs_total_ms})
+    if obs_trace_id: observability_manager.trace_phase(obs_trace_id,"complete")
     return {
         **r,
-        "executed": bool(executed), "order_id": oid, "signal_id": signal_id,
+        "executed": bool(executed), "order_id": oid, "signal_id": signal_id, "correlation_id": obs_trace_id,
         "ml_probability": mlp, "dynamic_confidence": conf.get("probability"),
         "confidence_source": conf.get("source"), "confidence_samples": conf.get("samples"),
         "local_confidence_samples": conf.get("local_samples"),
@@ -6177,7 +7856,9 @@ async def scan(client: httpx.AsyncClient, inst: str) -> Dict[str, Any]:
         "candidate_paper_created": candidate_paper_created,
         "candidate_paper_resolved_this_cycle": candidate_paper_resolved,
         "candidate_live_results": candidate_live_results,
-        "deployment_live_reconciliation": deployment_live_reconcile
+        "deployment_live_reconciliation": deployment_live_reconcile,
+        "recovery": {"state":recovery_manager.state() if RECOVERY_MANAGER_ENABLED else None,
+                     "periodic_reconciliation":recovery_periodic}
     }
 
 
@@ -6210,6 +7891,9 @@ def scanner_health_snapshot() -> Dict[str, Any]:
 async def worker():
     state["worker_running"] = True
     state["worker_started_at"] = now_iso()
+    if OBSERVABILITY_ENABLED:
+        _obs_module("Execution Engine","OK",last_operation="scanner worker started")
+        observability_manager.recover("EXECUTION_WORKER_OFFLINE","Execution worker recovered")
     last_train_check = datetime.min.replace(tzinfo=timezone.utc)
     log.info("Scanner worker started")
     try:
@@ -6233,11 +7917,47 @@ async def worker():
                         cycle_ok = False
                         state["last_results"][inst] = {"error": str(e)}
                         state["last_error"] = str(e)
+                        if OBSERVABILITY_ENABLED:
+                            observability_manager.alert(f"SCAN_FAILURE:{inst}","HIGH","Execution Engine","SCAN_FAILURE",
+                                                        f"Scan failed for {inst}",details={"error":str(e),"instrument":inst})
                         log.exception("scan failed for %s", inst)
+                if OBSERVABILITY_ENABLED:
+                    obs_broker=await observability_broker_snapshot(client)
+            if OBSERVABILITY_ENABLED:
+                try:
+                    observability_refresh_noncritical_modules()
+                    observability_strategy_degradation_summary()
+                    observability_silent_anomalies()
+                    observability_manager.prune()
+                    m=observability_manager.sample_system_metrics(broker_latency_ms=(obs_broker.get("latency_ms") if 'obs_broker' in locals() else None))
+                    db_status="DEGRADED" if m.get("db_latency_ms") is not None and m["db_latency_ms"]>OBSERVABILITY_DB_LATENCY_WARNING_MS else "OK"
+                    _obs_module("Database",db_status,m.get("db_latency_ms"),warnings=["database latency elevated"] if db_status!="OK" else [],last_operation="observability SELECT 1")
+                    if db_status!="OK":
+                        observability_manager.alert("DATABASE_LATENCY","WARNING","Database","DATABASE_LATENCY_HIGH",
+                                                    "Database latency is elevated",details={"latency_ms":m.get("db_latency_ms")})
+                    else:observability_manager.recover("DATABASE_LATENCY","Database latency recovered",{"latency_ms":m.get("db_latency_ms")})
+                    cc=conn();latest_risk=cc.execute("SELECT emergency_stop FROM adaptive_risk_decisions ORDER BY id DESC LIMIT 1").fetchone();cc.close()
+                    emergency=bool(latest_risk and latest_risk["emergency_stop"])
+                    paused=bool(not AUTO or deployment_manager.kill("SYSTEM").get("active"))
+                    gh=observability_manager.global_health(trading_paused=paused,emergency_stop=emergency)
+                    critical_active=[a for a in observability_manager.active_alerts() if a.get("severity")=="CRITICAL"]
+                    if critical_active and gh["status"]!="EMERGENCY_STOP":
+                        gh={"status":"CRITICAL","reasons":list(dict.fromkeys(gh.get("reasons",[])+[a["event_type"] for a in critical_active]))}
+                    state.setdefault("observability",{})["system_health"]=gh
+                    state["observability"]["last_refresh"]=now_iso()
+                    if OBSERVABILITY_CRITICAL_FAILSAFE_ENABLED and gh["status"]=="CRITICAL" and not deployment_manager.kill("SYSTEM").get("active"):
+                        deployment_manager.set_kill("SYSTEM",True,"Observability critical fail-safe: "+";".join(gh.get("reasons",[])),"OBSERVABILITY")
+                except Exception as e:
+                    log.exception("observability refresh failed: %s",e)
             if cycle_ok:
                 state["successful_cycles"] += 1
                 state["last_successful_scan"] = now_iso()
                 state["last_error"] = None
+                if OBSERVABILITY_ENABLED:
+                    for inst in INSTRUMENTS: observability_manager.recover(f"SCAN_FAILURE:{inst}",f"{inst} scan recovered")
+                    if OBSERVABILITY_STARTUP_BLOCK_TRADING and not state.get("system_ready"):
+                        try: await observability_startup_health_check()
+                        except Exception as e: log.warning("startup health recheck failed: %s",e)
             if datetime.now(timezone.utc) - last_train_check >= timedelta(hours=1):
                 try:
                     retrain=should_retrain_model()
@@ -6249,6 +7969,10 @@ async def worker():
                 last_train_check = datetime.now(timezone.utc)
     finally:
         state["worker_running"] = False
+        if OBSERVABILITY_ENABLED:
+            _obs_module("Execution Engine","OFFLINE",errors=["scanner worker stopped"])
+            observability_manager.alert("EXECUTION_WORKER_OFFLINE","CRITICAL","Execution Engine","MODULE_OFFLINE",
+                                        "Scanner/execution worker stopped")
         log.warning("Scanner worker stopped")
 
 
@@ -6296,20 +8020,270 @@ async def watchdog_loop():
                 task.cancel()
 
 
+
+def _obs_json_value(value,default=None):
+    try:return json.loads(value) if value else (default if default is not None else {})
+    except Exception:return default if default is not None else {}
+
+
+def observability_global_health_snapshot() -> Dict[str,Any]:
+    system_kill=deployment_manager.kill("SYSTEM") if DEPLOYMENT_MANAGER_ENABLED else {"active":False}
+    c=conn();lr=c.execute("SELECT emergency_stop,reason FROM adaptive_risk_decisions ORDER BY id DESC LIMIT 1").fetchone();c.close()
+    recovery_state=recovery_manager.state() if RECOVERY_MANAGER_ENABLED else {}
+    emergency=bool((lr and lr["emergency_stop"]) or recovery_state.get("emergency_stop"))
+    recovery_paused=bool(RECOVERY_MANAGER_ENABLED and not recovery_manager.new_trades_allowed())
+    gh=observability_manager.global_health(
+        trading_paused=bool(not AUTO or system_kill.get("active") or recovery_paused),
+        emergency_stop=emergency
+    )
+    critical_alerts=[x for x in observability_manager.active_alerts() if x.get("severity")=="CRITICAL"]
+    if critical_alerts and gh["status"] not in ("EMERGENCY_STOP",):
+        gh={"status":"CRITICAL","reasons":list(dict.fromkeys(gh.get("reasons",[])+[x["event_type"] for x in critical_alerts]))}
+    return {**gh,"system_ready":bool(state.get("system_ready")),
+            "trading_enabled":bool(AUTO and state.get("system_ready") and not system_kill.get("active") and not recovery_paused),
+            "emergency_stop":emergency,"global_kill_switch":system_kill,
+            "recovery_state":recovery_state,"active_critical_alerts":len(critical_alerts)}
+
+
+def observability_dashboard_snapshot() -> Dict[str,Any]:
+    c=conn()
+    capital=c.execute("SELECT * FROM observability_capital_history ORDER BY id DESC LIMIT 1").fetchone()
+    sysm=c.execute("SELECT * FROM observability_metrics ORDER BY id DESC LIMIT 1").fetchone()
+    strategies=[dict(x) for x in c.execute("SELECT * FROM strategy_health ORDER BY setup_variant").fetchall()]
+    directors=[dict(x) for x in c.execute("""SELECT d.* FROM ai_strategy_director_decisions d JOIN (
+        SELECT setup_variant,MAX(id) id FROM ai_strategy_director_decisions GROUP BY setup_variant) x ON x.id=d.id
+        ORDER BY d.id DESC LIMIT 100""").fetchall()]
+    risk=c.execute("SELECT * FROM adaptive_risk_decisions ORDER BY id DESC LIMIT 1").fetchone()
+    risk_by_strategy=[dict(x) for x in c.execute("""SELECT a.* FROM adaptive_risk_decisions a JOIN (
+        SELECT setup_variant,MAX(id) id FROM adaptive_risk_decisions GROUP BY setup_variant) x ON x.id=a.id
+        ORDER BY a.id DESC LIMIT 100""").fetchall()]
+    risk_by_asset=[dict(x) for x in c.execute("""SELECT a.* FROM adaptive_risk_decisions a JOIN (
+        SELECT instrument,MAX(id) id FROM adaptive_risk_decisions GROUP BY instrument) x ON x.id=a.id
+        ORDER BY a.id DESC LIMIT 100""").fetchall()]
+    portfolio=c.execute("SELECT * FROM portfolio_risk_state WHERE id=1").fetchone()
+    risk_blocks=c.execute("SELECT COUNT(*) n FROM adaptive_risk_decisions WHERE allow_new_trades=0 AND ts>=?",
+                          ((datetime.now(timezone.utc)-timedelta(days=1)).isoformat(),)).fetchone()["n"]
+    positions=[dict(x) for x in c.execute("SELECT * FROM active_trade_management WHERE closed=0 ORDER BY opened_ts").fetchall()]
+    candidates=[dict(x) for x in c.execute("""SELECT cr.*,cs.strategy_id parent_strategy,cs.candidate_version,cs.status learning_status,
+        cs.expected_improvement,dr.current_stage deployment_stage,dr.allocation_fraction,dr.last_health_check_ts
+        FROM candidate_registry cr JOIN candidate_strategies cs ON cs.candidate_id=cr.candidate_id
+        LEFT JOIN deployment_registry dr ON dr.candidate_id=cr.candidate_id ORDER BY cr.updated_ts DESC""").fetchall()]
+    paper=[dict(x) for x in c.execute("""SELECT candidate_id,COUNT(*) trades,
+        SUM(CASE WHEN status='DONE' THEN 1 ELSE 0 END) resolved,
+        SUM(CASE WHEN realized_r IS NOT NULL THEN realized_r ELSE 0 END) total_r,
+        AVG(CASE WHEN realized_r IS NOT NULL THEN realized_r END) expectancy_r,
+        MAX(resolved_ts) last_update FROM candidate_paper_trades GROUP BY candidate_id""").fetchall()]
+    al=c.execute("SELECT * FROM adaptive_learning_runs ORDER BY id DESC LIMIT 1").fetchone()
+    al_counts={x["status"]:x["n"] for x in c.execute("SELECT status,COUNT(*) n FROM candidate_strategies GROUP BY status").fetchall()}
+    next_eval=c.execute("SELECT MIN(cooldown_until) ts FROM candidate_strategies WHERE cooldown_until>?",(now_iso(),)).fetchone()["ts"]
+    pending_recommendations=[dict(x) for x in c.execute("""SELECT candidate_id,strategy_id,candidate_version,parameter_name,proposed_value_json,
+        reason,candidate_score,confidence FROM candidate_strategies WHERE status='ACCEPTED_AS_CANDIDATE' ORDER BY id DESC LIMIT 50""").fetchall()]
+    val=[dict(x) for x in c.execute("SELECT candidate_id,candidate_version,completed_ts,final_status,validation_score,final_reason FROM candidate_validation_runs ORDER BY started_ts DESC LIMIT 50").fetchall()]
+    drift=[dict(x) for x in c.execute("SELECT * FROM concept_drift_alerts WHERE status='POSSIBLE_CONCEPT_DRIFT' ORDER BY ts DESC").fetchall()]
+    latest_exec=[dict(x) for x in c.execute("SELECT * FROM execution_audit ORDER BY id DESC LIMIT 20").fetchall()]
+    latest_signal=c.execute("SELECT * FROM signals ORDER BY id DESC LIMIT 1").fetchone()
+    c.close()
+    dir_by={x["setup_variant"]:x for x in directors}
+    for st in strategies:
+        d=dir_by.get(st["setup_variant"]);st["director_confidence"]=d.get("confidence") if d else None
+        st["director_state"]=d.get("recommended_state") if d else None
+        st["monitor_state"]="PAUSED" if st.get("status") in ("PAUSED","DEGRADED") else "ACTIVE"
+    depdash=deployment_manager.dashboard() if DEPLOYMENT_MANAGER_ENABLED else {"deployments":[],"kill_switches":[]}
+    canary_by={x["candidate_id"]:x.get("live_metrics",{}) for x in depdash.get("deployments",[])}
+    paper_by={x["candidate_id"]:x for x in paper}
+    for x in candidates:
+        x["paper_metrics"]=paper_by.get(x["candidate_id"],{})
+        x["canary_metrics"]=canary_by.get(x["candidate_id"],{})
+    broker_module=next((x for x in observability_manager.module_rows() if x["module_name"]=="Broker Connection"),None)
+    broker_details=_obs_json_value(broker_module.get("details_json") if broker_module else None,{})
+    riskd=dict(risk) if risk else {}
+    portd=dict(portfolio) if portfolio else {}
+    open_risk=portd.get("portfolio_open_risk") or riskd.get("portfolio_open_risk") or 0
+    risk_dashboard={"latest_decision":riskd,"portfolio":portd,"by_strategy":risk_by_strategy,"by_asset":risk_by_asset,
+                    "blocked_last_24h":int(risk_blocks),
+                    "remaining_risk_budget":max(0.0,float(managed_value("risk.max_portfolio_fraction",RISK_MAX_PORTFOLIO_FRACTION))-float(open_risk or 0)),
+                    "hard_limits":{"trade":float(managed_value("risk.max_trade_fraction",RISK_MAX_TRADE_FRACTION)),
+                                   "strategy":float(managed_value("risk.max_strategy_fraction",RISK_MAX_STRATEGY_FRACTION)),
+                                   "portfolio":float(managed_value("risk.max_portfolio_fraction",RISK_MAX_PORTFOLIO_FRACTION)),
+                                   "drawdown_warn":float(managed_value("risk.drawdown_warning",RISK_DRAWDOWN_WARN)),
+                                   "drawdown_stop":float(managed_value("risk.drawdown_stop",RISK_DRAWDOWN_STOP))}}
+    security_snapshot=security_manager.dashboard()
+    actor_roles={}
+    for a in security_snapshot.pop("configured_actors",[]):
+        actor_roles[a.get("role")]=actor_roles.get(a.get("role"),0)+1
+    security_snapshot["configured_actor_role_counts"]=actor_roles
+    security_snapshot["risk_config_version"]=f"config_v{security_manager.current_version()}"
+    security_snapshot["production_strategy_versions"]=[
+        {"strategy":x.get("setup_variant"),"version":f"{x.get('setup_variant')}@{VERSION_TAG}"}
+        for x in strategies
+    ]
+    security_snapshot["deployment_versions"]=[
+        {"candidate_id":x.get("candidate_id"),"production_version":x.get("production_version"),
+         "candidate_version":x.get("candidate_version"),"stage":x.get("current_stage")}
+        for x in depdash.get("deployments",[])
+    ]
+    system_evaluation_snapshot={"enabled":SYSTEM_EVALUATION_ENABLED,"observation_only":True}
+    if SYSTEM_EVALUATION_ENABLED:
+        try:
+            latest_eval=system_evaluation_engine.latest()
+            if latest_eval:
+                system_evaluation_snapshot.update({
+                    "evaluation_id":latest_eval.get("evaluation_id"),
+                    "generated_at":latest_eval.get("generated_at"),
+                    "SYSTEM_SCORE":latest_eval.get("system_score"),
+                    "current_status":latest_eval.get("system_status"),
+                    "main_degradation_factor":latest_eval.get("main_degradation_factor"),
+                    "biggest_risk_contributor":latest_eval.get("biggest_risk_contributor"),
+                    "recommendations":latest_eval.get("recommendations",[]),
+                    "executive_summary":latest_eval.get("executive_summary",{}),
+                    "confidence_level":latest_eval.get("confidence_level"),
+                    "data_quality_score":latest_eval.get("data_quality_score")
+                })
+            else:
+                system_evaluation_snapshot["status"]="NO_EVALUATION_YET"
+        except Exception as e:
+            system_evaluation_snapshot.update({"status":"ERROR","error":str(e)})
+    governance_snapshot={"enabled":GOVERNANCE_ENABLED,"trading_signal_authority":False}
+    if GOVERNANCE_ENABLED:
+        try:
+            governance_snapshot.update(governance_engine.dashboard())
+        except Exception as e:
+            governance_snapshot.update({"status":"ERROR","error":str(e)})
+    recovery_snapshot={"enabled":RECOVERY_MANAGER_ENABLED}
+    if RECOVERY_MANAGER_ENABLED:
+        try:
+            recovery_snapshot.update({"state":recovery_manager.state(),"metrics":recovery_manager.metrics(),
+                                      "unknown_orders":[x for x in recovery_manager.orders(100) if x.get("state")=="UNKNOWN"],
+                                      "incidents":recovery_manager.incidents(50)})
+        except Exception as e:
+            recovery_snapshot.update({"state":{"state":"CRITICAL_FAILURE"},"error":str(e)})
+    return {
+        "generated_at":now_iso(),"version":VERSION_TAG,"system":observability_global_health_snapshot(),
+        "recovery":recovery_snapshot,
+        "system_evaluation":system_evaluation_snapshot,
+        "governance":governance_snapshot,
+        "security_change_control":security_snapshot,
+        "startup_health":state.get("startup_health"),"modules":observability_manager.module_rows(),
+        "alerts":observability_manager.active_alerts(),"system_metrics":dict(sysm) if sysm else None,
+        "capital":dict(capital) if capital else None,
+        "broker":{"module":broker_module,"details":broker_details,"connection_status":broker_module.get("status") if broker_module else "OFFLINE"},
+        "market":{"symbols":INSTRUMENTS,"regimes":state.get("market_regimes",{}),
+                  "market_data_capabilities":{"candles":True,"tick_feed":False,"order_book":False}},
+        "strategies":strategies,"strategy_degradation":observability_strategy_degradation_summary(),
+        "ai_strategy_director":{"latest_by_strategy":directors,"pending_recommendations":pending_recommendations},"risk_engine":risk_dashboard,
+        "positions":{"internal_open":positions,"broker_open_instruments":broker_details.get("broker_instruments",[]),
+                     "source_of_truth":"broker when available"},
+        "candidates":candidates,"deployment":depdash,
+        "adaptive_learning":{"latest_run":dict(al) if al else None,"candidate_counts":al_counts,"concept_drift":drift,"next_evaluation":next_eval},
+        "validation":{"latest":val},"execution":{"recent_audit":latest_exec,"latest_signal":dict(latest_signal) if latest_signal else None},
+        "production_readiness":production_readiness_gate.dashboard(production_runtime_context()) if PRODUCTION_READINESS_ENABLED else {"enabled":False},
+        "observability":{"critical_fail_safe_enabled":OBSERVABILITY_CRITICAL_FAILSAFE_ENABLED,
+                         "startup_block_trading":OBSERVABILITY_STARTUP_BLOCK_TRADING,
+                         "last_refresh":state.get("observability",{}).get("last_refresh")}
+    }
+
+
 @app.on_event("startup")
 async def start():
     conn().close()
     deployment_manager.ensure_schema()
+    security_manager.protect_existing_history_tables()
     deployment_manager.mark_restart()
-    app.state.restart_requested = False
-    app.state.worker_supervisor_task = asyncio.create_task(supervised_worker_loop(), name="scanner-supervisor")
-    app.state.watchdog_task = asyncio.create_task(watchdog_loop(), name="scanner-watchdog")
-    log.info("24/7 PRACTICE ONLY. AUTO=%s. Scanner supervisor/watchdog active.", AUTO)
-
+    observability_manager.ensure_schema()
+    observability_manager.begin_session()
+    if SYSTEM_EVALUATION_ENABLED:
+        system_evaluation_engine.ensure_schema()
+    if GOVERNANCE_ENABLED:
+        governance_engine.ensure_schema()
+        sync_governance_runtime_config()
+    if PRODUCTION_READINESS_ENABLED:
+        production_readiness_gate.ensure_schema()
+        sync_production_readiness_config()
+    if RECOVERY_MANAGER_ENABLED:
+        recovery_manager.ensure_schema()
+        canary_recovery_manager.ensure_schema()
+        recovery_manager.set_state("RECOVERING","BOOT after process start",safe_mode=True,new_trades_allowed=False)
+    security_result=security_startup_check()
+    _obs_module("System Evaluation Engine","OK" if SYSTEM_EVALUATION_ENABLED else "PAUSED",
+                last_operation="evaluation schema loaded",
+                details={"observation_only":True,"period_hours":SYSTEM_EVALUATION_PERIOD_HOURS})
+    _obs_module("Governance Engine","OK" if GOVERNANCE_ENABLED else "PAUSED",
+                last_operation="governance policy/state loaded",
+                details={"mode":governance_engine.mode if GOVERNANCE_ENABLED else "DISABLED",
+                         "shadow_first":True,"trading_signal_authority":False})
+    if PRODUCTION_READINESS_ENABLED:
+        pst=production_readiness_gate.state()
+        _obs_module("Production Readiness Gate","OK" if pst.get("readiness_state") not in ("BLOCKED","SUSPENDED") else "DEGRADED",
+                    last_operation="production readiness state loaded",
+                    details={"readiness_state":pst.get("readiness_state"),"production_stage":pst.get("production_stage"),
+                             "production_authorized_env":PRODUCTION_AUTHORIZED,"dry_run_mode":PRODUCTION_DRY_RUN_MODE,
+                             "risk_engine_shadow_mode":RISK_ENGINE_SHADOW_MODE})
+    _obs_module("Security Manager","OK" if security_result.get("status")=="SECURITY_READY" else "ERROR",
+                last_operation="startup security validation",
+                errors=[] if security_result.get("status")=="SECURITY_READY" else security_result.get("environment",{}).get("reasons",[]),
+                details=security_result)
+    if security_result.get("status")!="SECURITY_READY":
+        state["system_ready"]=False
+        if RECOVERY_MANAGER_ENABLED and SECURITY_STARTUP_FAIL_CLOSED:
+            recovery_manager.enter_safe_mode("Startup security check failed",severity="CRITICAL")
+        if OBSERVABILITY_ENABLED:
+            observability_manager.alert("STARTUP_SECURITY_FAILED","CRITICAL","Security Manager","SECURITY_STARTUP_FAILED",
+                                        "Security startup validation failed",details=security_result)
+            integrity=security_result.get("integrity") or {}
+            if integrity.get("reason") in ("UNVERIFIED_RUNTIME_STATE","UNVERIFIED_ROLE_CONFIG_CHANGE"):
+                observability_manager.alert("UNKNOWN_CODE_VERSION","CRITICAL","Security Manager","UNKNOWN_CODE_VERSION",
+                                            "Runtime code/dependency/role manifest does not match the registered version",
+                                            details=integrity)
+            if integrity.get("role_config_changed"):
+                observability_manager.alert("ADMIN_PERMISSION_CHANGED","CRITICAL","Security Manager","ADMIN_PERMISSION_CHANGED",
+                                            "Configured actor/role permissions changed outside an approved runtime change",
+                                            details={"role_config_hash":integrity.get("role_config_hash")})
+            if not (security_result.get("checks") or {}).get("config_integrity",True):
+                observability_manager.alert("CONFIGURATION_CORRUPTION","CRITICAL","Security Manager","CRITICAL_CONFIG_CHANGED",
+                                            "Configuration snapshot hash validation failed",details=security_result)
+            if not (security_result.get("checks") or {}).get("deployment_state_valid",True):
+                observability_manager.alert("UNKNOWN_STRATEGY_VERSION","CRITICAL","Security Manager","UNKNOWN_CODE_VERSION",
+                                            "Deployment references an unknown or mismatched strategy version",
+                                            details=security_result)
+    _obs_module("Database","OK",last_operation="schema initialized")
+    _obs_module("Execution Engine","OK",last_operation="execution module loaded")
+    _obs_module("Recovery Manager","DEGRADED" if RECOVERY_MANAGER_ENABLED else "PAUSED",last_operation="startup recovery pending")
+    _obs_module("AI Strategy Director","OK" if AI_DIRECTOR_ENABLED else "PAUSED",last_operation="director module loaded")
+    _obs_module("Trade Memory","OK" if TRADE_MEMORY_ENABLED else "PAUSED",last_operation="trade memory module loaded")
+    _obs_module("Market Regime Detector","OK" if MARKET_REGIME_ENABLED else "PAUSED",last_operation="regime module loaded")
+    recovery_start={"status":"DISABLED"}
+    if RECOVERY_MANAGER_ENABLED:
+        try:
+            recovery_start=await recovery_startup_sequence()
+            _obs_module("Recovery Manager","OK" if recovery_start.get("status")=="READY" else "DEGRADED",
+                        last_operation="startup recovery",details=recovery_start)
+        except Exception as e:
+            recovery_manager.enter_safe_mode(f"startup recovery exception: {e}",severity="CRITICAL")
+            recovery_start={"status":"CRITICAL_FAILURE","error":str(e)}
+            _obs_module("Recovery Manager","ERROR",errors=[str(e)])
+    try:
+        await observability_startup_health_check()
+        if security_result.get("status")!="SECURITY_READY":
+            state["system_ready"]=False
+            state["startup_health"]={**(state.get("startup_health") or {}),"security":security_result}
+        if RECOVERY_MANAGER_ENABLED and recovery_start.get("status")!="READY":
+            state["system_ready"]=False
+            state["startup_health"]={**(state.get("startup_health") or {}),"status":"STARTUP_HEALTH_FAILED","recovery":recovery_start}
+    except Exception as e:
+        state["system_ready"]=False
+        state["startup_health"]={"status":"STARTUP_HEALTH_FAILED","error":str(e),"ts":now_iso(),"recovery":recovery_start}
+        observability_manager.alert("STARTUP_HEALTH_FAILED","CRITICAL","System","STARTUP_HEALTH_FAILURE",
+                                    "Startup health check raised an error",details={"error":str(e),"recovery":recovery_start})
+    app.state.restart_requested=False
+    app.state.worker_supervisor_task=asyncio.create_task(supervised_worker_loop(),name="scanner-supervisor")
+    app.state.watchdog_task=asyncio.create_task(watchdog_loop(),name="scanner-watchdog")
+    app.state.observability_loop_task=asyncio.create_task(observability_loop_monitor(),name="observability-loop")
+    log.info("V3.21 governance shadow active. AUTO=%s system_ready=%s recovery=%s",
+             AUTO,state.get("system_ready"),recovery_manager.state().get("state") if RECOVERY_MANAGER_ENABLED else "DISABLED")
 
 @app.on_event("shutdown")
 async def shutdown():
-    for name in ("scanner_worker_task", "worker_supervisor_task", "watchdog_task"):
+    for name in ("scanner_worker_task", "worker_supervisor_task", "watchdog_task", "observability_loop_task"):
         task = getattr(app.state, name, None)
         if task and not task.done():
             task.cancel()
@@ -6322,10 +8296,639 @@ async def health():
     startup_age = (datetime.now(timezone.utc) - started).total_seconds() if started else 9999
     stale_effective = snap["stale"] and startup_age > WATCHDOG_STALE_SECONDS
     ok = bool(state.get("worker_running")) and not stale_effective
-    return {"ok": ok, "practice_only": True, "auto_trade": AUTO, "last_scan": state["last_scan"],
+    gh=observability_global_health_snapshot() if OBSERVABILITY_ENABLED else {"status":"UNKNOWN","reasons":[]}
+    return {"ok": ok and bool(state.get("system_ready")), "practice_only": True, "auto_trade": AUTO,
+            "system_ready":state.get("system_ready"),"system_health":gh,"last_scan": state["last_scan"],
             "last_successful_scan": state["last_successful_scan"], "last_error": state["last_error"],
             "learning_mode": "adaptive_confidence", "adaptive_confidence": ADAPTIVE_CONFIDENCE,
+            "startup_health":state.get("startup_health"),
+            "recovery":recovery_manager.state() if RECOVERY_MANAGER_ENABLED else None,
             "scanner": {**snap, "stale_effective": stale_effective}}
+
+
+
+def security_alert_for_change(bundle: Dict[str,Any]):
+    req=(bundle or {}).get("change") or {}
+    if not req or not OBSERVABILITY_ENABLED:
+        return
+    key=req.get("config_key") or ""
+    risk=req.get("risk_level")
+    if req.get("status")=="APPLIED":
+        if key.startswith("risk."):
+            event="RISK_LIMIT_CHANGED";sev="CRITICAL"
+        elif key.startswith("deployment."):
+            event="CRITICAL_CONFIG_CHANGED";sev="CRITICAL"
+        else:
+            event="CRITICAL_CONFIG_CHANGED" if risk=="CRITICAL" else "CONFIG_CHANGED"
+            sev="HIGH" if risk in ("HIGH_RISK","CRITICAL") else "WARNING"
+        observability_manager.alert(f"SECURITY_CHANGE:{req.get('change_id')}",sev,"Security Manager",event,
+                                    f"Approved configuration change applied: {key}",
+                                    details={"change_id":req.get("change_id"),"risk_level":risk,
+                                             "status":req.get("status")})
+
+
+def apply_security_change_side_effects(change_id: str, actor: Dict[str,str], result: Dict[str,Any]) -> Dict[str,Any]:
+    sync_security_runtime_config()
+    if GOVERNANCE_ENABLED:
+        sync_governance_runtime_config()
+    if PRODUCTION_READINESS_ENABLED:
+        sync_production_readiness_config()
+    req=(result.get("change") or {})
+    side_effect={"type":"CONFIG_ONLY","applied":True}
+    if req.get("config_key","").startswith("research_rule."):
+        side_effect=activate_research_rule_from_applied_change(change_id,actor)
+    if PRODUCTION_READINESS_ENABLED and production_readiness_gate.state().get("certification_id"):
+        material_prefixes=("risk.","strategy.","deployment.","governance.","execution.","system_evaluation.")
+        if req.get("risk_level") in ("HIGH_RISK","CRITICAL") or str(req.get("config_key") or "").startswith(material_prefixes):
+            production_readiness_gate.invalidate_certification(
+                f"MATERIAL_CONFIG_CHANGE:{req.get('config_key')}",actor.get("actor","CHANGE_MANAGER"))
+            if OBSERVABILITY_ENABLED:
+                observability_manager.alert("CERTIFICATION_INVALIDATED","CRITICAL","Production Readiness Gate",
+                                            "CERTIFICATION_INVALIDATED",
+                                            "Material configuration change invalidated production certification",
+                                            details={"change_id":change_id,"config_key":req.get("config_key")})
+    security_alert_for_change(result)
+    return side_effect
+
+
+
+
+
+@app.get("/api/production-readiness/dashboard")
+async def production_readiness_dashboard_api(authorization: Optional[str]=Header(None)):
+    _security_actor(authorization,"read",allow_read=True)
+    return {"enabled":PRODUCTION_READINESS_ENABLED,
+            "dashboard":production_readiness_gate.dashboard(production_runtime_context()) if PRODUCTION_READINESS_ENABLED else None}
+
+
+@app.post("/api/production-readiness/release-candidate/freeze")
+async def production_release_candidate_freeze_api(authorization: Optional[str]=Header(None)):
+    actor=_security_actor(authorization,"candidate_review")
+    if not PRODUCTION_READINESS_ENABLED: raise HTTPException(409,"PRODUCTION_READINESS_DISABLED")
+    rc=freeze_current_release_candidate(actor["actor"])
+    security_manager.audit(actor,"PRODUCTION_RELEASE_CANDIDATE_FROZEN",f"release:{rc['release_id']}",None,
+                           {"release_version":VERSION_TAG,"code_fingerprint":rc["code_fingerprint"],"config_fingerprint":rc["config_fingerprint"]},
+                           "Step 15 release candidate freeze","APPLIED")
+    return {"release_candidate":rc,"important":"Any material code/config/dependency change requires a new release candidate."}
+
+
+@app.post("/api/production-readiness/account/verify")
+async def production_account_verify_api(payload: Dict[str,Any]=Body(...),authorization: Optional[str]=Header(None)):
+    actor=_security_actor(authorization,"reset_emergency_stop")
+    st=production_readiness_gate.state();rid=st.get("release_id")
+    if not rid: raise HTTPException(409,"NO_FROZEN_RELEASE_CANDIDATE")
+    if TRADING_ENVIRONMENT!="PRODUCTION" or PRIMARY_OANDA_ENV!="live" or not PRODUCTION_AUTHORIZED:
+        result=production_readiness_gate.verify_account(rid,TRADING_ENVIRONMENT,payload.get("expected") or {},
+            {"broker":"OANDA","account_id":ACCOUNT,"account_type":PRIMARY_OANDA_ENV,"currency":None,
+             "permissions_ok":False,"market_access_ok":False,"leverage_ok":False,"margin_settings_ok":False,
+             "balance_within_expected_range":False},actor["actor"])
+        raise HTTPException(409,{"reason":"LIVE_ACCOUNT_VERIFICATION_REQUIRES_EXPLICIT_PRODUCTION_ENVIRONMENT_AND_AUTHORIZATION","result":result})
+    try:
+        async with httpx.AsyncClient() as client:
+            account_data=await req(client,"GET","/v3/accounts/{account}")
+        acct=account_data.get("account") or {}
+        expected=payload.get("expected") or {}
+        balance=float(acct.get("balance") or 0)
+        observed={"broker":"OANDA","account_id":ACCOUNT,"account_type":"live","currency":acct.get("currency"),
+                  "permissions_ok":not bool(acct.get("tradingDisabled",False)),"market_access_ok":not bool(acct.get("tradingDisabled",False)),
+                  "leverage_ok": expected.get("margin_rate") is None or abs(float(acct.get("marginRate") or 0)-float(expected["margin_rate"]))<1e-12,
+                  "margin_settings_ok":acct.get("marginRate") is not None,
+                  "balance_within_expected_range":float(expected.get("min_balance",0))<=balance<=float(expected.get("max_balance",1e100)),
+                  "balance":balance,"margin_rate":acct.get("marginRate"),"hedging_enabled":acct.get("hedgingEnabled")}
+        result=production_readiness_gate.verify_account(rid,"PRODUCTION",expected,observed,actor["actor"])
+        if not result["passed"] and OBSERVABILITY_ENABLED:
+            observability_manager.alert("ACCOUNT_MISMATCH","CRITICAL","Production Readiness Gate","ACCOUNT_MISMATCH",
+                                        "Production account verification failed",details=result)
+        return {"observed":security_sanitize(observed),"result":result}
+    except HTTPException: raise
+    except Exception as e:
+        if OBSERVABILITY_ENABLED:
+            observability_manager.alert("ACCOUNT_VERIFICATION_FAILED","CRITICAL","Production Readiness Gate","ACCOUNT_MISMATCH",
+                                        "Production account verification could not complete",details={"error":str(e)})
+        raise HTTPException(503,"PRODUCTION_ACCOUNT_VERIFICATION_FAILED")
+
+
+@app.post("/api/production-readiness/final-paper/record")
+async def production_final_paper_record_api(payload: Dict[str,Any]=Body(...),authorization: Optional[str]=Header(None)):
+    actor=_security_actor(authorization,"candidate_review")
+    st=production_readiness_gate.state();rid=st.get("release_id")
+    if not rid: raise HTTPException(409,"NO_FROZEN_RELEASE_CANDIDATE")
+    release_check=production_readiness_gate.verify_release_unchanged(rid,production_release_files(),security_manager.current_config(),production_release_versions())
+    if not release_check.get("passed"): raise HTTPException(409,{"reason":"NEW_RELEASE_CANDIDATE_REQUIRED","release_check":release_check})
+    return production_readiness_gate.record_final_paper(rid,payload,actor["actor"])
+
+
+@app.post("/api/production-readiness/dry-run/record")
+async def production_dry_run_record_api(payload: Dict[str,Any]=Body(...),authorization: Optional[str]=Header(None)):
+    actor=_security_actor(authorization,"candidate_review")
+    st=production_readiness_gate.state();rid=st.get("release_id")
+    if not rid: raise HTTPException(409,"NO_FROZEN_RELEASE_CANDIDATE")
+    return production_readiness_gate.record_dry_run(rid,payload.get("pipeline") or {},payload.get("expected_order"),
+        blocked_before_send=bool(payload.get("blocked_before_send",True)),real_broker_request_count=int(payload.get("real_broker_request_count",0)),actor=actor["actor"])
+
+
+@app.post("/api/production-readiness/certify")
+async def production_certify_api(authorization: Optional[str]=Header(None)):
+    actor=_security_actor(authorization,"reset_emergency_stop")
+    st=production_readiness_gate.state();rid=st.get("release_id")
+    if not rid: raise HTTPException(409,"NO_FROZEN_RELEASE_CANDIDATE")
+    unchanged=production_readiness_gate.verify_release_unchanged(rid,production_release_files(),security_manager.current_config(),production_release_versions())
+    if not unchanged.get("passed"):
+        production_readiness_gate.invalidate_certification("NEW_RELEASE_CANDIDATE_REQUIRED:"+",".join(unchanged.get("mismatches") or []),actor["actor"],rid)
+        raise HTTPException(409,{"reason":"NEW_RELEASE_CANDIDATE_REQUIRED","release_check":unchanged})
+    context=production_certification_context()
+    result=production_readiness_gate.certify(context,rid,actor["actor"])
+    if OBSERVABILITY_ENABLED:
+        key="PRODUCTION_READINESS_LOST" if result.get("go_no_go")!="GO" else "PRODUCTION_READINESS_GO"
+        sev="CRITICAL" if result.get("go_no_go")=="NO_GO" and result.get("readiness_state")=="BLOCKED" else "INFO"
+        observability_manager.alert(key,sev,"Production Readiness Gate","PRODUCTION_CERTIFICATION",
+                                    f"Production certification result: {result.get('go_no_go')}",details={"blockers":result.get("blockers"),"release_id":rid})
+    return result
+
+
+@app.post("/api/production-readiness/activate-minimal-live")
+async def production_activate_minimal_live_api(reason: str,authorization: Optional[str]=Header(None)):
+    actor=_security_actor(authorization,"reset_emergency_stop")
+    if PRODUCTION_DRY_RUN_MODE: raise HTTPException(409,"PRODUCTION_DRY_RUN_MODE_MUST_BE_EXPLICITLY_DISABLED_AFTER_CERTIFICATION")
+    context=production_runtime_context()
+    result=production_readiness_gate.activate_minimal_live(context,actor["actor"],reason)
+    if not result.get("ok"): raise HTTPException(409,result)
+    security_manager.audit(actor,"MINIMAL_LIVE_ACTIVATED","production:stage","CERTIFICATION","MINIMAL_LIVE",reason,"APPLIED")
+    return result
+
+
+@app.post("/api/production-readiness/promote/{target_stage}")
+async def production_promote_api(target_stage: str,payload: Dict[str,Any]=Body(default={}),authorization: Optional[str]=Header(None)):
+    actor=_security_actor(authorization,"reset_emergency_stop")
+    if target_stage not in ("LIMITED_LIVE","CONTROLLED_LIVE","PRODUCTION_APPROVED"):
+        raise HTTPException(400,"INVALID_PRODUCTION_TARGET_STAGE")
+    context={**production_runtime_context(),**(payload or {})}
+    result=production_readiness_gate.promotion_gate(target_stage,context,actor["actor"])
+    if result.get("action")!="PROMOTE": raise HTTPException(409,result)
+    security_manager.audit(actor,"PRODUCTION_STAGE_PROMOTED","production:stage",None,target_stage,
+                           "evidence-based production promotion","APPLIED")
+    return result
+
+
+@app.post("/api/production-readiness/suspend")
+async def production_suspend_api(reason: str,authorization: Optional[str]=Header(None)):
+    actor=_security_actor(authorization,"manual_pause")
+    result=production_readiness_gate.suspend(reason,actor["actor"],automatic=False)
+    security_manager.audit(actor,"PRODUCTION_SUSPENDED","production:stage",None,"SUSPENDED",reason,"APPLIED")
+    if OBSERVABILITY_ENABLED:
+        observability_manager.alert("PRODUCTION_SUSPENDED","CRITICAL","Production Readiness Gate","PRODUCTION_SUSPENDED",reason,details=result)
+    return result
+
+
+@app.post("/api/production-readiness/resume")
+async def production_resume_api(payload: Dict[str,Any]=Body(default={}),authorization: Optional[str]=Header(None)):
+    actor=_security_actor(authorization,"reset_emergency_stop")
+    result=production_readiness_gate.resume_gate({**production_runtime_context(),**payload},actor["actor"])
+    if result.get("action")!="LIMITED_RESTART": raise HTTPException(409,result)
+    security_manager.audit(actor,"PRODUCTION_LIMITED_RESTART","production:stage","SUSPENDED","MINIMAL_LIVE",
+                           "incident resolved + reconciliation + health checks","APPLIED")
+    return result
+
+
+@app.post("/api/production-readiness/incidents")
+async def production_incident_open_api(payload: Dict[str,Any]=Body(...),authorization: Optional[str]=Header(None)):
+    actor=_security_actor(authorization,"manual_pause")
+    iid=production_readiness_gate.open_incident(str(payload.get("severity") or "P2"),str(payload.get("incident_type") or "UNKNOWN"),
+                                               str(payload.get("summary") or "production incident"))
+    security_manager.audit(actor,"PRODUCTION_INCIDENT_OPENED",f"incident:{iid}",None,payload,"production incident","APPLIED")
+    return {"incident_id":iid,"state":production_readiness_gate.state()}
+
+
+@app.post("/api/production-readiness/incidents/{incident_id}/resolve")
+async def production_incident_resolve_api(incident_id: str,payload: Dict[str,Any]=Body(...),authorization: Optional[str]=Header(None)):
+    actor=_security_actor(authorization,"reset_emergency_stop")
+    production_readiness_gate.resolve_incident(incident_id,str(payload.get("root_cause") or ""),payload.get("corrective_actions") or [],
+                                               payload.get("controls_worked") or [],payload.get("controls_failed") or [])
+    security_manager.audit(actor,"PRODUCTION_INCIDENT_RESOLVED",f"incident:{incident_id}","OPEN","RESOLVED",
+                           str(payload.get("root_cause") or "resolved"),"APPLIED")
+    return {"resolved":True,"incident_id":incident_id}
+
+
+@app.get("/api/governance/dashboard")
+async def governance_dashboard_api(authorization: Optional[str]=Header(None)):
+    _security_actor(authorization,"read",allow_read=True)
+    return {"enabled":GOVERNANCE_ENABLED,
+            "dashboard":governance_engine.dashboard() if GOVERNANCE_ENABLED else None}
+
+
+@app.get("/api/governance/decisions")
+async def governance_decisions_api(limit: int=200,authorization: Optional[str]=Header(None)):
+    _security_actor(authorization,"read",allow_read=True)
+    c=conn()
+    rows=[dict(x) for x in c.execute("SELECT * FROM governance_decisions ORDER BY timestamp DESC LIMIT ?",
+                                     (min(max(limit,1),2000),)).fetchall()]
+    c.close()
+    return {"decisions":rows}
+
+
+@app.get("/api/governance/effectiveness")
+async def governance_effectiveness_api(authorization: Optional[str]=Header(None)):
+    _security_actor(authorization,"read",allow_read=True)
+    return governance_engine.effectiveness()
+
+
+@app.post("/api/governance/evaluate")
+async def governance_evaluate_api(authorization: Optional[str]=Header(None)):
+    actor=_security_actor(authorization,"run_research")
+    result=run_governance_cycle("manual")
+    security_manager.audit(actor,"GOVERNANCE_EVALUATION_RUN","governance",None,
+                           {"decision_id":result.get("governance_decision_id"),
+                            "meta_risk":result.get("meta_risk_state"),
+                            "decision":result.get("decision")},
+                           "manual governance evaluation","COMPLETED" if result.get("governance_decision_id") else "FAILED")
+    return result
+
+
+@app.post("/api/governance/check")
+async def governance_check_api(payload: Dict[str,Any]=Body(...),authorization: Optional[str]=Header(None)):
+    _security_actor(authorization,"read",allow_read=True)
+    return governance_engine.check_action(
+        str(payload.get("action_type") or "CHANGE_APPLY"),
+        target=str(payload.get("target") or ""),
+        context=payload.get("context") or {}
+    )
+
+
+@app.post("/api/governance/lock")
+async def governance_lock_api(active: bool,reason: str,authorization: Optional[str]=Header(None)):
+    actor=_security_actor(authorization,"activate_kill_switch" if active else "reset_emergency_stop")
+    result=governance_engine.set_lock(active,reason,actor["actor"])
+    security_manager.audit(actor,"GOVERNANCE_LOCK_ACTIVATED" if active else "GOVERNANCE_LOCK_CLEAR_REQUEST",
+                           "governance:lock",not active,active,reason,"APPLIED")
+    if OBSERVABILITY_ENABLED:
+        if active:
+            observability_manager.alert("GOVERNANCE_LOCK_ACTIVATED","CRITICAL","Governance Engine",
+                                        "GOVERNANCE_LOCK_ACTIVATED",
+                                        "Persistent Governance Lock activated",
+                                        details={"actor":actor["actor"],"reason":reason})
+        else:
+            observability_manager.alert("GOVERNANCE_LOCK_CLEAR_REVIEW_REQUIRED","HIGH","Governance Engine",
+                                        "GOVERNANCE_LOCK_CLEAR_REVIEW_REQUIRED",
+                                        "Governance lock cleared but adaptation remains frozen until explicit staged review",
+                                        details={"actor":actor["actor"],"reason":reason})
+    return result
+
+
+@app.post("/api/governance/review")
+async def governance_review_api(reason: str,authorization: Optional[str]=Header(None)):
+    actor=_security_actor(authorization,"reset_emergency_stop")
+    result=governance_engine.review_transition(actor["actor"],reason)
+    security_manager.audit(actor,"GOVERNANCE_ADAPTATION_REVIEW","governance:adaptation_state",
+                           result.get("from_state"),result.get("to_state"),reason,result.get("result"))
+    return result
+
+
+@app.get("/api/system-evaluation/latest")
+async def system_evaluation_latest_api(authorization: Optional[str]=Header(None)):
+    _security_actor(authorization,"read",allow_read=True)
+    latest=system_evaluation_engine.latest() if SYSTEM_EVALUATION_ENABLED else None
+    return {"enabled":SYSTEM_EVALUATION_ENABLED,"evaluation":latest,"observation_only":True}
+
+
+@app.get("/api/system-evaluation/history")
+async def system_evaluation_history_api(limit: int=100,authorization: Optional[str]=Header(None)):
+    _security_actor(authorization,"read",allow_read=True)
+    return {"enabled":SYSTEM_EVALUATION_ENABLED,
+            "history":system_evaluation_engine.history(limit) if SYSTEM_EVALUATION_ENABLED else [],
+            "historical_records_immutable":True}
+
+
+@app.get("/api/system-evaluation/detail/{evaluation_id}")
+async def system_evaluation_detail_api(evaluation_id: str,authorization: Optional[str]=Header(None)):
+    _security_actor(authorization,"read",allow_read=True)
+    c=conn();row=c.execute("SELECT * FROM system_evaluations WHERE evaluation_id=?",(evaluation_id,)).fetchone()
+    recs=[dict(x) for x in c.execute("SELECT * FROM system_evaluation_recommendations WHERE evaluation_id=? ORDER BY id",(evaluation_id,)).fetchall()]
+    attrs=[dict(x) for x in c.execute("SELECT * FROM system_evaluation_attribution WHERE evaluation_id=? ORDER BY dimension,key",(evaluation_id,)).fetchall()]
+    c.close()
+    if not row:raise HTTPException(404,"SYSTEM_EVALUATION_NOT_FOUND")
+    out=dict(row)
+    for key in list(out):
+        if key.endswith("_json"):
+            try:out[key[:-5]]=json.loads(out[key])
+            except Exception:pass
+    out["recommendation_records"]=recs;out["attribution_records"]=attrs
+    return out
+
+
+@app.post("/api/system-evaluation/run")
+async def system_evaluation_run_api(payload: Dict[str,Any]=Body(default={}),
+                                    authorization: Optional[str]=Header(None)):
+    actor=_security_actor(authorization,"run_research")
+    result=run_system_evaluation(payload.get("as_of"),source="manual")
+    security_manager.audit(actor,"SYSTEM_EVALUATION_RUN","system_evaluation",None,
+                           {"evaluation_id":result.get("evaluation_id"),
+                            "status":result.get("system_status"),
+                            "score":result.get("system_score")},
+                           "manual continuous-system evaluation","COMPLETED" if result.get("evaluation_id") else "FAILED")
+    return result
+
+
+@app.get("/api/security/dashboard")
+async def security_dashboard_api(authorization: Optional[str]=Header(None)):
+    _security_actor(authorization,"read",allow_read=True)
+    out=security_manager.dashboard()
+    c=conn()
+    out["production_strategy_versions"]=[
+        {"strategy":x["setup_variant"],"version":f"{x['setup_variant']}@{VERSION_TAG}"}
+        for x in c.execute("SELECT setup_variant FROM strategy_health ORDER BY setup_variant").fetchall()
+    ]
+    out["deployment_history"]=[dict(x) for x in c.execute(
+        "SELECT candidate_id,strategy_version,event_type,previous_stage,new_stage,capital_allocation,reason,approval_source,ts "
+        "FROM deployment_events ORDER BY id DESC LIMIT 100").fetchall()]
+    c.close()
+    out["risk_config_version"]=f"config_v{security_manager.current_version()}"
+    out["director_version"]=f"director@{VERSION_TAG}:config_v{security_manager.current_version()}"
+    out["regime_model_version"]=f"regime@{VERSION_TAG}:config_v{security_manager.current_version()}"
+    return out
+
+
+@app.get("/api/security/config")
+async def security_config_api(authorization: Optional[str]=Header(None),limit: int=100):
+    _security_actor(authorization,"read",allow_read=True)
+    return {"environment":TRADING_ENVIRONMENT,
+            "current_version":security_manager.current_version(),
+            "config_hash":security_manager.current_hash(),
+            "config":security_manager.current_config(),
+            "versions":security_manager.versions(limit),
+            "runtime_integrity":security_manager.last_integrity}
+
+
+@app.get("/api/security/audit")
+async def security_audit_api(authorization: Optional[str]=Header(None),limit: int=200):
+    _security_actor(authorization,"read",allow_read=True)
+    c=conn()
+    rows=[dict(x) for x in c.execute("SELECT * FROM security_audit_log ORDER BY seq DESC LIMIT ?",
+                                     (min(max(limit,1),2000),)).fetchall()]
+    c.close()
+    return {"integrity":security_manager.verify_audit_chain(),"events":rows}
+
+
+@app.get("/api/security/change-requests")
+async def security_change_requests_api(status: Optional[str]=None,
+                                       authorization: Optional[str]=Header(None),
+                                       limit: int=200):
+    _security_actor(authorization,"read",allow_read=True)
+    c=conn();params=[]
+    q="SELECT * FROM security_change_requests"
+    if status:
+        q+=" WHERE status=?";params.append(status.upper())
+    q+=" ORDER BY requested_ts DESC LIMIT ?";params.append(min(max(limit,1),1000))
+    rows=[dict(x) for x in c.execute(q,tuple(params)).fetchall()]
+    c.close()
+    return {"changes":rows}
+
+
+@app.post("/api/security/change-requests")
+async def security_create_change_api(payload: Dict[str,Any]=Body(...),
+                                     authorization: Optional[str]=Header(None)):
+    actor=_security_actor(authorization)
+    try:
+        result=security_manager.create_change_request(
+            actor,component=str(payload.get("component") or ""),
+            key=str(payload.get("config_key") or ""),
+            proposed=payload.get("proposed_value"),
+            reason=str(payload.get("reason") or "no reason supplied"),
+            expected_impact=str(payload.get("expected_impact") or ""),
+            rollback_plan=str(payload.get("rollback_plan") or "restore previous configuration snapshot"),
+            correlation_id=payload.get("correlation_id")
+        )
+    except PermissionError as e:
+        raise HTTPException(403,str(e))
+    if (result.get("change") or {}).get("status")=="REJECTED" and OBSERVABILITY_ENABLED:
+        observability_manager.alert(f"CHANGE_REJECTED:{(result.get('change') or {}).get('change_id')}",
+                                    "HIGH","Security Manager","CRITICAL_CONFIG_CHANGE_REJECTED",
+                                    "Configuration change request failed validation",
+                                    details=security_sanitize(result))
+    return result
+
+
+@app.post("/api/security/change-requests/{change_id}/review")
+async def security_review_change_api(change_id: str,payload: Dict[str,Any]=Body(...),
+                                     authorization: Optional[str]=Header(None)):
+    actor=_security_actor(authorization)
+    current_bundle=security_manager.change_request(change_id)
+    current_req=current_bundle.get("change") or {}
+    if str(payload.get("decision") or "").upper()=="APPROVE" and str(current_req.get("component") or "").startswith("strategy_candidate."):
+        candidate_id=str(current_req["component"]).split(".",1)[1]
+        c=conn();reg=c.execute("SELECT current_state FROM candidate_registry WHERE candidate_id=?",(candidate_id,)).fetchone();c.close()
+        if not reg or reg["current_state"]!="READY_FOR_REVIEW":
+            security_manager.audit(actor,"CHANGE_APPROVAL_DENIED",f"candidate:{candidate_id}",None,None,
+                                   "Validation Pipeline has not reached READY_FOR_REVIEW","DENIED")
+            raise HTTPException(409,"CANDIDATE_NOT_READY_FOR_REVIEW")
+    try:
+        result=security_manager.review_change(actor,change_id,
+                                              str(payload.get("decision") or ""),
+                                              str(payload.get("reason") or ""))
+    except PermissionError as e:
+        raise HTTPException(403,str(e))
+    except (ValueError,KeyError) as e:
+        raise HTTPException(409,str(e))
+    return result
+
+
+@app.post("/api/security/change-requests/{change_id}/apply")
+async def security_apply_change_api(change_id: str,
+                                    authorization: Optional[str]=Header(None)):
+    actor=_security_actor(authorization)
+    bundle=security_manager.change_request(change_id)
+    req=bundle.get("change") or {}
+    governance=None
+    if GOVERNANCE_ENABLED:
+        try:
+            governance=governance_engine.check_action(
+                "CHANGE_APPLY",target=f"{req.get('component')}:{req.get('config_key')}",
+                context={"trigger":"CHANGE_REQUEST_APPLY","component":req.get("config_key"),
+                         "current_value":json.loads(req.get("current_value_json") or "null"),
+                         "proposed_value":json.loads(req.get("proposed_value_json") or "null"),
+                         "risk_level":req.get("risk_level"),"requester":req.get("requested_by"),
+                         "approver":actor.get("actor"),"affected_modules":["CHANGE_MANAGEMENT"]})
+            if governance.get("enforced"):
+                security_manager.audit(actor,"GOVERNANCE_CHANGE_BLOCK",f"change:{change_id}",None,None,
+                                       governance.get("reason"),"BLOCKED")
+                raise HTTPException(409,f"GOVERNANCE_BLOCK:{governance.get('reason')}")
+        except HTTPException:
+            raise
+    try:
+        result=security_manager.apply_change(actor,change_id)
+    except PermissionError as e:
+        raise HTTPException(403,str(e))
+    except (ValueError,KeyError) as e:
+        raise HTTPException(409,str(e))
+    side_effect=apply_security_change_side_effects(change_id,actor,result)
+    return {**result,"side_effect":side_effect,"governance":governance}
+
+
+@app.post("/api/security/config/rollback/{target_version}")
+async def security_rollback_config_api(target_version: int,payload: Dict[str,Any]=Body(default={}),
+                                       authorization: Optional[str]=Header(None)):
+    actor=_security_actor(authorization)
+    try:
+        result=security_manager.rollback_config(actor,target_version,
+                                               str(payload.get("reason") or "manual configuration rollback"),
+                                               payload.get("correlation_id"))
+    except PermissionError as e:
+        raise HTTPException(403,str(e))
+    except (ValueError,KeyError) as e:
+        raise HTTPException(409,str(e))
+    sync_security_runtime_config()
+    if GOVERNANCE_ENABLED:
+        sync_governance_runtime_config()
+    if OBSERVABILITY_ENABLED:
+        observability_manager.alert(f"CONFIG_ROLLBACK:{result.get('new_config_version')}",
+                                    "HIGH","Security Manager","CONFIG_ROLLBACK",
+                                    "Configuration rollback applied; trading state was not rewound",
+                                    details=result)
+    return result
+
+
+@app.post("/api/security/integrity/recheck")
+async def security_integrity_recheck_api(authorization: Optional[str]=Header(None)):
+    actor=_security_actor(authorization,"manual_reconcile",allow_read=False)
+    result=security_manager.runtime_integrity_check()
+    security_manager.audit(actor,"RUNTIME_INTEGRITY_RECHECK","runtime",None,result,
+                           "manual integrity recheck","VERIFIED" if result.get("verified") else "UNVERIFIED")
+    if not result.get("verified") and RECOVERY_MANAGER_ENABLED:
+        recovery_manager.enter_safe_mode("UNVERIFIED_RUNTIME_STATE",severity="CRITICAL")
+    return result
+
+
+@app.get("/api/recovery/status")
+async def recovery_status_api():
+    return {"enabled":RECOVERY_MANAGER_ENABLED,
+            "state":recovery_manager.state() if RECOVERY_MANAGER_ENABLED else None,
+            "metrics":recovery_manager.metrics() if RECOVERY_MANAGER_ENABLED else None,
+            "circuit_breaker":recovery_manager.circuit("BROKER") if RECOVERY_MANAGER_ENABLED else None}
+
+@app.get("/api/recovery/orders")
+async def recovery_orders_api(limit: int=200):
+    return {"orders":recovery_manager.orders(limit)}
+
+@app.get("/api/recovery/incidents")
+async def recovery_incidents_api(limit: int=200):
+    return {"incidents":recovery_manager.incidents(limit)}
+
+@app.get("/api/recovery/timeline")
+async def recovery_timeline_api(correlation_id: Optional[str]=None,execution_intent_id: Optional[str]=None,limit: int=500):
+    return {"events":recovery_manager.timeline(correlation_id,execution_intent_id,limit)}
+
+@app.post("/api/recovery/reconcile")
+async def recovery_reconcile_api(authorization: Optional[str]=Header(None)):
+    actor=_security_actor(authorization,"manual_reconcile")
+    security_manager.audit(actor,"MANUAL_RECONCILIATION","recovery:primary",None,"STARTED",
+                           "manual recovery reconciliation","STARTED")
+    async with httpx.AsyncClient() as client:
+        result=await recovery_reconcile_primary(client,"manual")
+        if result.get("connected"):
+            rec=result.get("reconciliation") or {}
+            try:
+                ctx=await build_broker_risk_context(client)
+                risk_ok=not bool(ctx.get("system_abnormal")) and ctx.get("nav") is not None
+                recovery_manager.verify_risk(risk_ok,ctx)
+            except Exception as e:
+                risk_ok=False;recovery_manager.verify_risk(False,{"error":str(e)})
+            if rec.get("status") in ("MATCHED","MINOR_MISMATCH") and risk_ok and not recovery_manager.state().get("emergency_stop"):
+                recovery_manager.exit_safe_mode("manual reconciliation and risk verification passed")
+                state["system_ready"]=True
+        return {"result":result,"state":recovery_manager.state()}
+
+@app.post("/api/recovery/emergency-stop")
+async def recovery_emergency_stop_api(active: bool,reason: str,authorization: Optional[str]=Header(None)):
+    if active:
+        actor=_security_actor(authorization,"activate_kill_switch")
+        out=recovery_manager.set_emergency_stop(True,reason)
+        deployment_manager.set_kill("SYSTEM",True,reason,actor["actor"])
+        state["system_ready"]=False
+        security_manager.audit(actor,"EMERGENCY_STOP","recovery:primary",False,True,reason,"APPLIED")
+        return out
+    actor=_security_actor(authorization,"reset_emergency_stop")
+    rst=recovery_manager.state()
+    health_ok=bool(state.get("system_ready") or (rst.get("state") in ("READY","NORMAL") and not rst.get("safe_mode")))
+    reconciliation_ok=rst.get("last_reconciliation_status") in ("MATCHED","MINOR_MISMATCH")
+    authz=security_manager.authorize_emergency_reset(actor,health_ok,reconciliation_ok,reason)
+    if not authz.get("authorized"):
+        raise HTTPException(409,"EMERGENCY_STOP_RESET_REQUIRES_HEALTHY_RECONCILIATION")
+    out=recovery_manager.set_emergency_stop(False,reason)
+    deployment_manager.set_kill("SYSTEM",False,reason,actor["actor"])
+    if OBSERVABILITY_ENABLED:
+        observability_manager.alert("EMERGENCY_STOP_RESET","HIGH","Security Manager","EMERGENCY_STOP_RESET",
+                                    "Emergency stop explicitly reset after authorization and health checks",
+                                    details={"actor":actor["actor"],"reason":reason})
+    return out
+
+
+@app.get("/api/observability/dashboard")
+async def observability_dashboard_api():
+    return observability_dashboard_snapshot()
+
+@app.get("/api/observability/health/modules")
+async def observability_modules_api():
+    return {"system":observability_global_health_snapshot(),"modules":observability_manager.module_rows()}
+
+@app.get("/api/observability/alerts")
+async def observability_alerts_api(status: Optional[str]=None,severity: Optional[str]=None,limit: int=200):
+    c=conn();where=[];params=[]
+    if status:where.append("status=?");params.append(status.upper())
+    if severity:where.append("severity=?");params.append(severity.upper())
+    sql="SELECT * FROM observability_alerts"+(" WHERE "+" AND ".join(where) if where else "")+" ORDER BY last_seen DESC LIMIT ?"
+    params.append(min(max(limit,1),1000));rows=[dict(x) for x in c.execute(sql,tuple(params)).fetchall()]
+    history=[dict(x) for x in c.execute("SELECT * FROM observability_alert_history ORDER BY id DESC LIMIT ?",(min(max(limit,1),1000),)).fetchall()]
+    c.close();return {"alerts":rows,"history":history}
+
+@app.get("/api/observability/metrics")
+async def observability_metrics_api(limit: int=300):
+    c=conn();rows=[dict(x) for x in c.execute("SELECT * FROM observability_metrics ORDER BY id DESC LIMIT ?",(min(max(limit,1),2000),)).fetchall()]
+    capital=[dict(x) for x in c.execute("SELECT * FROM observability_capital_history ORDER BY id DESC LIMIT ?",(min(max(limit,1),2000),)).fetchall()]
+    c.close();return {"system_metrics":rows,"capital":capital}
+
+@app.get("/api/observability/logs")
+async def observability_logs_api(module: Optional[str]=None,level: Optional[str]=None,event_type: Optional[str]=None,correlation_id: Optional[str]=None,limit: int=300):
+    c=conn();w=[];p=[]
+    for col,val in (("module",module),("level",level),("event_type",event_type),("correlation_id",correlation_id)):
+        if val:w.append(f"{col}=?");p.append(val.upper() if col=="level" else val)
+    q="SELECT * FROM observability_structured_logs"+(" WHERE "+" AND ".join(w) if w else "")+" ORDER BY id DESC LIMIT ?"
+    p.append(min(max(limit,1),2000));rows=[dict(x) for x in c.execute(q,tuple(p)).fetchall()];c.close();return rows
+
+@app.get("/api/observability/trace/{identifier}")
+async def observability_trace_api(identifier: str):
+    result=observability_trace_bundle(identifier)
+    if result.get("error"):raise HTTPException(404,result["error"])
+    return result
+
+@app.get("/api/observability/startup-health")
+async def observability_startup_health_api():
+    c=conn();rows=[dict(x) for x in c.execute("SELECT * FROM observability_startup_checks ORDER BY id DESC LIMIT 20").fetchall()];c.close()
+    return {"current":state.get("startup_health"),"history":rows}
+
+@app.post("/api/observability/startup-health/recheck")
+async def observability_startup_health_recheck_api(authorization: Optional[str]=Header(None)):
+    actor=_security_actor(authorization,"manual_reconcile")
+    result=await observability_startup_health_check()
+    security_manager.audit(actor,"STARTUP_HEALTH_RECHECK","system:startup_health",None,result,
+                           "manual startup health recheck",result.get("status","UNKNOWN"))
+    return result
+
+@app.get("/api/observability/capital")
+async def observability_capital_api(limit: int=100):
+    c=conn();rows=[dict(x) for x in c.execute("SELECT * FROM observability_capital_history ORDER BY id DESC LIMIT ?",(min(max(limit,1),1000),)).fetchall()];c.close()
+    return {"latest":rows[0] if rows else None,"history":rows}
+
+@app.get("/observability",response_class=HTMLResponse)
+async def observability_html_dashboard():
+    return HTMLResponse("""<!doctype html>
+<html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>
+<title>Market Alert Observability</title>
+<style>body{font-family:system-ui;background:#0f1115;color:#e8e8e8;margin:0;padding:18px}h1{margin-top:0}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px}.card{background:#181c22;border:1px solid #2b313b;border-radius:10px;padding:12px}.ok{color:#55d98b}.warn{color:#f2c94c}.bad{color:#ff6b6b}pre{white-space:pre-wrap;overflow:auto;max-height:480px;font-size:12px}.muted{color:#9aa4b2}</style></head>
+<body><h1>Market Alert V3.17 — Observability</h1><div id='headline' class='card'>Loading…</div><div class='grid'>
+<div class='card'><h2>Modules</h2><pre id='modules'></pre></div><div class='card'><h2>Risk & Capital</h2><pre id='risk'></pre></div>
+<div class='card'><h2>Market & Strategies</h2><pre id='market'></pre></div><div class='card'><h2>Candidates</h2><pre id='candidates'></pre></div>
+<div class='card'><h2>Alerts</h2><pre id='alerts'></pre></div><div class='card'><h2>System Metrics</h2><pre id='metrics'></pre></div></div>
+<p class='muted'>Read-only dashboard. It does not promote strategies or change risk rules.</p>
+<script>function j(x){return JSON.stringify(x,null,2)}async function refresh(){try{const r=await fetch('/api/observability/dashboard');const d=await r.json();const h=d.system.status;const cls=(h==='HEALTHY'?'ok':(h==='WARNING'||h==='DEGRADED'||h==='TRADING_PAUSED'?'warn':'bad'));document.getElementById('headline').innerHTML='<b class='+cls+'>'+h+'</b> | SYSTEM_READY='+d.system.system_ready+' | Trading='+d.system.trading_enabled+' | Critical alerts='+d.system.active_critical_alerts;document.getElementById('modules').textContent=j(d.modules);document.getElementById('risk').textContent=j({capital:d.capital,risk:d.risk_engine,positions:d.positions});document.getElementById('market').textContent=j({market:d.market,strategies:d.strategies,degradation:d.strategy_degradation,director:d.ai_strategy_director});document.getElementById('candidates').textContent=j(d.candidates);document.getElementById('alerts').textContent=j(d.alerts);document.getElementById('metrics').textContent=j(d.system_metrics)}catch(e){document.getElementById('headline').textContent='Dashboard error: '+e}}refresh();setInterval(refresh,5000)</script></body></html>""")
 
 
 @app.get("/api/market-regime")
@@ -6431,7 +9034,8 @@ async def research_filters():
 
 
 @app.post("/api/research/external/observation")
-async def research_external_observation(payload: Dict[str, Any]):
+async def research_external_observation(payload: Dict[str, Any],authorization: Optional[str]=Header(None)):
+    actor=_security_actor(authorization,"run_research")
     instrument=str(payload.get("instrument") or "EUR_USD").upper()
     source_type=str(payload.get("source_type") or "").upper()
     source_key=str(payload.get("source_key") or "").upper()
@@ -6440,7 +9044,11 @@ async def research_external_observation(payload: Dict[str, Any]):
     record_external_observation(instrument,source_type,source_key,payload.get("value_num"),
                                 payload.get("value_text"),payload.get("metadata") or {},
                                 payload.get("candle_ts"))
-    return {"ok":True,"research_only":True,"automatic_live_activation":False}
+    result={"ok":True,"research_only":True,"automatic_live_activation":False}
+    security_manager.audit(actor,"RESEARCH_OBSERVATION_ADDED","research.external",None,
+                           {"instrument":instrument,"source_type":source_type,"source_key":source_key},
+                           "manual external research observation","APPLIED")
+    return result
 
 
 @app.get("/api/research/external/hypotheses")
@@ -6489,37 +9097,160 @@ async def deployment_candidate_api(candidate_id: str):
             "evaluation":deployment_manager.evaluate(candidate_id,auto=False) if dep else None}
 
 @app.post("/api/deployment/{candidate_id}/approve-canary")
-async def deployment_approve_api(candidate_id: str, approval_source: str, approval_note: str=""):
-    return deployment_manager.approve(candidate_id,approval_source,approval_note)
+async def deployment_approve_api(candidate_id: str, approval_source: str="", approval_note: str="",
+                                 authorization: Optional[str]=Header(None)):
+    actor=_security_actor(authorization,"candidate_review")
+    c=conn()
+    authorized_change=c.execute("""SELECT change_id FROM security_change_requests
+                                   WHERE component=? AND status='APPLIED'
+                                   ORDER BY applied_ts DESC LIMIT 1""",
+                                (f"strategy_candidate.{candidate_id}",)).fetchone()
+    c.close()
+    if not authorized_change:
+        security_manager.audit(actor,"PRODUCTION_DEPLOYMENT_APPROVAL_DENIED",f"candidate:{candidate_id}",
+                               None,None,"candidate change request has not been approved/applied","DENIED")
+        raise HTTPException(409,"CANDIDATE_CHANGE_REQUEST_NOT_APPROVED")
+    governance=None
+    if GOVERNANCE_ENABLED:
+        c=conn();reg=c.execute("SELECT current_state FROM candidate_registry WHERE candidate_id=?",(candidate_id,)).fetchone();c.close()
+        governance=governance_engine.check_action(
+            "DEPLOYMENT_APPROVAL",target=candidate_id,
+            context={"trigger":"CANARY_APPROVAL","magnitude":"MAJOR",
+                     "validation_state":reg["current_state"] if reg else None,
+                     "affected_modules":["DEPLOYMENT_MANAGER","VALIDATION_PIPELINE","SYSTEM_EVALUATION_ENGINE"]})
+        if governance.get("enforced"):
+            security_manager.audit(actor,"GOVERNANCE_DEPLOYMENT_BLOCK",f"candidate:{candidate_id}",None,None,
+                                   governance.get("reason"),"BLOCKED")
+            raise HTTPException(409,f"GOVERNANCE_BLOCK:{governance.get('reason')}")
+    result=deployment_manager.approve(candidate_id,actor["actor"],approval_note)
+    if result.get("ok") and governance:
+        governance_engine.link_deployment_authorization(candidate_id,governance)
+    security_manager.audit(actor,"PRODUCTION_DEPLOYMENT_APPROVED",f"candidate:{candidate_id}",
+                           "READY_FOR_REVIEW",result.get("stage"),approval_note or "approved for canary",
+                           "APPROVED" if result.get("ok") else "DENIED")
+    if result.get("ok") and OBSERVABILITY_ENABLED:
+        observability_manager.alert(f"PRODUCTION_DEPLOYMENT_APPROVED:{candidate_id}","HIGH",
+                                    "Security Manager","PRODUCTION_DEPLOYMENT_APPROVED",
+                                    "Candidate approved for controlled Canary deployment",
+                                    details={"candidate_id":candidate_id,"actor":actor["actor"]})
+    return {**result,"governance":governance}
 
 @app.post("/api/deployment/{candidate_id}/start-canary")
-async def deployment_start_api(candidate_id: str, approval_source: str):
-    return await deployment_manager.start(candidate_id,approval_source)
+async def deployment_start_api(candidate_id: str, approval_source: str="", authorization: Optional[str]=Header(None)):
+    actor=_security_actor(authorization,"candidate_review")
+    governance=None
+    if GOVERNANCE_ENABLED:
+        dep=next((x for x in deployment_manager.dashboard().get("deployments",[]) if x.get("candidate_id")==candidate_id),{})
+        governance=governance_engine.check_action(
+            "DEPLOYMENT_PROMOTION",target=candidate_id,
+            context={"trigger":"CANARY_START","magnitude":"MAJOR",
+                     "validation_state":dep.get("registry_state") or dep.get("current_stage"),
+                     "affected_modules":["DEPLOYMENT_MANAGER","RISK_ENGINE"]})
+        if governance.get("enforced"):
+            security_manager.audit(actor,"GOVERNANCE_DEPLOYMENT_BLOCK",f"candidate:{candidate_id}",None,None,
+                                   governance.get("reason"),"BLOCKED")
+            raise HTTPException(409,f"GOVERNANCE_BLOCK:{governance.get('reason')}")
+    result=await deployment_manager.start(candidate_id,actor["actor"])
+    if result.get("ok") and governance:
+        governance_engine.link_deployment_authorization(candidate_id,governance)
+    if result.get("ok") and CANARY_ACCOUNT and CANARY_TOKEN:
+        canary_recovery_manager.ensure_schema()
+        canary_recovery_manager.set_state("RECOVERING","canary start health/reconciliation",safe_mode=True,new_trades_allowed=False)
+        async with httpx.AsyncClient() as client:
+            rr=await canary_recovery_manager.reconnect_and_reconcile(client,max_attempts=3)
+        if rr.get("connected") and (rr.get("reconciliation") or {}).get("status") in ("MATCHED","MINOR_MISMATCH"):
+            canary_recovery_manager.verify_risk(True,{"source":"Deployment Manager canary health"})
+            canary_recovery_manager.exit_safe_mode("canary broker state reconciled")
+        else:
+            deployment_manager.pause(candidate_id,"Canary Recovery Manager did not reach reconciled state","RECOVERY_MANAGER")
+            result={**result,"ok":False,"recovery":rr,"status":"CANARY_RECOVERY_FAILED"}
+    security_manager.audit(actor,"CANARY_START",f"candidate:{candidate_id}",None,result.get("stage"),
+                           "controlled canary start", "APPLIED" if result.get("ok") else "FAILED")
+    return {**result,"governance":governance}
 
 @app.post("/api/deployment/{candidate_id}/resume")
-async def deployment_resume_api(candidate_id: str, approval_source: str):
-    return await deployment_manager.resume(candidate_id,approval_source)
+async def deployment_resume_api(candidate_id: str, approval_source: str="", authorization: Optional[str]=Header(None)):
+    actor=_security_actor(authorization,"candidate_review")
+    governance=None
+    if GOVERNANCE_ENABLED:
+        governance=governance_engine.check_action(
+            "DEPLOYMENT_PROMOTION",target=candidate_id,
+            context={"trigger":"CANARY_RESUME","magnitude":"MAJOR",
+                     "validation_state":"CANARY_LIVE",
+                     "affected_modules":["DEPLOYMENT_MANAGER","RECOVERY_MANAGER"]})
+        if governance.get("enforced"):
+            raise HTTPException(409,f"GOVERNANCE_BLOCK:{governance.get('reason')}")
+    result=await deployment_manager.resume(candidate_id,actor["actor"])
+    if result.get("ok") and governance:
+        governance_engine.link_deployment_authorization(candidate_id,governance)
+    if result.get("ok") and CANARY_ACCOUNT and CANARY_TOKEN:
+        canary_recovery_manager.ensure_schema()
+        canary_recovery_manager.set_state("RECOVERING","canary resume reconciliation",safe_mode=True,new_trades_allowed=False)
+        async with httpx.AsyncClient() as client:
+            rr=await canary_recovery_manager.reconnect_and_reconcile(client,max_attempts=3)
+        if rr.get("connected") and (rr.get("reconciliation") or {}).get("status") in ("MATCHED","MINOR_MISMATCH"):
+            canary_recovery_manager.verify_risk(True,{"source":"Canary restart recovery"})
+            canary_recovery_manager.exit_safe_mode("canary resume reconciled")
+        else:
+            deployment_manager.pause(candidate_id,"Canary recovery after restart failed","RECOVERY_MANAGER")
+            result={**result,"ok":False,"recovery":rr,"status":"CANARY_RECOVERY_FAILED"}
+    security_manager.audit(actor,"MANUAL_RESUME",f"candidate:{candidate_id}",None,result.get("stage"),
+                           "manual canary resume","APPLIED" if result.get("ok") else "FAILED")
+    return {**result,"governance":governance}
 
 @app.post("/api/deployment/{candidate_id}/promote")
-async def deployment_promote_api(candidate_id: str, approval_source: str):
-    return deployment_manager.promote(candidate_id,approval_source,risk_ok=True)
+async def deployment_promote_api(candidate_id: str, approval_source: str="", authorization: Optional[str]=Header(None)):
+    actor=_security_actor(authorization,"candidate_review")
+    governance=None
+    if GOVERNANCE_ENABLED:
+        dep=next((x for x in deployment_manager.dashboard().get("deployments",[]) if x.get("candidate_id")==candidate_id),{})
+        governance=governance_engine.check_action(
+            "DEPLOYMENT_PROMOTION",target=candidate_id,
+            context={"trigger":"PROMOTION_GATE","magnitude":"MAJOR",
+                     "validation_state":dep.get("current_stage"),
+                     "affected_modules":["DEPLOYMENT_MANAGER","RISK_ENGINE","AI_STRATEGY_DIRECTOR","SYSTEM_EVALUATION_ENGINE"]})
+        if governance.get("enforced"):
+            security_manager.audit(actor,"GOVERNANCE_DEPLOYMENT_BLOCK",f"candidate:{candidate_id}",None,None,
+                                   governance.get("reason"),"BLOCKED")
+            raise HTTPException(409,f"GOVERNANCE_BLOCK:{governance.get('reason')}")
+    result=deployment_manager.promote(candidate_id,actor["actor"],risk_ok=True)
+    if result.get("action")=="PROMOTE" and governance:
+        governance_engine.link_deployment_authorization(candidate_id,governance)
+    security_manager.audit(actor,"CANDIDATE_PROMOTION",f"candidate:{candidate_id}",None,result.get("stage"),
+                           "promotion gate request",result.get("action","UNKNOWN"))
+    return {**result,"governance":governance}
 
 @app.post("/api/deployment/{candidate_id}/pause")
-async def deployment_pause_api(candidate_id: str, reason: str, approval_source: str):
-    return deployment_manager.pause(candidate_id,reason,approval_source)
+async def deployment_pause_api(candidate_id: str, reason: str, approval_source: str="", authorization: Optional[str]=Header(None)):
+    actor=_security_actor(authorization,"manual_pause")
+    result=deployment_manager.pause(candidate_id,reason,actor["actor"])
+    security_manager.audit(actor,"MANUAL_PAUSE",f"candidate:{candidate_id}",None,"CANARY_PAUSED",reason,
+                           "APPLIED" if result.get("ok") else "FAILED")
+    return result
 
 @app.post("/api/deployment/{candidate_id}/rollback")
-async def deployment_rollback_api(candidate_id: str, reason: str, approval_source: str):
-    return deployment_manager.rollback(candidate_id,reason,approval_source)
+async def deployment_rollback_api(candidate_id: str, reason: str, approval_source: str="", authorization: Optional[str]=Header(None)):
+    actor=_security_actor(authorization,"candidate_review")
+    result=deployment_manager.rollback(candidate_id,reason,actor["actor"])
+    security_manager.audit(actor,"MANUAL_ROLLBACK",f"candidate:{candidate_id}",None,"ROLLED_BACK",reason,
+                           "APPLIED" if result.get("ok") else "FAILED")
+    return result
 
 @app.post("/api/deployment/kill-switch")
-async def deployment_kill_api(scope: str, active: bool, reason: str, source: str):
-    return deployment_manager.set_kill(scope,active,reason,source)
+async def deployment_kill_api(scope: str, active: bool, reason: str, source: str="", authorization: Optional[str]=Header(None)):
+    actor=_security_actor(authorization,"activate_kill_switch" if active else "reset_emergency_stop")
+    result=deployment_manager.set_kill(scope,active,reason,actor["actor"])
+    security_manager.audit(actor,"KILL_SWITCH_ACTIVATED" if active else "KILL_SWITCH_RESET",
+                           f"kill_switch:{scope}",not active,active,reason,"APPLIED")
+    return result
 
 @app.post("/api/deployment/reconcile")
-async def deployment_reconcile_api():
+async def deployment_reconcile_api(authorization: Optional[str]=Header(None)):
+    actor=_security_actor(authorization,"manual_reconcile")
     async with httpx.AsyncClient() as client:
         result=await deployment_manager.reconcile(client)
+    security_manager.audit(actor,"MANUAL_RECONCILIATION","deployment",None,result,
+                           "manual deployment reconciliation","COMPLETED")
     return {"result":result,"dashboard":deployment_manager.dashboard()}
 
 
@@ -6532,8 +9263,12 @@ async def candidate_validation_api(limit: int = 100):
 
 
 @app.post("/api/candidate-validation/{candidate_id}/run")
-async def candidate_validation_run_api(candidate_id: str):
-    return validate_candidate_advanced(candidate_id)
+async def candidate_validation_run_api(candidate_id: str,authorization: Optional[str]=Header(None)):
+    actor=_security_actor(authorization,"candidate_review")
+    result=validate_candidate_advanced(candidate_id)
+    security_manager.audit(actor,"CANDIDATE_VALIDATION_RUN",f"candidate:{candidate_id}",None,
+                           result.get("final_status"),"manual advanced validation","COMPLETED")
+    return result
 
 
 @app.get("/api/candidate-validation/{candidate_id}/paper")
@@ -6576,8 +9311,13 @@ async def adaptive_learning_api(limit: int = 100):
 
 
 @app.post("/api/adaptive-learning/run")
-async def adaptive_learning_run_api(force: bool = False):
-    return run_adaptive_learning(force=force)
+async def adaptive_learning_run_api(force: bool = False,authorization: Optional[str]=Header(None)):
+    actor=_security_actor(authorization,"run_research")
+    result=run_adaptive_learning(force=force)
+    security_manager.audit(actor,"ADAPTIVE_LEARNING_RUN","adaptive_learning",None,
+                           {"status":result.get("status") if isinstance(result,dict) else None},
+                           "manual research cycle","COMPLETED")
+    return result
 
 
 @app.get("/api/adaptive-learning/insights")
@@ -6654,14 +9394,14 @@ async def trade_memory_insights_api(query: str,
 
 
 @app.post("/api/trade-memory/reconcile")
-async def trade_memory_reconcile_api():
+async def trade_memory_reconcile_api(authorization: Optional[str]=Header(None)):
+    actor=_security_actor(authorization,"manual_reconcile")
     async with httpx.AsyncClient() as client:
         result=await reconcile_trade_memory(client,None)
-    return {
-        "result":result,
-        "degradation":refresh_trade_memory_degradation(),
-        "auto_strategy_changes":False
-    }
+    degradation=refresh_trade_memory_degradation()
+    security_manager.audit(actor,"MANUAL_RECONCILIATION","trade_memory",None,result,
+                           "manual trade-memory reconciliation","COMPLETED")
+    return {"result":result,"degradation":degradation,"auto_strategy_changes":False}
 
 
 @app.get("/api/adaptive-risk")
@@ -6683,7 +9423,8 @@ async def adaptive_risk_state_api():
 
 
 @app.post("/api/adaptive-risk/refresh")
-async def adaptive_risk_refresh():
+async def adaptive_risk_refresh(authorization: Optional[str]=Header(None)):
+    actor=_security_actor(authorization,"manual_reconcile")
     async with httpx.AsyncClient() as client:
         ctx=await build_broker_risk_context(client)
     persist_portfolio_risk_context(ctx)
@@ -6701,7 +9442,10 @@ async def adaptive_risk_refresh():
             d=adaptive_risk_recommendation(inst,variant,regime,director,None,ctx,UNITS)
             log_adaptive_risk_decision(d)
             results.append(d)
-    return {"shadow_mode":True,"risk_context":ctx,"results":results}
+    result={"shadow_mode":True,"risk_context":ctx,"results":results}
+    security_manager.audit(actor,"ADAPTIVE_RISK_REFRESH","risk.engine.shadow",None,
+                           {"strategies":len(results)},"manual shadow-risk refresh","COMPLETED")
+    return result
 
 
 @app.get("/api/ai-strategy-director")
@@ -6710,7 +9454,8 @@ async def ai_strategy_director_api(limit: int = 100):
 
 
 @app.post("/api/ai-strategy-director/refresh")
-async def ai_strategy_director_refresh():
+async def ai_strategy_director_refresh(authorization: Optional[str]=Header(None)):
+    actor=_security_actor(authorization,"run_research")
     """
     Recompute observation recommendations for currently known strategies
     using the latest regime snapshot. No trading authority.
@@ -6732,7 +9477,10 @@ async def ai_strategy_director_refresh():
             d=ai_strategy_director_recommendation(inst,variant,regime,None)
             log_ai_director_decision(d)
             results.append(d)
-    return {"observation_only":True,"results":results}
+    result={"observation_only":True,"results":results}
+    security_manager.audit(actor,"AI_DIRECTOR_REFRESH","ai_strategy_director",None,
+                           {"strategies":len(results)},"manual director observation refresh","COMPLETED")
+    return result
 
 
 @app.get("/api/ai-strategy-director/outcomes")
@@ -6749,8 +9497,12 @@ async def strategy_health_api():
             "recovery_samples":STRATEGY_RECOVERY_SAMPLES,"strategies":all_strategy_health()}
 
 @app.post("/api/strategy-health/refresh")
-async def strategy_health_refresh_api():
-    return evaluate_all_strategy_health()
+async def strategy_health_refresh_api(authorization: Optional[str]=Header(None)):
+    actor=_security_actor(authorization,"run_research")
+    result=evaluate_all_strategy_health()
+    security_manager.audit(actor,"STRATEGY_HEALTH_REFRESH","strategy.health",None,result,
+                           "manual strategy-health refresh","COMPLETED")
+    return result
 
 @app.get("/api/strategy-health/audit")
 async def strategy_health_audit_api(limit: int = 200):
@@ -6764,9 +9516,13 @@ async def research_weekends(limit: int = 20):
     return {"enabled":WEEKEND_RESEARCH_ENABLED,"market_closed_now":market_is_weekend_closed(),"signal_context_hours":WEEKEND_SIGNAL_CONTEXT_HOURS,"reaction_horizons_hours":list(WEEKEND_REACTION_HORIZONS),"sessions":[dict(x) for x in sessions],"recent_context":[dict(x) for x in recent]}
 
 @app.post("/api/research/weekends/collect")
-async def research_weekend_collect():
+async def research_weekend_collect(authorization: Optional[str]=Header(None)):
+    actor=_security_actor(authorization,"run_research")
     async with httpx.AsyncClient() as client:
-        return {"results":[await collect_weekend_news_snapshot(client,inst) for inst in INSTRUMENTS]}
+        result={"results":[await collect_weekend_news_snapshot(client,inst) for inst in INSTRUMENTS]}
+    security_manager.audit(actor,"WEEKEND_RESEARCH_COLLECTION","research.weekend",None,
+                           {"symbols":len(result["results"])},"manual weekend research collection","COMPLETED")
+    return result
 
 @app.get("/api/research/autonomous")
 async def research_autonomous(limit: int = 100):
@@ -6782,8 +9538,13 @@ async def research_autonomous(limit: int = 100):
             "hypotheses":[dict(x) for x in rows],"research_priorities":[dict(x) for x in fam]}
 
 @app.post("/api/research/autonomous/refresh")
-async def research_autonomous_refresh():
-    return autonomous_discovery_refresh()
+async def research_autonomous_refresh(authorization: Optional[str]=Header(None)):
+    actor=_security_actor(authorization,"run_research")
+    result=autonomous_discovery_refresh()
+    security_manager.audit(actor,"AUTONOMOUS_RESEARCH_REFRESH","adaptive_learning.research",None,
+                           {"status":result.get("status") if isinstance(result,dict) else None},
+                           "manual autonomous-research refresh","COMPLETED")
+    return result
 
 
 @app.get("/api/research/active-rule")
@@ -6823,17 +9584,26 @@ async def research_rule_audit(limit: int = 100):
 
 
 @app.post("/api/research/promote")
-async def research_promote():
-    return promote_validated_research_rules()
+async def research_promote(authorization: Optional[str]=Header(None)):
+    actor=_security_actor(authorization,"run_research")
+    result=security_queue_validated_research_changes()
+    security_manager.audit(actor,"RESEARCH_CHANGE_REQUESTS_QUEUED","strategy.research_filters",None,
+                           {"created":len(result["created"])},"manual research review queue","CREATED")
+    return result
 
 
 @app.post("/api/research/review-active")
-async def research_review_active():
-    return review_active_research_rules()
+async def research_review_active(authorization: Optional[str]=Header(None)):
+    actor=_security_actor(authorization,"run_research")
+    result=review_active_research_rules()
+    security_manager.audit(actor,"RESEARCH_RULE_HEALTH_REVIEW","strategy.research_filters",None,result,
+                           "manual active-rule health review","COMPLETED")
+    return result
 
 
 @app.post("/api/research/refresh")
-async def research_refresh():
+async def research_refresh(authorization: Optional[str]=Header(None)):
+    actor=_security_actor(authorization,"run_research")
     external_research = refresh_external_hypotheses()
     autonomous=autonomous_discovery_refresh()
     return {"external":external_research,"autonomous":autonomous,
@@ -6842,9 +9612,12 @@ async def research_refresh():
             "note":"Autonomous rules are discovered on older data and validated on a later holdout before the 100/50 cycle."}
 
 @app.post("/api/learning/train")
-async def train_now():
-    # Safe: training only. It cannot alter technical rules or order execution.
-    return train_shadow_model(force=True)
+async def train_now(authorization: Optional[str]=Header(None)):
+    actor=_security_actor(authorization,"run_research")
+    result=train_shadow_model(force=True)
+    security_manager.audit(actor,"SHADOW_MODEL_TRAIN","adaptive_learning.shadow_model",None,
+                           {"trained":True},"manual shadow-model training","COMPLETED")
+    return result
 
 
 @app.get("/api/discovery")
@@ -6858,7 +9631,7 @@ async def discovery():
 async def home():
     return """<!doctype html><html lang='es'><meta name='viewport' content='width=device-width'><title>Market Alert V1.7</title>
 <style>body{font-family:system-ui;background:#0b1020;color:#eef2ff;max-width:1050px;margin:auto;padding:24px}.c{background:#151c32;border:1px solid #2c3656;border-radius:16px;padding:18px;margin:12px 0}pre{white-space:pre-wrap;word-break:break-word;background:#080c17;padding:14px;border-radius:12px}.tag{display:inline-block;padding:5px 9px;border-radius:999px;background:#25304f;margin-right:6px}</style>
-<h1>Market Alert V3.16 · Controlled Canary Deployment</h1><div class=c><span class=tag>OANDA PRACTICE ONLY</span><span class=tag>24/7</span><span class=tag>Sin límite diario</span><span class=tag>Confianza calibrada</span>
+<h1>Market Alert V3.23 · Production Readiness & Minimal Live Certification</h1><div class=c><span class=tag>OANDA PRACTICE ONLY</span><span class=tag>24/7</span><span class=tag>Sin límite diario</span><span class=tag>Confianza calibrada</span>
 <p><b>Quality Score ≠ probabilidad.</b> La confianza dinámica se calibra con resultados reales. Con poca muestra se limita deliberadamente y el 90% requiere evidencia sustancial.</p></div>
 <div class=c><h2>Estado</h2><pre id=s>Cargando…</pre></div><div class=c><h2>Aprendizaje</h2><pre id=l>Cargando…</pre></div><div class=c><h2>Última decisión</h2><pre id=d>Cargando…</pre></div><div class=c><h2>Últimas señales</h2><pre id=h>Cargando…</pre></div>
 <script>async function u(){s.textContent=JSON.stringify(await fetch('/api/status').then(r=>r.json()),null,2);l.textContent=JSON.stringify(await fetch('/api/learning').then(r=>r.json()),null,2);d.textContent=JSON.stringify(await fetch('/api/decisions?limit=5').then(r=>r.json()),null,2);h.textContent=JSON.stringify(await fetch('/api/signals?limit=15').then(r=>r.json()),null,2)}u();setInterval(u,15000)</script></html>"""
