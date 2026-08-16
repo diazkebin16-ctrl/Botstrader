@@ -52,7 +52,7 @@ def test_full_integrated_suite_has_no_critical_failure_and_all_gates_pass():
     assert all(report["pass_fail_gate"]["gates"].values())
     # Coverage must touch every major architecture family.
     components={x["component"] for x in report["coverage_matrix"]}
-    required={"Risk Engine","Recovery","Reconciliation","Governance","System Evaluation","Execution","Broker","Persistence"}
+    required={"Risk Engine","Smart Execution","Recovery","Reconciliation","Governance","System Evaluation","Execution","Broker","Persistence"}
     assert required.issubset(components)
 
 def test_regression_report_detects_deltas_without_mutating_baseline():
@@ -68,7 +68,7 @@ def test_scenario_library_contains_required_extreme_cases():
     lib=fw.scenario_library()
     for name in ("GOLDEN_PATH","FLASH_CRASH","BROKER_OUTAGE","DATABASE_FAILURE",
                  "PARTIAL_FILL_DISCONNECT","CANARY_FAILURE","GOVERNANCE_FREEZE",
-                 "EMERGENCY_RECOVERY","FULL_EXTREME_SIMULATION"):
+                 "EMERGENCY_RECOVERY","SMART_EXECUTION_SHADOW","FULL_EXTREME_SIMULATION"):
         assert name in lib
 
 if __name__=="__main__":

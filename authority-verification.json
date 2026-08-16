@@ -1,0 +1,15 @@
+{
+  "version": "3.27",
+  "mode": "SHADOW",
+  "signal_authority": false,
+  "direct_control_authority": false,
+  "risk_increase_authority": false,
+  "hard_risk_increase": false,
+  "leverage_increase": false,
+  "tests": [
+    "test_anomaly_never_becomes_signal_or_leverage",
+    "test_authority_remains_zero_after_hardening",
+    "Step14 ANOMALY_SHADOW"
+  ],
+  "result": "PASS"
+}

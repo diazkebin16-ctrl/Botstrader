@@ -1,0 +1,49 @@
+{
+  "version": "3.27",
+  "source": "TIMESTAMP_ORDERED_SCENARIO_REPLAY",
+  "contextual_normality": {
+    "high_or_critical": 0,
+    "results": [
+      {
+        "session": "NY",
+        "raw": "NORMAL",
+        "actionable": "NORMAL",
+        "confirmed": false
+      },
+      {
+        "session": "ASIA",
+        "raw": "NORMAL",
+        "actionable": "NORMAL",
+        "confirmed": false
+      },
+      {
+        "session": "OPEN",
+        "raw": "NORMAL",
+        "actionable": "NORMAL",
+        "confirmed": false
+      }
+    ]
+  },
+  "brief_spike": {
+    "raw_detected": true,
+    "full_defensive_action": false,
+    "raw_severity": "CRITICAL",
+    "actionable_severity": "WATCH",
+    "recovery_sequence": [
+      "WATCH",
+      "WATCH",
+      "NORMAL"
+    ]
+  },
+  "false_positive_rate": 0.0,
+  "controls": [
+    "symbol/session/regime/volatility/time contextual baseline hierarchy",
+    "minimum sample fallback",
+    "material magnitude guard",
+    "persistence confirmations",
+    "multi-domain confirmation",
+    "hysteresis",
+    "context-aware structural change"
+  ],
+  "result": "PASS"
+}

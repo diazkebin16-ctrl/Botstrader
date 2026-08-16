@@ -30,6 +30,10 @@ AUTHORITY_MATRIX={
         "can":["MEASURE","COMPARE","DETECT","EXPLAIN","RECOMMEND"],
         "cannot":["TRADE","DEPLOY","CHANGE_RISK","APPLY_CONFIG"]
     },
+    "ENSEMBLE_ENGINE":{
+        "can":["COMBINE_SIGNALS","ABSTAIN","RECOMMEND","PROPOSE_CANDIDATE_WEIGHTS"],
+        "cannot":["TRADE","BYPASS_AI_DIRECTOR","BYPASS_RISK_ENGINE","INCREASE_LEVERAGE","SELF_DEPLOY_WEIGHTS"]
+    },
     "CHANGE_MANAGEMENT":{
         "can":["VALIDATE_CHANGE","ROUTE_APPROVAL","VERSION_CONFIG","ROLLBACK_CONFIG"],
         "cannot":["BYPASS_RBAC","SELF_APPROVE_AUTOMATION","REWRITE_TRADING_STATE"]
@@ -81,6 +85,7 @@ DEFAULT_POLICIES={
     "CONFIDENCE_CALIBRATION_MIN_SAMPLES":20,
     "CONFIDENCE_CALIBRATION_MAX_ERROR":0.20,
     "MODULE_DECISION_FRESHNESS_HOURS":6,
+    "ENSEMBLE_CHURN_WEIGHT_VERSIONS_7D":20,
 }
 
 def now_iso(): return datetime.now(timezone.utc).isoformat()
@@ -307,6 +312,14 @@ class GovernanceEngine:
         hot={k:v for k,v in by.items() if v>=int(self.policies["DEPLOYMENT_CHURN_EVENTS_7D"])}
         return {"events":len(rows),"by_candidate":by,"hot":hot,"detected":bool(hot)}
 
+    def _ensemble_churn(self,now:datetime)->Dict[str,Any]:
+        cut=(now-timedelta(days=7)).isoformat()
+        rows=self._rows("ensemble_weight_versions","WHERE created_at>=? ORDER BY created_at",(cut,))
+        candidates=self._rows("ensemble_policy_candidates","WHERE created_at>=? ORDER BY created_at",(cut,))
+        detected=len(rows)>=int(self.policies.get("ENSEMBLE_CHURN_WEIGHT_VERSIONS_7D",20))
+        return {"weight_versions":len(rows),"candidate_weight_configs":len(candidates),
+                "detected":detected,"status":"ENSEMBLE_CHURN" if detected else "NORMAL"}
+
     def _confidence_calibration(self)->Dict[str,Any]:
         rows=self._rows("trade_memory","WHERE status='CLOSED' AND strategy_confidence_entry IS NOT NULL AND realized_r IS NOT NULL")
         buckets={}
@@ -327,9 +340,10 @@ class GovernanceEngine:
                 "status":"CONFIDENCE_MIS_CALIBRATION" if bad else "CALIBRATED_OR_INSUFFICIENT_DATA",
                 "detected":bad}
 
-    def _module_conflicts(self,latest_eval:Dict[str,Any])->List[Dict[str,Any]]:
+    def _module_conflicts(self,latest_eval:Dict[str,Any],now:Optional[datetime]=None)->List[Dict[str,Any]]:
         conflicts=[]
-        cutoff=(datetime.now(timezone.utc)-timedelta(hours=float(self.policies["MODULE_DECISION_FRESHNESS_HOURS"]))).isoformat()
+        now=now or datetime.now(timezone.utc)
+        cutoff=(now-timedelta(hours=float(self.policies["MODULE_DECISION_FRESHNESS_HOURS"]))).isoformat()
         dirs=self._rows("ai_strategy_director_decisions",
                         "WHERE ts>=? AND id IN (SELECT MAX(id) FROM ai_strategy_director_decisions WHERE ts>=? GROUP BY setup_variant)",
                         (cutoff,cutoff))
@@ -451,8 +465,8 @@ class GovernanceEngine:
 
     def meta_risk(self,now:Optional[datetime]=None)->Dict[str,Any]:
         now=now or datetime.now(timezone.utc);ev=self._latest_eval();counts=self._change_counts(now)
-        churn=self._strategy_churn(now);pchurn=self._parameter_churn(now);dchurn=self._deployment_churn(now)
-        conflicts=self._module_conflicts(ev);loop=self._adaptation_loop(counts,churn,pchurn,dchurn)
+        churn=self._strategy_churn(now);pchurn=self._parameter_churn(now);dchurn=self._deployment_churn(now);echurn=self._ensemble_churn(now)
+        conflicts=self._module_conflicts(ev,now);loop=self._adaptation_loop(counts,churn,pchurn,dchurn)
         budget=self._budget(counts);cal=self._confidence_calibration();obj=self._objective_drift(ev)
         active_candidates=len(self._rows("deployment_registry","WHERE current_stage IN ('APPROVED_FOR_CANARY','CANARY_LIVE','LIMITED_PRODUCTION')"))
         incidents=len(self._rows("recovery_incidents","WHERE status!='RECOVERED'"))
@@ -471,6 +485,7 @@ class GovernanceEngine:
         parts["concept_drift"]=min(10.0,concept*4.0)
         parts["adaptation_loop"]=15.0 if loop["detected"] else 0.0
         parts["objective_drift"]=10.0 if obj["detected"] else 0.0
+        parts["ensemble_churn"]=10.0 if echurn["detected"] else min(5.0,echurn["weight_versions"]*.15)
         sys_status=(ev or {}).get("system_status")
         sys_score=f((ev or {}).get("system_score"),100.0) or 100.0
         parts["system_health"]=30.0 if sys_status in ("CRITICAL","PAUSED") else 20.0 if sys_status=="HIGH_RISK" else 12.0 if sys_status=="DEGRADING" else max(0.0,(70.0-sys_score)*0.4)
@@ -485,12 +500,39 @@ class GovernanceEngine:
                             "conflicts":conflicts}
         return {"score":score,"state":state,"components":parts,"system_evaluation":ev,
                 "change_counts":counts,"change_budget":budget,"strategy_churn":churn,
-                "parameter_churn":pchurn,"deployment_churn":dchurn,"conflicts":conflicts,
+                "parameter_churn":pchurn,"deployment_churn":dchurn,"ensemble_churn":echurn,"conflicts":conflicts,
                 "model_disagreement":model_disagreement,
                 "adaptation_loop":loop,"confidence_calibration":cal,"objective_drift":obj,
                 "active_candidates":active_candidates,"active_incidents":incidents,
                 "concept_drift_alerts":concept,"learning_data_governance":self._learning_data_governance(),
                 "stability_window":self._stability_window(now)}
+
+    def _latest_anomaly_signal(self)->Dict[str,Any]:
+        """Return the latest actionable anomaly state when Step 19 tables are present.
+
+        Governance treats the anomaly engine as an advisory input only. In SHADOW mode
+        this can change the *recommended* adaptation state, but never enforces a freeze.
+        """
+        c=self.conn()
+        try:
+            row=c.execute(
+                "SELECT severity, context_json, ts FROM anomaly_composite_history ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+        except sqlite3.OperationalError:
+            row=None
+        finally:
+            c.close()
+        if not row:
+            return {"present":False,"actionable_score":0.0,"severity":"NORMAL","ts":None}
+        try:
+            ctx=json.loads(row["context_json"] or "{}")
+        except Exception:
+            ctx={}
+        score=f(ctx.get("actionable_score"),None)
+        if score is None:
+            score=0.0
+        sev=str(ctx.get("actionable_severity") or row["severity"] or "NORMAL").upper()
+        return {"present":True,"actionable_score":clamp(score),"severity":sev,"ts":row["ts"]}
 
     def _freeze_triggers(self,meta)->List[str]:
         ev=meta.get("system_evaluation") or {};tr=[]
@@ -501,10 +543,22 @@ class GovernanceEngine:
         if meta["active_incidents"]>0:tr.append("ACTIVE_OPERATIONAL_INCIDENT")
         if len(meta["conflicts"])>0:tr.append("MODULE_DECISION_CONFLICT")
         if meta["adaptation_loop"]["detected"]:tr.append("ADAPTATION_LOOP_DETECTED")
+        if meta.get("ensemble_churn",{}).get("detected"):tr.append("ENSEMBLE_CHURN")
         if meta["change_budget"]["exhausted_any"]:tr.append("CHANGE_BUDGET_EXHAUSTED")
         if meta["concept_drift_alerts"]>0:tr.append("UNRESOLVED_CONCEPT_DRIFT")
         if f((ev.get("risk") or {}).get("drawdown_utilization"),0.0)>=float(self.policies["DRAWDOWN_UTILIZATION_FREEZE"]):tr.append("DRAWDOWN_ELEVATED")
         if len((ev.get("model_reality_gap") or {}).get("material_gaps") or [])>=int(self.policies["MODEL_GAP_FREEZE_COUNT"]):tr.append("MODEL_REALITY_GAP")
+        deg=(ev.get("degradation") or {}).get("types") or []
+        if "EXECUTION_DEGRADATION" in deg and f(ev.get("system_score"),100.0)<75.0:
+            tr.append("EXECUTION_QUALITY_DEGRADED")
+        anomaly=self._latest_anomaly_signal()
+        if anomaly.get("present"):
+            score=f(anomaly.get("actionable_score"),0.0)
+            sev=str(anomaly.get("severity") or "NORMAL").upper()
+            if sev=="CRITICAL" or score>=0.85:
+                tr.append("COMPOSITE_ANOMALY_CRITICAL")
+            elif sev=="HIGH" or score>=0.70:
+                tr.append("ANOMALY_RISK_HIGH")
         if meta["state"]=="CRITICAL":tr.append("META_RISK_CRITICAL")
         return list(dict.fromkeys(tr))
 
@@ -597,7 +651,8 @@ class GovernanceEngine:
         if int(st.get("governance_lock") or 0):
             policies.append("GOVERNANCE_LOCK");reasons.append("Persistent Governance Lock is active")
         if st.get("adaptation_state")=="ADAPTATION_FROZEN" or fresh_recommended_state=="ADAPTATION_FROZEN":
-            if action_type in ("CHANGE_APPLY","DEPLOYMENT_APPROVAL","DEPLOYMENT_PROMOTION","CANDIDATE_CRITICAL_CREATE"):
+            if action_type in ("CHANGE_APPLY","DEPLOYMENT_APPROVAL","DEPLOYMENT_PROMOTION","CANDIDATE_CRITICAL_CREATE",
+                               "ENSEMBLE_WEIGHT_CHANGE","ENSEMBLE_MODEL_ADD","ENSEMBLE_PROMOTION"):
                 policies.append("ADAPTATION_FROZEN")
                 reasons.append("Adaptation is frozen or would be frozen under current governance conditions")
         if not meta["stability_window"]["complete"] and magnitude in ("MAJOR","CRITICAL"):
@@ -615,6 +670,12 @@ class GovernanceEngine:
             policies.append("PER_STRATEGY_CHANGE_BUDGET")
             reasons.append(f"Change budget exhausted for strategy {strategy_key}")
         policy_conflict=False
+        if action_type=="EXECUTION_POLICY_DEPLOYMENT":
+            ev=meta.get("system_evaluation") or {}
+            deg=(ev.get("degradation") or {}).get("types") or []
+            if "EXECUTION_DEGRADATION" in deg:
+                policies.append("EXECUTION_POLICY_STABILITY_REQUIRED")
+                reasons.append("Execution Quality is degraded; new execution-policy deployment is blocked/reviewed")
         if action_type in ("DEPLOYMENT_APPROVAL","DEPLOYMENT_PROMOTION"):
             eligible_validation=context.get("validation_state") in ("READY_FOR_REVIEW","APPROVED_FOR_CANARY","CANARY_LIVE","LIMITED_PRODUCTION")
             system_status=(meta.get("system_evaluation") or {}).get("system_status")
@@ -629,6 +690,14 @@ class GovernanceEngine:
                 policies.append("CONSERVATIVE_AUTHORITY_PRIORITY");reasons.append("Module decision conflict requires conservative resolution")
             if meta["state"] in ("HIGH","CRITICAL"):
                 policies.append("META_RISK_LIMIT");reasons.append(f"Meta risk is {meta['state']}")
+        if action_type in ("ENSEMBLE_WEIGHT_CHANGE","ENSEMBLE_MODEL_ADD","ENSEMBLE_PROMOTION"):
+            ensemble_eval=((meta.get("system_evaluation") or {}).get("ensemble_effectiveness") or {})
+            if ensemble_eval.get("assessment")=="LOW_DIVERSITY":
+                policies.append("ENSEMBLE_DIVERSITY_REQUIRED");reasons.append("Ensemble diversity is too low for promotion/change")
+            if meta.get("ensemble_churn",{}).get("detected"):
+                policies.append("ENSEMBLE_CHURN_CONTROL");reasons.append("Ensemble weight/model churn detected")
+            if action_type=="ENSEMBLE_PROMOTION" and context.get("validation_state") not in ("VALIDATED","PAPER_PASS","CANARY_PASS","READY_FOR_REVIEW"):
+                policies.append("MINIMUM_VALIDATION_REQUIRED");reasons.append("Ensemble promotion requires validation/paper/canary evidence")
         if action_type=="DIRECT_PRODUCTION_DEPLOYMENT":
             policies.append("NO_DIRECT_PRODUCTION_DEPLOYMENT");reasons.append("Direct production deployment is forbidden")
         if action_type=="HARD_RISK_INCREASE":
@@ -786,7 +855,7 @@ class GovernanceEngine:
                 "change_budget":meta["change_budget"],"active_governance_lock":bool(st.get("governance_lock")),
                 "lock_reason":st.get("lock_reason"),"module_conflicts":meta["conflicts"],
                 "strategy_churn":meta["strategy_churn"],"parameter_churn":meta["parameter_churn"],
-                "deployment_churn":meta["deployment_churn"],"adaptation_loop":meta["adaptation_loop"],
+                "deployment_churn":meta["deployment_churn"],"ensemble_churn":meta.get("ensemble_churn"),"adaptation_loop":meta["adaptation_loop"],
                 "model_disagreement":meta["model_disagreement"],
                 "confidence_calibration":meta["confidence_calibration"],"objective_drift":meta["objective_drift"],
                 "learning_data_governance":meta["learning_data_governance"],

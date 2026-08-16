@@ -440,13 +440,63 @@ class SystemEvaluationEngine:
         unknown=sum(1 for x in intents if x.get("state")=="UNKNOWN")
         recent=self._window(trades,30,as_of=as_of)
         tm=trade_metrics(recent)
+        smart=self._rows("smart_execution_tca","WHERE ts>=? AND ts<=?",(cutoff,as_of.isoformat()))
+        smart_quality=[f(x.get("execution_quality_score")) for x in smart if f(x.get("execution_quality_score")) is not None]
+        smart_slip=[f(x.get("slippage_bps")) for x in smart if f(x.get("slippage_bps")) is not None]
+        smart_fill=[f(x.get("fill_rate")) for x in smart if f(x.get("fill_rate")) is not None]
+        smart_cost=sum(f(x.get("total_execution_cost"),0.0) or 0.0 for x in smart)
+        smart_gross=sum(f(x.get("expected_gross_edge"),0.0) or 0.0 for x in smart)
         return {"order_intents_30d":len(intents),"fill_rate":safe_div(fills,len(terminal),None) if terminal else None,
                 "rejections":rejected,"partial_fills":partial,"unknown_order_states":unknown,
                 "avg_total_slippage_pips":tm.get("avg_total_slippage_pips"),
                 "p95_broker_latency_ms":operational.get("p95_broker_latency_ms"),
-                "spread_paid":"UNAVAILABLE_NO_PERSISTED_BID_ASK_SPREAD",
+                "spread_paid":"PERSISTED_BY_SMART_EXECUTION_WHEN_AVAILABLE",
+                "smart_execution":{"samples":len(smart),
+                  "execution_quality_score":sum(smart_quality)/len(smart_quality) if smart_quality else None,
+                  "avg_slippage_bps":sum(smart_slip)/len(smart_slip) if smart_slip else None,
+                  "fill_rate":sum(smart_fill)/len(smart_fill) if smart_fill else None,
+                  "total_execution_cost":smart_cost,
+                  "expected_gross_edge":smart_gross,
+                  "cost_to_gross_edge":safe_div(smart_cost,smart_gross,None) if smart_gross>0 else None},
                 "costs":{"gross_pnl":tm.get("gross_pnl"),"net_pnl":tm.get("net_pnl"),
                          "fees":tm.get("fees"),"financing":tm.get("financing")}}
+
+    def _ensemble_effectiveness(self,as_of):
+        cutoff=(as_of-timedelta(days=30)).isoformat()
+        outs=self._rows("ensemble_outputs","WHERE ts>=? AND ts<=? ORDER BY ts",(cutoff,as_of.isoformat()))
+        comps=self._rows("ensemble_shadow_comparisons","WHERE ts>=? AND ts<=? ORDER BY ts",(cutoff,as_of.isoformat()))
+        if not outs:
+            return {"enabled":True,"mode":"SHADOW","sample_size":0,"assessment":"INSUFFICIENT_DATA",
+                    "ensemble_value_added":"NO_ENSEMBLE_ADVANTAGE_DETECTED"}
+        agreement=[f(x.get("agreement_score")) for x in outs];agreement=[x for x in agreement if x is not None]
+        diversity=[f(x.get("diversity_score")) for x in outs];diversity=[x for x in diversity if x is not None]
+        conf=[f(x.get("ensemble_confidence")) for x in outs];conf=[x for x in conf if x is not None]
+        abstain=sum(1 for x in outs if x.get("ensemble_direction")=="ABSTAIN")
+        actual=[f(x.get("actual_result")) for x in comps];actual=[x for x in actual if x is not None]
+        hypothetical=[f(x.get("hypothetical_result")) for x in comps];hypothetical=[x for x in hypothetical if x is not None]
+        # Weight stability is measured from successive persisted shadow versions.
+        versions=self._rows("ensemble_weight_versions","WHERE created_at>=? AND created_at<=? ORDER BY created_at",(cutoff,as_of.isoformat()))
+        changes=[]
+        prev=None
+        for v in versions:
+            try:w=json.loads(v.get("weights_json") or "{}")
+            except Exception:w={}
+            if prev is not None:
+                keys=set(prev)|set(w);changes.append(max([abs(float(w.get(k,0))-float(prev.get(k,0))) for k in keys] or [0]))
+            prev=w
+        value_added="NO_ENSEMBLE_ADVANTAGE_DETECTED"
+        if len(hypothetical)>=self.min_samples and actual:
+            value_added="ENSEMBLE_ADVANTAGE_OBSERVED_SHADOW" if statistics.mean(hypothetical)>statistics.mean(actual) else "NO_ENSEMBLE_ADVANTAGE_DETECTED"
+        return {"enabled":True,"mode":"SHADOW","sample_size":len(outs),
+                "avg_agreement":statistics.mean(agreement) if agreement else None,
+                "avg_diversity":statistics.mean(diversity) if diversity else None,
+                "avg_confidence":statistics.mean(conf) if conf else None,
+                "abstention_rate":abstain/len(outs),"weight_versions":len(versions),
+                "max_weight_change":max(changes) if changes else 0.0,
+                "resolved_actual_comparisons":len(actual),"resolved_hypothetical_comparisons":len(hypothetical),
+                "ensemble_value_added":value_added,
+                "assessment":"LOW_DIVERSITY" if diversity and statistics.mean(diversity)<.25 else "OBSERVING",
+                "causal_claim":False}
 
     def _deployment_impact(self,trades,as_of):
         events=self._rows("deployment_events",
@@ -530,6 +580,7 @@ class SystemEvaluationEngine:
         director=self._director(asdt);riskeng=self._risk_engine(asdt,valid);adaptive=self._adaptive(asdt)
         gap=self._model_gap(asdt);oper=self._operational(asdt);risk=self._risk(asdt,valid);stab=self._stability(valid,asdt)
         activity=self._activity_efficiency(valid,asdt);execution_quality=self._execution_quality(valid,asdt,oper)
+        ensemble=self._ensemble_effectiveness(asdt)
         change=self._change_impact(valid,asdt);deployment_impact=self._deployment_impact(valid,asdt)
         incident=self._incident_impact(trades,asdt)
 
@@ -574,6 +625,11 @@ class SystemEvaluationEngine:
                 if rmode!=omode:degradation.append("MARKET_REGIME_SHIFT");factors.append({"factor":"regime_shift","from":omode,"to":rmode})
         if (cur.get("avg_total_slippage_pips") or 0) > max(1.0,(base.get("avg_total_slippage_pips") or 0)*1.5):
             degradation.append("EXECUTION_DEGRADATION");factors.append({"factor":"slippage_increase","historical":base.get("avg_total_slippage_pips"),"current":cur.get("avg_total_slippage_pips")})
+        smart_exec=execution_quality.get("smart_execution") or {}
+        if smart_exec.get("samples",0)>=10 and (smart_exec.get("execution_quality_score") is not None and smart_exec.get("execution_quality_score")<60):
+            degradation.append("EXECUTION_DEGRADATION");factors.append({"factor":"smart_execution_quality_low","value":smart_exec.get("execution_quality_score"),"samples":smart_exec.get("samples")})
+        if smart_exec.get("cost_to_gross_edge") is not None and smart_exec.get("cost_to_gross_edge")>0.50:
+            degradation.append("EXECUTION_DEGRADATION");factors.append({"factor":"execution_cost_consumes_edge","value":smart_exec.get("cost_to_gross_edge")})
         if op_score<65:degradation.append("INFRASTRUCTURE_DEGRADATION");factors.append({"factor":"operational_score","value":op_score})
         if risk_score<65 or riskeng.get("efficiency")=="OVER_RESTRICTIVE":degradation.append("RISK_DEGRADATION");factors.append({"factor":"risk_score","value":risk_score,"risk_engine":riskeng.get("efficiency")})
         if gap["status"]=="MODEL_REALITY_GAP":degradation.append("MODEL_DEGRADATION");factors.append({"factor":"model_reality_gap","count":len(gap["material_gaps"])})
@@ -619,6 +675,10 @@ class SystemEvaluationEngine:
             rec("POSSIBLE_OVERTRADING","MEDIUM","Trade frequency and fee drag rose materially while marginal efficiency weakened.",activity)
         if activity.get("possible_overfiltering"):
             rec("POSSIBLE_OVERFILTERING","MEDIUM","A large share of technically valid signals is blocked and very few become trades.",activity)
+        if ensemble.get("assessment")=="LOW_DIVERSITY":
+            rec("REVIEW_ENSEMBLE_DIVERSITY","MEDIUM","Shadow ensemble sources are too correlated or too concentrated to claim independent confirmation.",ensemble)
+        if ensemble.get("sample_size",0)>=self.min_samples and ensemble.get("ensemble_value_added")=="NO_ENSEMBLE_ADVANTAGE_DETECTED":
+            rec("HOLD_ENSEMBLE_IN_SHADOW","INFO","No sufficient evidence that the ensemble adds value over the current system.",ensemble)
         if op_score<50 or risk_score<50:rec("PAUSE_DEPLOYMENTS","CRITICAL","Risk or operational reliability is too weak for safe promotion activity.",{"risk_score":risk_score,"operational_score":op_score})
 
         # Biggest risk contributor = highest risk consumption, then loss contribution.
@@ -659,6 +719,7 @@ class SystemEvaluationEngine:
             "ai_strategy_director":director,"risk_engine":riskeng,"adaptive_learning":adaptive,
             "model_reality_gap":gap,"diversification":div,"regime_coverage":coverage,
             "activity_efficiency":activity,"execution_quality":execution_quality,
+            "ensemble_effectiveness":ensemble,
             "change_impact":{"configuration_changes":change,"deployments":deployment_impact},
             "incident_impact":incident,
             "degradation":{"detected":bool(degradation),"types":degradation,"factors":factors,

@@ -1,0 +1,73 @@
+{
+  "version": "3.25",
+  "step": 17,
+  "name": "Intelligent Correlation-Aware Ensemble Shadow",
+  "preconditions": {
+    "step14_passed": 28,
+    "step14_total": 28,
+    "critical_failures": 0,
+    "safety_violations": 0
+  },
+  "mode": "SHADOW",
+  "signal_authority": false,
+  "risk_increase_authority": false,
+  "direct_execution_authority": false,
+  "baseline_methods": [
+    "MAJORITY",
+    "WEIGHTED",
+    "CONFIDENCE_WEIGHTED",
+    "PERFORMANCE_WEIGHTED",
+    "REGIME_WEIGHTED"
+  ],
+  "unit_tests": 17,
+  "integration_tests": 6,
+  "system_integration_scenario_passed": true,
+  "critical_correlation_scenario": {
+    "trend_family_total_weight": 0.4641016151377546,
+    "max_family_weight": 0.5,
+    "trend_family_is_capped": true,
+    "independent_short_weight": 0.2679491924311227,
+    "independent_short_not_erased": true,
+    "ensemble_confidence": 0.3009584313613806,
+    "not_naive_80_percent_confidence": true,
+    "risk_increase_authority": false,
+    "direct_execution_authority": false
+  },
+  "synthetic_simulation": {
+    "cycles": 400,
+    "naive_majority": {
+      "cycles": 400,
+      "active_decisions": 400,
+      "abstentions": 0,
+      "accuracy_active": 0.545,
+      "expectancy_proxy": 0.09,
+      "total_proxy": 36,
+      "profit_factor_proxy": 1.1978021978021978
+    },
+    "correlation_aware_ensemble": {
+      "cycles": 400,
+      "active_decisions": 253,
+      "abstentions": 147,
+      "accuracy_active": 0.549407114624506,
+      "expectancy_proxy": 0.09881422924901186,
+      "total_proxy": 25,
+      "profit_factor_proxy": 1.219298245614035
+    },
+    "diagnostics": {
+      "abstain_rate": 0.3675,
+      "average_diversity": 0.5674950466489311,
+      "average_agreement": 0.5310955880195728,
+      "average_confidence": 0.30117848627181465
+    }
+  },
+  "ensemble_value_added_live_status": "NO_ENSEMBLE_ADVANTAGE_DETECTED / INSUFFICIENT_SHADOW_DATA",
+  "meta_model": "NOT_IMPLEMENTED_INTENTIONALLY",
+  "production_activation": false,
+  "production_readiness": "NO_GO_REMAINS; V3.25 is a materially changed release requiring recertification, and Adaptive Risk remains shadow-only.",
+  "open_issues": [
+    "Limited genuinely independent directional models in the current system.",
+    "Cross-asset signals remain research context until validated.",
+    "Weekend context is intermittent.",
+    "Need enough resolved shadow Ensemble outcomes to evaluate value added, calibration and regime-specific reliability."
+  ]
+}

@@ -1,0 +1,133 @@
+{
+  "version": "3.27",
+  "mode": "SHADOW",
+  "phases": [
+    {
+      "name": "VOLATILITY_BEGINS_RISING",
+      "severity": "CRITICAL",
+      "score": 1.0,
+      "recommendations": [
+        "LOG_AND_INVESTIGATE",
+        "RISK_ENGINE_REDUCE_OR_BLOCK",
+        "LIMITED_ADAPTATION",
+        "CAPITAL_ALLOCATION_RISK_OFF",
+        "GOVERNANCE_ADAPTATION_FROZEN"
+      ]
+    },
+    {
+      "name": "LIQUIDITY_FALLS_SPREAD_WIDENS",
+      "severity": "CRITICAL",
+      "score": 1.0,
+      "recommendations": [
+        "LOG_AND_INVESTIGATE",
+        "CAPITAL_ALLOCATION_RISK_OFF_BIAS",
+        "SMART_EXECUTION_CAUTIOUS",
+        "RISK_ENGINE_REDUCE_OR_BLOCK",
+        "LIMITED_ADAPTATION",
+        "CAPITAL_ALLOCATION_RISK_OFF",
+        "GOVERNANCE_ADAPTATION_FROZEN"
+      ]
+    },
+    {
+      "name": "COMPOSITE_EVENT_CONFIRMED",
+      "severity": "CRITICAL",
+      "score": 1.0,
+      "recommendations": [
+        "LOG_AND_INVESTIGATE",
+        "REDUCE_MODEL_CONFIDENCE",
+        "CAPITAL_ALLOCATION_RISK_OFF_BIAS",
+        "SMART_EXECUTION_CAUTIOUS",
+        "REDUCE_CORRELATED_ALLOCATIONS",
+        "RISK_ENGINE_REDUCE_OR_BLOCK",
+        "LIMITED_ADAPTATION",
+        "CAPITAL_ALLOCATION_RISK_OFF",
+        "GOVERNANCE_ADAPTATION_FROZEN"
+      ]
+    }
+  ],
+  "critical": {
+    "severity": "CRITICAL",
+    "score": 1.0,
+    "rare_event_id": "rare_7e9a3bfe620b4d4dbd85adff5eba3276",
+    "integration_context": {
+      "anomaly_score": 1.0,
+      "severity": "CRITICAL",
+      "ensemble_confidence_multiplier": 0.2,
+      "allocation_risk_off": true,
+      "allocation_reduce": true,
+      "risk_engine_recommendation": "EMERGENCY_REVIEW",
+      "smart_execution_recommendation": "BLOCK_AFFECTED",
+      "governance_recommendation": "ADAPTATION_FROZEN",
+      "direct_actions": false
+    }
+  },
+  "ensemble_confidence_action": {
+    "multiplier": 0.2,
+    "direct_action": false
+  },
+  "capital_allocation": {
+    "risk_off": true,
+    "used_risk_budget": 0,
+    "unused_risk_budget": 100.0
+  },
+  "risk_engine": {
+    "recommendation": "EMERGENCY_REVIEW",
+    "direct_action_by_anomaly_engine": false
+  },
+  "smart_execution": {
+    "recommendation": "BLOCK_AFFECTED",
+    "actual_shadow_decision": "REJECT_EXECUTION",
+    "recommended_quantity": 20.0,
+    "risk_approved_quantity": 100
+  },
+  "governance": {
+    "recommended_state": "ADAPTATION_FROZEN",
+    "decision": "WOULD_FREEZE",
+    "enforced": false
+  },
+  "recovery": [
+    {
+      "reading": 1,
+      "score": 1.0,
+      "severity": "CRITICAL",
+      "dashboard": "CRITICAL"
+    },
+    {
+      "reading": 2,
+      "score": 1.0,
+      "severity": "CRITICAL",
+      "dashboard": "CRITICAL"
+    },
+    {
+      "reading": 3,
+      "score": 0.0,
+      "severity": "NORMAL",
+      "dashboard": "NORMAL"
+    }
+  ],
+  "shadow_metrics": {
+    "samples": 1,
+    "counts": {
+      "TRUE_POSITIVE": 1,
+      "FALSE_POSITIVE": 0,
+      "FALSE_NEGATIVE": 0,
+      "TRUE_NEGATIVE": 0,
+      "UNRESOLVED": 0
+    },
+    "precision": 1.0,
+    "recall": 1.0,
+    "false_positive_rate": 0.0,
+    "mean_detection_delay_seconds": 0.0,
+    "cost_sensitive_note": "Critical false negatives must be weighted more heavily than mild false positives during validation."
+  },
+  "rare_event_memory_count": 1,
+  "proofs": {
+    "no_buy_sell_signal_from_anomaly": true,
+    "no_leverage_increase_authority": true,
+    "correlation_not_ignored": true,
+    "ood_reduces_confidence": true,
+    "single_normal_reading_does_not_immediately_clear": true,
+    "rare_event_history_preserved": true
+  },
+  "interpretation": "Synthetic/replay-style validation of protection mechanics; not an alpha or profitability claim."
+}

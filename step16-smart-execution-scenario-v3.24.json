@@ -1,0 +1,322 @@
+{
+  "scenario_id": "SMART_EXECUTION_SHADOW",
+  "name": "Smart Execution Shadow / Partial Fill Revalidation",
+  "severity_if_failed": "CRITICAL",
+  "passed": true,
+  "duration_ms": 62.65305199849536,
+  "components": [
+    "Risk Engine",
+    "Smart Execution",
+    "Execution",
+    "Recovery",
+    "Trade Memory",
+    "System Evaluation",
+    "Governance"
+  ],
+  "assertions": [
+    {
+      "property": "LIQUIDITY_REDUCES_100_TO_60",
+      "passed": true,
+      "expected": 60,
+      "actual": 60.0,
+      "details": {}
+    },
+    {
+      "property": "LIMIT_SELECTED_UNDER_LOW_LIQUIDITY",
+      "passed": true,
+      "expected": "LIMIT",
+      "actual": "LIMIT",
+      "details": {}
+    },
+    {
+      "property": "PARTIAL_FILL_EXACT",
+      "passed": true,
+      "expected": 40,
+      "actual": 40.0,
+      "details": {}
+    },
+    {
+      "property": "WORSE_MARKET_CANCELS_REMAINING",
+      "passed": true,
+      "expected": null,
+      "actual": "CANCEL_REMAINING_EXECUTION",
+      "details": {}
+    },
+    {
+      "property": "FINAL_POSITION_40",
+      "passed": true,
+      "expected": 40,
+      "actual": 40.0,
+      "details": {}
+    },
+    {
+      "property": "SMART_EXECUTION_NEVER_EXCEEDS_RISK_APPROVAL",
+      "passed": true,
+      "expected": null,
+      "actual": null,
+      "details": {}
+    },
+    {
+      "property": "SMART_EXECUTION_REMAINS_SHADOW",
+      "passed": true,
+      "expected": null,
+      "actual": null,
+      "details": {}
+    }
+  ],
+  "metrics": {
+    "initial_decision": {
+      "decision_record_id": "sed_76d98b521e1346998b28a09ae1722c40",
+      "action": "EXECUTE",
+      "order_type": "LIMIT",
+      "execution_method": "PASSIVE_LIMIT_EXECUTION",
+      "recommended_quantity": 60.0,
+      "slice_plan": [
+        60.0
+      ],
+      "limit_price": 1.1,
+      "fill_probability": 0.6890991728024826,
+      "expected_slippage_bps": 2.432152895191311,
+      "allowed_slippage_bps": 8.0,
+      "estimated_market_impact_bps": 10.0,
+      "execution_cost_budget": null,
+      "expected_execution_cost": 0.08805966839999911,
+      "expected_gross_edge": null,
+      "expected_net_edge": null,
+      "execution_regime": "NORMAL_EXECUTION",
+      "execution_confidence": 0.99996664,
+      "spread_state": "NORMAL_SPREAD",
+      "liquidity_state": "LOW_LIQUIDITY",
+      "reasons": [
+        "LOW_LIQUIDITY_REDUCE_SIZE"
+      ],
+      "hypothetical_only": true,
+      "risk_approved_quantity": 100.0,
+      "target_quantity": 100.0
+    },
+    "revalidation": {
+      "decision_record_id": "sed_308822f888a94773ae8f673e58ef590f",
+      "action": "CANCEL_REMAINING_EXECUTION",
+      "order_type": "LIMIT",
+      "execution_method": "PASSIVE_LIMIT_EXECUTION",
+      "recommended_quantity": 20.0,
+      "slice_plan": [
+        20.0
+      ],
+      "limit_price": 1.098,
+      "fill_probability": 0.38,
+      "expected_slippage_bps": 18.31686278964073,
+      "allowed_slippage_bps": 8.0,
+      "estimated_market_impact_bps": 10.0,
+      "execution_cost_budget": null,
+      "expected_execution_cost": 0.11228458795229261,
+      "expected_gross_edge": null,
+      "expected_net_edge": null,
+      "execution_regime": "HIGH_VOLATILITY_EXECUTION",
+      "execution_confidence": 0.35256871782372723,
+      "spread_state": "NORMAL_SPREAD",
+      "liquidity_state": "LOW_LIQUIDITY",
+      "reasons": [
+        "LOW_LIQUIDITY_REDUCE_SIZE",
+        "SLIPPAGE_GUARD_REDUCED_SIZE"
+      ],
+      "hypothetical_only": true,
+      "risk_approved_quantity": 100.0,
+      "target_quantity": 100.0,
+      "remaining_quantity": 60.0
+    },
+    "tca": {
+      "tca_id": "tca_65d9cdaa61a04c9f95121ef14c3c4361",
+      "execution_intent_id": "se_2b58121a8cdf44158523ffdfbaca5417",
+      "ts": "2026-08-15T21:39:15.985727+00:00",
+      "strategy_id": "STRAT_A",
+      "symbol": "EUR_USD",
+      "side": "BUY",
+      "order_type": "LIMIT",
+      "session": null,
+      "market_regime": "BULLISH_TREND",
+      "volatility": "NORMAL",
+      "liquidity_state": "LOW_LIQUIDITY",
+      "expected_price": 1.1001,
+      "actual_fill_price": 1.1002,
+      "filled_quantity": 40.0,
+      "fill_rate": 0.4,
+      "slippage_absolute": 9.999999999998899e-05,
+      "slippage_bps": 0.9090082719751748,
+      "slippage_cost": 0.0039999999999995595,
+      "spread_cost": 0.0039999999999995595,
+      "fees": 0.0,
+      "estimated_market_impact": 0.044004,
+      "delay_cost": 0.0,
+      "total_execution_cost": 0.05200399999999912,
+      "expected_gross_edge": null,
+      "expected_net_edge": null,
+      "execution_quality_score": 61.9779338241986,
+      "entry_execution_score": 61.9779338241986,
+      "exit_execution_score": null,
+      "stop_slippage_bps": null,
+      "adverse_selection_bps": null,
+      "attribution": "MIXED_OR_STRATEGY",
+      "metadata_json": "{\"stop_trigger\":null}",
+      "metadata": {
+        "stop_trigger": null
+      }
+    },
+    "dashboard": {
+      "enabled": true,
+      "engine_version": "3.24",
+      "mode": "SHADOW",
+      "signal_authority": false,
+      "risk_increase_authority": false,
+      "current_execution_regime": "HIGH_VOLATILITY_EXECUTION",
+      "execution_confidence": 0.35256871782372723,
+      "execution_quality_score": 61.9779338241986,
+      "average_slippage_bps": 0.9090082719751748,
+      "fill_rate": 0.4,
+      "rejection_rate": 0.0,
+      "broker_latency_ms": 90.0,
+      "active_execution_intents": [],
+      "partial_fills": [
+        {
+          "execution_intent_id": "se_2b58121a8cdf44158523ffdfbaca5417",
+          "trade_id": null,
+          "decision_id": null,
+          "risk_decision_id": null,
+          "strategy_id": "STRAT_A",
+          "symbol": "EUR_USD",
+          "side": "BUY",
+          "target_quantity": 100.0,
+          "maximum_quantity": 100.0,
+          "risk_approved_quantity": 100.0,
+          "urgency": "NORMAL",
+          "expected_price": 1.1001,
+          "maximum_slippage_bps": 8.0,
+          "time_limit_seconds": 60,
+          "signal_time": "2026-08-15T21:39:15.962517+00:00",
+          "created_at": "2026-08-15T21:39:15.962517+00:00",
+          "expires_at": "2026-08-15T21:40:15.962517+00:00",
+          "risk_approval_valid_until": null,
+          "mode": "SHADOW",
+          "status": "CANCELLED",
+          "execution_regime": "HIGH_VOLATILITY_EXECUTION",
+          "execution_confidence": 0.35256871782372723,
+          "actual_policy": "MARKET",
+          "shadow_policy": "LIMIT",
+          "actual_requested_quantity": 60.0,
+          "shadow_requested_quantity": 20.0,
+          "filled_quantity": 40.0,
+          "remaining_quantity": 60.0,
+          "market_snapshot_id": "snap_e46c3f07970441a4ba19b1b0fe142bf5",
+          "last_reason": "LOW_LIQUIDITY_REDUCE_SIZE; SLIPPAGE_GUARD_REDUCED_SIZE",
+          "last_revalidated_at": "2026-08-15T21:39:16.001511+00:00",
+          "policy_version": "execution_policy_v1",
+          "engine_version": "3.24",
+          "updated_at": "2026-08-15T21:39:16.012114+00:00"
+        }
+      ],
+      "expired_intents": 0,
+      "daily_costs": {
+        "day": "2026-08-15",
+        "trades": 1,
+        "total_fees": 0.0,
+        "total_slippage": 0.0039999999999995595,
+        "total_spread_cost": 0.0039999999999995595,
+        "estimated_market_impact": 0.044004,
+        "total_execution_cost": 0.05200399999999912,
+        "expected_gross_edge": 0.0
+      },
+      "degradation": {
+        "status": "NORMAL",
+        "reasons": [],
+        "recent": {
+          "samples": 1,
+          "quality": 61.9779338241986,
+          "slippage": 0.9090082719751748,
+          "fill_rate": 0.4
+        },
+        "historical": {
+          "samples": 0,
+          "quality": null,
+          "slippage": null,
+          "fill_rate": null
+        },
+        "recent_rejection_rate": 0.0,
+        "historical_rejection_rate": null
+      },
+      "latency_model": {
+        "symbol": "EUR_USD",
+        "session": null,
+        "order_type": null,
+        "samples": 1,
+        "ack_mean_ms": 90.0,
+        "ack_p95_ms": 90.0,
+        "first_fill_mean_ms": null,
+        "degraded": false
+      },
+      "execution_memory": {
+        "groups": [
+          {
+            "symbol": "EUR_USD",
+            "strategy": "STRAT_A",
+            "order_type": "LIMIT",
+            "session": null,
+            "market_regime": "BULLISH_TREND",
+            "volatility": "NORMAL",
+            "liquidity_state": "LOW_LIQUIDITY",
+            "samples": 1,
+            "status": "INSUFFICIENT_DATA",
+            "avg_execution_quality": 61.9779338241986,
+            "avg_slippage_bps": 0.9090082719751748,
+            "avg_fill_rate": 0.4,
+            "recommendation": "OBSERVE_ANALYZE_RECOMMEND_ONLY"
+          }
+        ],
+        "learning_authority": false,
+        "auto_policy_change": false
+      },
+      "activation_path": [
+        "SHADOW",
+        "PAPER",
+        "CANARY",
+        "LIMITED_EXECUTION",
+        "PRODUCTION_EXECUTION"
+      ],
+      "production_policy_authority": false
+    }
+  },
+  "events": [
+    {
+      "ts": "2026-08-15T21:39:16.014698+00:00",
+      "event_type": "RISK_ENGINE_AUTHORIZES",
+      "maximum_units": 100
+    },
+    {
+      "ts": "2026-08-15T21:39:16.014711+00:00",
+      "event_type": "SMART_EXECUTION_REDUCES",
+      "recommended_units": 60.0,
+      "order_type": "LIMIT"
+    },
+    {
+      "ts": "2026-08-15T21:39:16.014714+00:00",
+      "event_type": "PARTIAL_FILL",
+      "filled": 40.0,
+      "remaining": 60.0
+    },
+    {
+      "ts": "2026-08-15T21:39:16.014716+00:00",
+      "event_type": "MARKET_CHANGES",
+      "volatility": "EXTREME",
+      "available_liquidity": 20
+    },
+    {
+      "ts": "2026-08-15T21:39:16.014718+00:00",
+      "event_type": "REVALIDATION",
+      "action": "CANCEL_REMAINING_EXECUTION"
+    }
+  ],
+  "failures": [],
+  "warnings": [],
+  "safety_violations": [],
+  "recovery_time_ms": null,
+  "deterministic_seed": null
+}

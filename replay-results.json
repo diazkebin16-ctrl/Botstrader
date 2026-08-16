@@ -1,0 +1,183 @@
+{
+  "version": "3.27",
+  "validation_type": "TIMESTAMP_ORDERED_SCENARIO_REPLAY",
+  "historical_raw_data_status": "NOT_AVAILABLE_IN_RELEASE_PACKAGE",
+  "historical_raw_candidates": [],
+  "historical_precision_claim": "NOT_CLAIMED",
+  "lookahead_policy": "At replay time t, baselines query only observation timestamps strictly earlier than t.",
+  "classification": {
+    "tp": 12,
+    "fp": 0,
+    "fn": 0,
+    "tn": 5,
+    "precision": 1.0,
+    "recall": 1.0,
+    "false_positive_rate": 0.0
+  },
+  "scenarios": {
+    "contextual_normality": {
+      "high_or_critical": 0,
+      "results": [
+        {
+          "session": "NY",
+          "raw": "NORMAL",
+          "actionable": "NORMAL",
+          "confirmed": false
+        },
+        {
+          "session": "ASIA",
+          "raw": "NORMAL",
+          "actionable": "NORMAL",
+          "confirmed": false
+        },
+        {
+          "session": "OPEN",
+          "raw": "NORMAL",
+          "actionable": "NORMAL",
+          "confirmed": false
+        }
+      ]
+    },
+    "brief_spike": {
+      "raw_detected": true,
+      "full_defensive_action": false,
+      "raw_severity": "CRITICAL",
+      "actionable_severity": "WATCH",
+      "recovery_sequence": [
+        "WATCH",
+        "WATCH",
+        "NORMAL"
+      ]
+    },
+    "gradual_deterioration": {
+      "defined_onset_step": 2,
+      "first_high_or_critical_step": 2,
+      "detection_delay_steps": 0,
+      "trajectory": [
+        {
+          "step": 1,
+          "truth_anomalous": false,
+          "raw_score": 1.0,
+          "actionable_score": 0.49,
+          "actionable_severity": "WATCH"
+        },
+        {
+          "step": 2,
+          "truth_anomalous": true,
+          "raw_score": 1.0,
+          "actionable_score": 1.0,
+          "actionable_severity": "CRITICAL"
+        },
+        {
+          "step": 3,
+          "truth_anomalous": true,
+          "raw_score": 1.0,
+          "actionable_score": 1.0,
+          "actionable_severity": "CRITICAL"
+        },
+        {
+          "step": 4,
+          "truth_anomalous": true,
+          "raw_score": 1.0,
+          "actionable_score": 1.0,
+          "actionable_severity": "CRITICAL"
+        },
+        {
+          "step": 5,
+          "truth_anomalous": true,
+          "raw_score": 1.0,
+          "actionable_score": 1.0,
+          "actionable_severity": "CRITICAL"
+        },
+        {
+          "step": 6,
+          "truth_anomalous": true,
+          "raw_score": 1.0,
+          "actionable_score": 1.0,
+          "actionable_severity": "CRITICAL"
+        },
+        {
+          "step": 7,
+          "truth_anomalous": true,
+          "raw_score": 1.0,
+          "actionable_score": 1.0,
+          "actionable_severity": "CRITICAL"
+        },
+        {
+          "step": 8,
+          "truth_anomalous": true,
+          "raw_score": 1.0,
+          "actionable_score": 1.0,
+          "actionable_severity": "CRITICAL"
+        },
+        {
+          "step": 9,
+          "truth_anomalous": true,
+          "raw_score": 1.0,
+          "actionable_score": 1.0,
+          "actionable_severity": "CRITICAL"
+        },
+        {
+          "step": 10,
+          "truth_anomalous": true,
+          "raw_score": 1.0,
+          "actionable_score": 1.0,
+          "actionable_severity": "CRITICAL"
+        },
+        {
+          "step": 11,
+          "truth_anomalous": true,
+          "raw_score": 1.0,
+          "actionable_score": 1.0,
+          "actionable_severity": "CRITICAL"
+        },
+        {
+          "step": 12,
+          "truth_anomalous": true,
+          "raw_score": 1.0,
+          "actionable_score": 1.0,
+          "actionable_severity": "CRITICAL"
+        }
+      ]
+    },
+    "combined_critical": {
+      "raw_severity": "CRITICAL",
+      "actionable_severity": "CRITICAL",
+      "score": 1.0,
+      "confirmed": true,
+      "rare_event_id": "rare_e3c9c896461f430db50cc131cfc3688e",
+      "subtypes": [
+        "PRICE_ANOMALY",
+        "VOLATILITY_EXTREME",
+        "SPREAD_ANOMALY",
+        "LIQUIDITY_SHOCK",
+        "OUT_OF_DISTRIBUTION_DATA",
+        "CORRELATION_CONVERGENCE",
+        "ENSEMBLE_DISAGREEMENT_SHOCK",
+        "EXECUTION_ANOMALY",
+        "DIVERSIFICATION_BREAKDOWN",
+        "UNKNOWN_REGIME"
+      ]
+    },
+    "recovery_interrupted": {
+      "initial": "CRITICAL",
+      "sequence": [
+        "CRITICAL",
+        "CRITICAL",
+        "WATCH",
+        "WATCH",
+        "NORMAL",
+        "NORMAL"
+      ],
+      "one_normal_does_not_immediately_normalize": true,
+      "interruption_reenters_defense": true,
+      "eventually_relaxes": true
+    }
+  },
+  "limitations": [
+    "Scenario replay is not a claim of historical/live anomaly precision.",
+    "No raw historical bid/ask/liquidity dataset is packaged with this release.",
+    "Production enforcement remains disabled; real shadow evidence is still required before promotion."
+  ],
+  "production_authority": false
+}

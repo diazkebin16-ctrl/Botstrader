@@ -1,0 +1,8 @@
+{
+  "version": "3.27",
+  "dynamic_baseline_rule": "timestamp < current observation timestamp",
+  "future_row_insertion_test": "PASS",
+  "scenario_replay_timestamp_ordered": true,
+  "structural_change_uses_prior observations only": true,
+  "result": "PASS"
+}

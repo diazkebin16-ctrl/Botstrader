@@ -90,7 +90,7 @@ def order_body():
                      "positionFill":"DEFAULT","stopLossOnFill":{"price":"1.09900","timeInForce":"GTC"},
                      "takeProfitOnFill":{"price":"1.10200","timeInForce":"GTC"}}}
 
-async def test_unknown_duplicate_and_reconcile():
+async def _test_unknown_duplicate_and_reconcile_async():
     db=tempfile.mktemp(suffix=".db");seed_base(db)
     m=RecoveryManager(db,"https://broker.test","A","T","PRIMARY",
                       circuit_failure_threshold=5,request_min_interval_ms=0,
@@ -181,7 +181,7 @@ async def test_unknown_duplicate_and_reconcile():
     assert m2.new_trades_allowed() is False
     os.remove(db)
 
-async def test_rate_limit_and_circuit_breaker():
+async def _test_rate_limit_and_circuit_breaker_async():
     db=tempfile.mktemp(suffix=".db");seed_base(db)
     m=RecoveryManager(db,"https://broker.test","A","T","PRIMARY",
                       circuit_failure_threshold=3,circuit_open_seconds=.01,
@@ -252,11 +252,18 @@ def test_critical_mismatch_and_protection():
     assert any(x["item_type"]=="PROTECTIVE_ORDER" and x["status"]=="CRITICAL_MISMATCH" for x in items)
     os.remove(db)
 
+
+def test_unknown_duplicate_and_reconcile():
+    asyncio.run(_test_unknown_duplicate_and_reconcile_async())
+
+def test_rate_limit_and_circuit_breaker():
+    asyncio.run(_test_rate_limit_and_circuit_breaker_async())
+
 async def main():
     test_state_machine_and_db_failure()
     test_critical_mismatch_and_protection()
-    await test_unknown_duplicate_and_reconcile()
-    await test_rate_limit_and_circuit_breaker()
+    await _test_unknown_duplicate_and_reconcile_async()
+    await _test_rate_limit_and_circuit_breaker_async()
     print("recovery manager tests: OK")
 
 if __name__=="__main__":

@@ -1,0 +1,23 @@
+{
+  "version": "3.27",
+  "evidence_type": "SYNTHETIC_LABELLED_SHADOW_VALIDATION",
+  "seed": 190027,
+  "counts": {
+    "true_positive": 10,
+    "false_positive": 0,
+    "false_negative": 0,
+    "true_negative": 15
+  },
+  "precision": 1.0,
+  "recall": 1.0,
+  "false_positive_rate": 0.0,
+  "mean_detection_delay_observations": 0.0,
+  "isolated_false_alarm_full_defensive_overreactions": 0,
+  "cost_sensitive_interpretation": "Critical false negatives are treated as more costly than brief WATCH/ELEVATED false alarms.",
+  "limitations": [
+    "Synthetic labelled episodes do not establish live precision/recall.",
+    "Real Step 19 Shadow evidence and historical event replay are still required before enforcement.",
+    "Hysteresis intentionally preserves defensive state during stabilization and should not be counted as a new anomaly."
+  ],
+  "production_authority": false
+}

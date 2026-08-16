@@ -1,0 +1,20 @@
+BotsTrader / Market Alert V3.27 - STEP 19 FINAL
+Advanced Anomaly Detection
+
+Base: V3.26 Dynamic Capital Allocation Shadow package
+Added/updated for Step 19:
+- anomaly_engine.py
+- test_anomaly_engine.py
+- test_anomaly_integration.py
+- STEP19_ANOMALY_DETECTION.md
+- step19-simulation-v3.27.json
+- step19-shadow-validation-v3.27.json
+- step19-certification-evidence/
+
+Certification status: STEP 19 = COMPLETE
+Runtime mode: ANOMALY_SHADOW_MODE
+Production authority: FALSE
+Promotion beyond shadow: NOT CERTIFIED
+Historical raw microstructure validation: NOT AVAILABLE IN RELEASE PACKAGE
+
+No Step 20 implementation is included.

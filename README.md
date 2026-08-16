@@ -1,4 +1,91 @@
-# Market Alert V3.23 — Production Readiness & Minimal Live Certification
+# Market Alert V3.27 — Advanced Anomaly Detection Shadow
+
+V3.27 implements **Step 19: Advanced Anomaly Detection Shadow** on top of the previously validated execution, ensemble, allocation, governance, recovery, and evaluation layers. The Anomaly Engine starts in **SHADOW**, has no BUY/SELL authority, cannot increase risk, and does not directly control production.
+
+See [`STEP17_ENSEMBLE.md`](STEP17_ENSEMBLE.md) for the architecture, model audit, family/correlation rules, validation boundaries and tests.
+
+---
+
+## Step 16 — Smart Execution Shadow & TCA
+
+V3.24 implements **Step 16: Execution Optimization, Slippage and Fill Quality** as a second-generation layer.
+
+The safety priority is:
+
+**EXECUTION QUALITY → COST CONTROL → LIQUIDITY → SPEED → SAFETY**
+
+## Critical boundary
+
+Smart Execution starts in **SHADOW**:
+
+```text
+RISK ENGINE
+    ↓
+SMART EXECUTION ENGINE (SHADOW)
+    ↓
+EXISTING SAFE EXECUTION
+    ↓
+RECOVERY / ORDER STATE
+    ↓
+BROKER
+```
+
+It does **not** generate BUY/SELL signals, does **not** increase Risk Engine authorization, does **not** replace the current MARKET/FOK execution yet, and does **not** send hypothetical LIMIT/sliced orders to the broker.
+
+Hard invariants:
+
+- `EXECUTED_QUANTITY <= RISK_APPROVED_QUANTITY`
+- no execution without valid risk approval
+- no execution with stale critical data
+- no duplicate execution
+- expired intent means no new order
+- Emergency Stop means no new entry
+- Smart Execution failure never falls through to an uncontrolled market order
+
+## What V3.24 adds
+
+- Structured Smart Execution intents.
+- Pre-execution bid/ask/spread/liquidity snapshots.
+- Explainable expected-slippage estimator.
+- Market-vs-Limit recommendation in shadow.
+- Fill-probability estimate for passive execution.
+- Liquidity-aware size reduction.
+- Order-slicing plans with an absolute Risk Engine ceiling.
+- Partial-fill revalidation and intent expiry.
+- Transaction Cost Analysis (TCA).
+- Execution Quality Score.
+- Execution Confidence.
+- Spread and liquidity states.
+- Broker latency baselines.
+- Entry/exit and stop execution analysis.
+- Adverse-selection measurement.
+- Execution memory grouped by symbol, strategy, order type, session, regime, volatility and liquidity.
+- Daily execution-cost monitoring.
+- Execution-degradation detection.
+- Shadow actual-vs-hypothetical comparison without assuming a hypothetical LIMIT would have filled.
+- Research-only Candidate Execution Policies that cannot auto-deploy.
+
+## Activation path
+
+```text
+SHADOW
+→ PAPER
+→ CANARY
+→ LIMITED_EXECUTION
+→ PRODUCTION_EXECUTION
+```
+
+V3.24 is intentionally fixed at **SHADOW**. Advancing this path requires new validation evidence and the existing Change Management / Validation / Deployment / Governance controls.
+
+## Historical comparison limitation
+
+Before V3.24 the project did not persist enough bid/ask/liquidity microstructure to reconstruct a genuine historical Smart-vs-Base execution counterfactual. Therefore the included Step 16 comparison is a **seeded synthetic microstructure simulation**, not evidence of live profitability.
+
+The simulation is used to validate mechanics, risk ceilings, fill assumptions and cost accounting. It must not be interpreted as proof that Smart Execution improves market returns.
+
+---
+
+## Step 15 — Production Readiness & Minimal Live Certification
 
 V3.23 implements **Step 15: Production Certification and Gradual Real Activation**.
 
@@ -292,3 +379,15 @@ Step 15 tests prove, among other things:
 **NO_GO / BLOCKED.**
 
 This is not a defect in the gate. It is the correct certification result until the remaining live prerequisites are completed. In particular, real capital must not be activated while the Risk Engine remains shadow-only.
+
+## V3.26 — Step 18 Dynamic Capital Allocation Shadow
+Adds a shadow-only Capital Allocation Engine between AI Strategy Director and the final Risk Engine veto. It distributes an already-authorized risk budget using net edge, reliability, volatility, drawdown, execution quality, regime evidence and correlation, while permitting unused risk. It cannot generate signals/orders, cannot increase hard risk limits, and cannot auto-deploy. See `STEP18_CAPITAL_ALLOCATION.md`.
+
+
+## Step 19 safety status
+
+- Anomaly Engine mode: **SHADOW**
+- Direct trading authority: **none**
+- Risk-increase authority: **none**
+- Critical anomaly integration: Governance receives critical composite anomalies as a conservative **freeze recommendation**; SHADOW mode does not enforce the freeze.
+- Production use: keep disabled until replay/shadow evidence and production-readiness gates are satisfied.

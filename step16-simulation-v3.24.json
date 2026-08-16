@@ -1,0 +1,39 @@
+{
+  "version": "3.24",
+  "seed": 160024,
+  "scenarios": 500,
+  "evidence_type": "SYNTHETIC_MICROSTRUCTURE_SIMULATION",
+  "historical_microstructure_backtest_status": "INSUFFICIENT_HISTORICAL_BID_ASK_LIQUIDITY_DATA_BEFORE_STEP16",
+  "base_execution": {
+    "gross_pnl_proxy": 16.763327818526097,
+    "net_pnl_proxy": -124.325382248095,
+    "avg_slippage_bps": 7.604986666666667,
+    "fees": 2.812340953885443,
+    "fill_rate": 0.59346,
+    "max_drawdown_proxy": 124.32538224809505,
+    "execution_quality": 55.886246666666665
+  },
+  "smart_execution_shadow": {
+    "gross_pnl_proxy": 0.48451736150369173,
+    "net_pnl_proxy": -0.8234142995346907,
+    "avg_slippage_bps": 0.2142910000000015,
+    "fees": 0.06303363698913676,
+    "fill_rate": 0.086,
+    "max_drawdown_proxy": 0.8234142995346906,
+    "execution_quality": 70.11256933333333
+  },
+  "comparison": {
+    "net_pnl_proxy_delta": 123.5019679485603,
+    "avg_slippage_bps_delta": -7.390695666666666,
+    "fill_rate_delta": -0.50746,
+    "execution_quality_delta": 14.226322666666661,
+    "drawdown_delta": -123.50196794856036
+  },
+  "safety": {
+    "executed_or_requested_never_above_risk_approved": true,
+    "shadow_only": true,
+    "no_causal_fill_assumption": true
+  },
+  "interpretation": "Simulation validates mechanics only. It is not evidence that Smart Execution improves live profitability.",
+  "production_activation": false
+}

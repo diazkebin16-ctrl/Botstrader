@@ -6,6 +6,7 @@ import logging
 import math
 import hashlib
 import time
+import statistics
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -15,6 +16,9 @@ from security_manager import SecurityManager, RedactingFilter, sanitize as secur
 from system_evaluation import SystemEvaluationEngine
 from governance_engine import GovernanceEngine, AUTHORITY_MATRIX, AUTHORITY_PRIORITY
 from production_readiness import ProductionReadinessGate
+from smart_execution import SmartExecutionEngine
+from ensemble_engine import EnsembleEngine
+from capital_allocation import CapitalAllocationEngine
 from observability import (
     ObservabilityManager, DEPENDENCY_CRITICAL, DEPENDENCY_IMPORTANT, DEPENDENCY_NON_CRITICAL,
     stale_status as observability_stale_status, reconciliation_status as observability_reconciliation_status,
@@ -101,7 +105,7 @@ TREND_RUNNER_MIN_SCORE = max(0.0, float(os.getenv("TREND_RUNNER_MIN_SCORE", "0.6
 TREND_RUNNER_TP_R = max(2.0, float(os.getenv("TREND_RUNNER_TP_R", "3.0")))
 TREND_RUNNER_TRAIL_START_R = max(1.5, float(os.getenv("TREND_RUNNER_TRAIL_START_R", "1.75")))
 TREND_RUNNER_TRAIL_DISTANCE_R = max(0.40, float(os.getenv("TREND_RUNNER_TRAIL_DISTANCE_R", "0.90")))
-VERSION_TAG = "3.23"
+VERSION_TAG = "3.26"
 ENTRY_TIMING_ENABLED = os.getenv("ENTRY_TIMING_ENABLED", "true").lower() == "true"
 MAX_ENTRY_EXTENSION_ATR = max(0.5, float(os.getenv("MAX_ENTRY_EXTENSION_ATR", "1.20")))
 MIN_ROOM_TO_BARRIER_R = max(1.0, float(os.getenv("MIN_ROOM_TO_BARRIER_R", "1.50")))
@@ -251,7 +255,7 @@ DEPLOYMENT_MAX_LATENCY_SECONDS = max(.5,float(os.getenv("DEPLOYMENT_MAX_LATENCY_
 DEPLOYMENT_AUTO_PROMOTION = False
 PRODUCTION_READINESS_ENABLED = os.getenv("PRODUCTION_READINESS_ENABLED","true").lower()=="true"
 PRODUCTION_DRY_RUN_MODE = os.getenv("PRODUCTION_DRY_RUN_MODE","true").lower()=="true"
-PRODUCTION_STEP14_REPORT_PATH = os.getenv("PRODUCTION_STEP14_REPORT_PATH","/mnt/data/step14-results/step14-integration-report-v3.23.json")
+PRODUCTION_STEP14_REPORT_PATH = os.getenv("PRODUCTION_STEP14_REPORT_PATH","/mnt/data/market-alert-v3.25-ensemble-shadow/certification-evidence/step14-integration-report-v3.25.json")
 PRODUCTION_MINIMAL_RISK_MULTIPLIER = max(0.01,min(0.10,float(os.getenv("PRODUCTION_MINIMAL_RISK_MULTIPLIER","0.05"))))
 PRODUCTION_LIMITED_RISK_MULTIPLIER = max(PRODUCTION_MINIMAL_RISK_MULTIPLIER,min(0.25,float(os.getenv("PRODUCTION_LIMITED_RISK_MULTIPLIER","0.10"))))
 PRODUCTION_CONTROLLED_RISK_MULTIPLIER = max(PRODUCTION_LIMITED_RISK_MULTIPLIER,min(0.50,float(os.getenv("PRODUCTION_CONTROLLED_RISK_MULTIPLIER","0.25"))))
@@ -261,6 +265,42 @@ PRODUCTION_LIMITED_MIN_TRADES = max(25,int(os.getenv("PRODUCTION_LIMITED_MIN_TRA
 PRODUCTION_LIMITED_MIN_DAYS = max(7,int(os.getenv("PRODUCTION_LIMITED_MIN_DAYS","10")))
 PRODUCTION_CONTROLLED_MIN_TRADES = max(50,int(os.getenv("PRODUCTION_CONTROLLED_MIN_TRADES","50")))
 PRODUCTION_CONTROLLED_MIN_DAYS = max(14,int(os.getenv("PRODUCTION_CONTROLLED_MIN_DAYS","20")))
+SMART_EXECUTION_ENABLED = os.getenv("SMART_EXECUTION_ENABLED","true").lower()=="true"
+SMART_EXECUTION_MODE = os.getenv("SMART_EXECUTION_MODE","SHADOW").strip().upper()
+SMART_EXECUTION_SHADOW_MODE = True  # Step 16 enforcement boundary: recommendations only.
+# Step 16 starts in SHADOW. No server-side live policy authority is granted here.
+SMART_EXECUTION_POLICY_AUTHORITY = False
+SMART_EXECUTION_MAX_SNAPSHOT_AGE_SECONDS = max(1,int(os.getenv("SMART_EXECUTION_MAX_SNAPSHOT_AGE_SECONDS","5")))
+SMART_EXECUTION_INTENT_TTL_SECONDS = max(5,int(os.getenv("SMART_EXECUTION_INTENT_TTL_SECONDS","60")))
+SMART_EXECUTION_DEFAULT_MAX_SLIPPAGE_BPS = max(.1,float(os.getenv("SMART_EXECUTION_DEFAULT_MAX_SLIPPAGE_BPS","8")))
+SMART_EXECUTION_LIQUIDITY_PARTICIPATION = max(.01,min(1.0,float(os.getenv("SMART_EXECUTION_LIQUIDITY_PARTICIPATION","0.25"))))
+SMART_EXECUTION_SLICE_THRESHOLD_UNITS = max(1,float(os.getenv("SMART_EXECUTION_SLICE_THRESHOLD_UNITS","1000")))
+SMART_EXECUTION_SLICE_SIZE_UNITS = max(1,float(os.getenv("SMART_EXECUTION_SLICE_SIZE_UNITS","200")))
+SMART_EXECUTION_MIN_HISTORY_SAMPLES = max(5,int(os.getenv("SMART_EXECUTION_MIN_HISTORY_SAMPLES","20")))
+SMART_EXECUTION_DEGRADATION_MIN_SAMPLES = max(5,int(os.getenv("SMART_EXECUTION_DEGRADATION_MIN_SAMPLES","10")))
+ENSEMBLE_ENABLED = os.getenv("ENSEMBLE_ENABLED","true").lower()=="true"
+ENSEMBLE_MODE = "SHADOW"  # Step 17 enforcement boundary: observation only.
+ENSEMBLE_POLICY_AUTHORITY = False
+ENSEMBLE_MAX_MODEL_WEIGHT = max(.10,min(.60,float(os.getenv("ENSEMBLE_MAX_MODEL_WEIGHT","0.40"))))
+ENSEMBLE_MAX_FAMILY_WEIGHT = max(ENSEMBLE_MAX_MODEL_WEIGHT,min(.80,float(os.getenv("ENSEMBLE_MAX_FAMILY_WEIGHT","0.55"))))
+ENSEMBLE_MIN_SAMPLE_SIZE = max(10,int(os.getenv("ENSEMBLE_MIN_SAMPLE_SIZE","30")))
+ENSEMBLE_CORRELATION_THRESHOLD = max(.50,min(.95,float(os.getenv("ENSEMBLE_CORRELATION_THRESHOLD","0.75"))))
+ENSEMBLE_WEIGHT_CHANGE_LIMIT = max(.01,min(.25,float(os.getenv("ENSEMBLE_WEIGHT_CHANGE_LIMIT","0.10"))))
+ENSEMBLE_WEIGHT_COOLDOWN_HOURS = max(6,int(os.getenv("ENSEMBLE_WEIGHT_COOLDOWN_HOURS","24")))
+ENSEMBLE_MIN_OBSERVATION_HOURS = max(6,int(os.getenv("ENSEMBLE_MIN_OBSERVATION_HOURS","24")))
+ENSEMBLE_SIGNAL_TTL_SECONDS = max(30,int(os.getenv("ENSEMBLE_SIGNAL_TTL_SECONDS","300")))
+CAPITAL_ALLOCATION_ENABLED = os.getenv("CAPITAL_ALLOCATION_ENABLED","true").lower()=="true"
+CAPITAL_ALLOCATION_SHADOW_MODE = True
+CAPITAL_ALLOCATION_MAX_STRATEGY = max(.01,min(.25,float(os.getenv("CAPITAL_ALLOCATION_MAX_STRATEGY","0.25"))))
+CAPITAL_ALLOCATION_MAX_FAMILY = max(.05,min(.40,float(os.getenv("CAPITAL_ALLOCATION_MAX_FAMILY","0.40"))))
+CAPITAL_ALLOCATION_MAX_SYMBOL = max(.01,min(.25,float(os.getenv("CAPITAL_ALLOCATION_MAX_SYMBOL","0.25"))))
+CAPITAL_ALLOCATION_MAX_ASSET = max(.05,min(.40,float(os.getenv("CAPITAL_ALLOCATION_MAX_ASSET","0.40"))))
+CAPITAL_ALLOCATION_MAX_DIRECTIONAL = max(.10,min(.65,float(os.getenv("CAPITAL_ALLOCATION_MAX_DIRECTIONAL","0.65"))))
+CAPITAL_ALLOCATION_MAX_CLUSTER = max(.05,min(.35,float(os.getenv("CAPITAL_ALLOCATION_MAX_CLUSTER","0.35"))))
+CAPITAL_ALLOCATION_MAX_CHANGE = max(.005,min(.05,float(os.getenv("CAPITAL_ALLOCATION_MAX_CHANGE","0.05"))))
+CAPITAL_ALLOCATION_COOLDOWN_HOURS = max(1,int(os.getenv("CAPITAL_ALLOCATION_COOLDOWN_HOURS","24")))
+CAPITAL_ALLOCATION_REBALANCE_THRESHOLD = max(.001,min(.02,float(os.getenv("CAPITAL_ALLOCATION_REBALANCE_THRESHOLD","0.02"))))
+CAPITAL_ALLOCATION_HEAT_LIMIT = max(.20,min(.80,float(os.getenv("CAPITAL_ALLOCATION_HEAT_LIMIT","0.80"))))
 OBSERVABILITY_ENABLED = os.getenv("OBSERVABILITY_ENABLED","true").lower()=="true"
 OBSERVABILITY_ALERT_COOLDOWN_SECONDS = max(30,int(os.getenv("OBSERVABILITY_ALERT_COOLDOWN_SECONDS","900")))
 OBSERVABILITY_MARKET_STALE_SECONDS = max(60,int(os.getenv("OBSERVABILITY_MARKET_STALE_SECONDS","180")))
@@ -337,7 +377,7 @@ logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(
 for _handler in logging.getLogger().handlers:
     _handler.addFilter(RedactingFilter())
 log = logging.getLogger("market-alert")
-app = FastAPI(title="Market Alert V3.23 — Production Readiness & Minimal Live Certification")
+app = FastAPI(title="Market Alert V3.26 — Dynamic Capital Allocation Shadow")
 state: Dict[str, Any] = {
     "started": datetime.now(timezone.utc).isoformat(),
     "last_scan": None,
@@ -418,6 +458,33 @@ SECURITY_CONFIG_SCHEMA = {
     "governance.meta_risk_high":{"type":"float","min":40.0,"max":90.0,"risk_level":"HIGH_RISK"},
     "governance.meta_risk_critical":{"type":"float","min":60.0,"max":100.0,"risk_level":"CRITICAL"},
     "governance.decision_freshness_hours":{"type":"int","min":1,"max":72,"risk_level":"MEDIUM_RISK"},
+    "smart_execution.mode":{"type":"str","allowed":["SHADOW","PAPER","CANARY","LIMITED_EXECUTION","PRODUCTION_EXECUTION"],"risk_level":"CRITICAL"},
+    "smart_execution.max_snapshot_age_seconds":{"type":"int","min":1,"max":60,"risk_level":"HIGH_RISK"},
+    "smart_execution.intent_ttl_seconds":{"type":"int","min":5,"max":600,"risk_level":"HIGH_RISK"},
+    "smart_execution.max_slippage_bps":{"type":"float","min":0.1,"max":50.0,"risk_level":"HIGH_RISK"},
+    "smart_execution.liquidity_participation":{"type":"float","min":0.01,"max":1.0,"risk_level":"HIGH_RISK"},
+    "smart_execution.slice_threshold_units":{"type":"float","min":1,"max":10000000,"risk_level":"MEDIUM_RISK"},
+    "smart_execution.slice_size_units":{"type":"float","min":1,"max":10000000,"risk_level":"MEDIUM_RISK"},
+    # Ensemble influence controls. Managed config may become more conservative but cannot
+    # silently loosen the V3.25 correlation/evidence caps.
+    "ensemble.max_model_weight":{"type":"float","min":0.05,"max":ENSEMBLE_MAX_MODEL_WEIGHT,"hard_ceiling":ENSEMBLE_MAX_MODEL_WEIGHT,"risk_level":"HIGH_RISK"},
+    "ensemble.max_family_weight":{"type":"float","min":0.10,"max":ENSEMBLE_MAX_FAMILY_WEIGHT,"hard_ceiling":ENSEMBLE_MAX_FAMILY_WEIGHT,"risk_level":"HIGH_RISK"},
+    "ensemble.min_sample_size":{"type":"int","min":ENSEMBLE_MIN_SAMPLE_SIZE,"max":100000,"risk_level":"HIGH_RISK"},
+    "ensemble.correlation_threshold":{"type":"float","min":0.40,"max":ENSEMBLE_CORRELATION_THRESHOLD,"hard_ceiling":ENSEMBLE_CORRELATION_THRESHOLD,"risk_level":"HIGH_RISK"},
+    "ensemble.weight_change_limit":{"type":"float","min":0.01,"max":ENSEMBLE_WEIGHT_CHANGE_LIMIT,"hard_ceiling":ENSEMBLE_WEIGHT_CHANGE_LIMIT,"risk_level":"HIGH_RISK"},
+    "ensemble.weight_cooldown_hours":{"type":"int","min":ENSEMBLE_WEIGHT_COOLDOWN_HOURS,"max":8760,"risk_level":"HIGH_RISK"},
+    "ensemble.min_observation_hours":{"type":"int","min":ENSEMBLE_MIN_OBSERVATION_HOURS,"max":8760,"risk_level":"HIGH_RISK"},
+    "ensemble.signal_ttl_seconds":{"type":"int","min":30,"max":ENSEMBLE_SIGNAL_TTL_SECONDS,"hard_ceiling":ENSEMBLE_SIGNAL_TTL_SECONDS,"risk_level":"HIGH_RISK"},
+    "allocation.max_strategy":{"type":"float","min":0.01,"max":CAPITAL_ALLOCATION_MAX_STRATEGY,"hard_ceiling":CAPITAL_ALLOCATION_MAX_STRATEGY,"risk_level":"CRITICAL"},
+    "allocation.max_family":{"type":"float","min":0.05,"max":CAPITAL_ALLOCATION_MAX_FAMILY,"hard_ceiling":CAPITAL_ALLOCATION_MAX_FAMILY,"risk_level":"CRITICAL"},
+    "allocation.max_symbol":{"type":"float","min":0.01,"max":CAPITAL_ALLOCATION_MAX_SYMBOL,"hard_ceiling":CAPITAL_ALLOCATION_MAX_SYMBOL,"risk_level":"CRITICAL"},
+    "allocation.max_asset":{"type":"float","min":0.05,"max":CAPITAL_ALLOCATION_MAX_ASSET,"hard_ceiling":CAPITAL_ALLOCATION_MAX_ASSET,"risk_level":"CRITICAL"},
+    "allocation.max_directional":{"type":"float","min":0.10,"max":CAPITAL_ALLOCATION_MAX_DIRECTIONAL,"hard_ceiling":CAPITAL_ALLOCATION_MAX_DIRECTIONAL,"risk_level":"CRITICAL"},
+    "allocation.max_cluster":{"type":"float","min":0.05,"max":CAPITAL_ALLOCATION_MAX_CLUSTER,"hard_ceiling":CAPITAL_ALLOCATION_MAX_CLUSTER,"risk_level":"CRITICAL"},
+    "allocation.max_change":{"type":"float","min":0.005,"max":CAPITAL_ALLOCATION_MAX_CHANGE,"hard_ceiling":CAPITAL_ALLOCATION_MAX_CHANGE,"risk_level":"HIGH_RISK"},
+    "allocation.cooldown_hours":{"type":"int","min":CAPITAL_ALLOCATION_COOLDOWN_HOURS,"max":8760,"risk_level":"HIGH_RISK"},
+    "allocation.rebalance_threshold":{"type":"float","min":CAPITAL_ALLOCATION_REBALANCE_THRESHOLD,"max":0.20,"risk_level":"HIGH_RISK"},
+    "allocation.heat_limit":{"type":"float","min":0.20,"max":CAPITAL_ALLOCATION_HEAT_LIMIT,"hard_ceiling":CAPITAL_ALLOCATION_HEAT_LIMIT,"risk_level":"CRITICAL"},
     "production.minimal_risk_multiplier":{"type":"float","min":0.01,"max":PRODUCTION_MINIMAL_RISK_MULTIPLIER,"hard_ceiling":PRODUCTION_MINIMAL_RISK_MULTIPLIER,"risk_level":"CRITICAL"},
     "production.limited_risk_multiplier":{"type":"float","min":0.01,"max":PRODUCTION_LIMITED_RISK_MULTIPLIER,"hard_ceiling":PRODUCTION_LIMITED_RISK_MULTIPLIER,"risk_level":"CRITICAL"},
     "production.controlled_risk_multiplier":{"type":"float","min":0.01,"max":PRODUCTION_CONTROLLED_RISK_MULTIPLIER,"hard_ceiling":PRODUCTION_CONTROLLED_RISK_MULTIPLIER,"risk_level":"CRITICAL"},
@@ -483,6 +550,21 @@ SECURITY_INITIAL_CONFIG = {
     "governance.meta_risk_high":GOVERNANCE_META_RISK_HIGH,
     "governance.meta_risk_critical":GOVERNANCE_META_RISK_CRITICAL,
     "governance.decision_freshness_hours":GOVERNANCE_DECISION_FRESHNESS_HOURS,
+    "smart_execution.mode":"SHADOW",
+    "smart_execution.max_snapshot_age_seconds":SMART_EXECUTION_MAX_SNAPSHOT_AGE_SECONDS,
+    "smart_execution.intent_ttl_seconds":SMART_EXECUTION_INTENT_TTL_SECONDS,
+    "smart_execution.max_slippage_bps":SMART_EXECUTION_DEFAULT_MAX_SLIPPAGE_BPS,
+    "smart_execution.liquidity_participation":SMART_EXECUTION_LIQUIDITY_PARTICIPATION,
+    "smart_execution.slice_threshold_units":SMART_EXECUTION_SLICE_THRESHOLD_UNITS,
+    "smart_execution.slice_size_units":SMART_EXECUTION_SLICE_SIZE_UNITS,
+    "ensemble.max_model_weight":ENSEMBLE_MAX_MODEL_WEIGHT,
+    "ensemble.max_family_weight":ENSEMBLE_MAX_FAMILY_WEIGHT,
+    "ensemble.min_sample_size":ENSEMBLE_MIN_SAMPLE_SIZE,
+    "ensemble.correlation_threshold":ENSEMBLE_CORRELATION_THRESHOLD,
+    "ensemble.weight_change_limit":ENSEMBLE_WEIGHT_CHANGE_LIMIT,
+    "ensemble.weight_cooldown_hours":ENSEMBLE_WEIGHT_COOLDOWN_HOURS,
+    "ensemble.min_observation_hours":ENSEMBLE_MIN_OBSERVATION_HOURS,
+    "ensemble.signal_ttl_seconds":ENSEMBLE_SIGNAL_TTL_SECONDS,
     "production.minimal_risk_multiplier":PRODUCTION_MINIMAL_RISK_MULTIPLIER,
     "production.limited_risk_multiplier":PRODUCTION_LIMITED_RISK_MULTIPLIER,
     "production.controlled_risk_multiplier":PRODUCTION_CONTROLLED_RISK_MULTIPLIER,
@@ -532,6 +614,20 @@ def sync_security_runtime_config():
     deployment_manager.max_exposure_increase=float(managed_value("deployment.max_exposure_increase",DEPLOYMENT_MAX_EXPOSURE_INCREASE))
     try:
         observability_manager.alert_cooldown_seconds=int(managed_value("observability.alert_cooldown_seconds",OBSERVABILITY_ALERT_COOLDOWN_SECONDS))
+    except Exception:
+        pass
+    # Ensemble is always SHADOW in Step 17, but its evidence/correlation caps are
+    # managed/versioned through Change Management. Runtime changes cannot grant order or risk authority.
+    try:
+        ensemble_engine.max_model_weight=float(managed_value("ensemble.max_model_weight",ENSEMBLE_MAX_MODEL_WEIGHT))
+        ensemble_engine.max_family_weight=float(managed_value("ensemble.max_family_weight",ENSEMBLE_MAX_FAMILY_WEIGHT))
+        ensemble_engine.min_sample_size=int(managed_value("ensemble.min_sample_size",ENSEMBLE_MIN_SAMPLE_SIZE))
+        ensemble_engine.correlation_threshold=float(managed_value("ensemble.correlation_threshold",ENSEMBLE_CORRELATION_THRESHOLD))
+        ensemble_engine.weight_change_limit=float(managed_value("ensemble.weight_change_limit",ENSEMBLE_WEIGHT_CHANGE_LIMIT))
+        ensemble_engine.weight_cooldown_hours=int(managed_value("ensemble.weight_cooldown_hours",ENSEMBLE_WEIGHT_COOLDOWN_HOURS))
+        ensemble_engine.min_observation_window_hours=int(managed_value("ensemble.min_observation_hours",ENSEMBLE_MIN_OBSERVATION_HOURS))
+        ensemble_engine.default_signal_ttl_seconds=int(managed_value("ensemble.signal_ttl_seconds",ENSEMBLE_SIGNAL_TTL_SECONDS))
+        ensemble_engine.mode="SHADOW"
     except Exception:
         pass
 
@@ -698,6 +794,54 @@ governance_engine.set_runtime(
     config_version=security_manager.current_version()
 )
 
+smart_execution_engine = SmartExecutionEngine(
+    DB, VERSION_TAG,
+    mode="SHADOW",  # Step 16 deliberately starts observation-only.
+    min_history_samples=SMART_EXECUTION_MIN_HISTORY_SAMPLES,
+    max_snapshot_age_seconds=SMART_EXECUTION_MAX_SNAPSHOT_AGE_SECONDS,
+    default_intent_ttl_seconds=SMART_EXECUTION_INTENT_TTL_SECONDS,
+    liquidity_participation=SMART_EXECUTION_LIQUIDITY_PARTICIPATION,
+    slice_threshold_units=SMART_EXECUTION_SLICE_THRESHOLD_UNITS,
+    slice_size_units=SMART_EXECUTION_SLICE_SIZE_UNITS,
+    latency_warning_ms=OBSERVABILITY_BROKER_LATENCY_WARNING_MS,
+    degradation_min_samples=SMART_EXECUTION_DEGRADATION_MIN_SAMPLES
+)
+smart_execution_engine.ensure_schema()
+
+ensemble_engine = EnsembleEngine(
+    DB, VERSION_TAG, mode="SHADOW",
+    max_model_weight=ENSEMBLE_MAX_MODEL_WEIGHT,
+    max_family_weight=ENSEMBLE_MAX_FAMILY_WEIGHT,
+    min_sample_size=ENSEMBLE_MIN_SAMPLE_SIZE,
+    correlation_threshold=ENSEMBLE_CORRELATION_THRESHOLD,
+    weight_change_limit=ENSEMBLE_WEIGHT_CHANGE_LIMIT,
+    weight_cooldown_hours=ENSEMBLE_WEIGHT_COOLDOWN_HOURS,
+    min_observation_window_hours=ENSEMBLE_MIN_OBSERVATION_HOURS,
+    default_signal_ttl_seconds=ENSEMBLE_SIGNAL_TTL_SECONDS
+)
+ensemble_engine.ensure_schema()
+# Current model map. Price-derived technical subcomponents remain one family so
+# they cannot be counted as independent confirmations.
+ensemble_engine.register_model("TECHNICAL_CORE",f"technical@{VERSION_TAG}","TREND_STRUCTURE","DIRECTIONAL",
+    ["H1_PRICE","M15_PRICE","M5_PRICE","M1_PRICE","EMA","ATR","STRUCTURE","PULLBACK","MOMENTUM"],"INTRADAY")
+ensemble_engine.register_model("ML_SUCCESS_CALIBRATOR",f"ml@{VERSION_TAG}","TECHNICAL_CALIBRATION","CALIBRATOR",
+    ["TECHNICAL_FEATURE_VECTOR","RESOLVED_LABELS"],"INTRADAY")
+ensemble_engine.register_model("NEWS_CONTEXT",f"gdelt@{VERSION_TAG}","NEWS_MACRO","DIRECTIONAL",
+    ["GDELT_180M","FX_CURRENCY_TERMS"],"INTRADAY")
+ensemble_engine.register_model("MARKET_REGIME_CONTEXT",f"regime@{VERSION_TAG}","MARKET_REGIME","CONTEXT",
+    ["H1_PRICE","M15_PRICE","M5_PRICE","M1_PRICE","ATR","EFFICIENCY_RATIO"],"INTRADAY")
+ensemble_engine.register_model("WEEKEND_CONTEXT",f"weekend@{VERSION_TAG}","WEEKEND_CONTEXT","DIRECTIONAL",
+    ["GDELT_WEEKEND","MARKET_REOPEN_REACTION"],"INTRADAY")
+
+capital_allocation_engine = CapitalAllocationEngine(
+    DB,VERSION_TAG,mode="SHADOW",max_strategy_allocation=CAPITAL_ALLOCATION_MAX_STRATEGY,
+    max_family_risk=CAPITAL_ALLOCATION_MAX_FAMILY,max_symbol_risk=CAPITAL_ALLOCATION_MAX_SYMBOL,
+    max_asset_risk=CAPITAL_ALLOCATION_MAX_ASSET,max_directional_risk=CAPITAL_ALLOCATION_MAX_DIRECTIONAL,
+    max_cluster_risk=CAPITAL_ALLOCATION_MAX_CLUSTER,max_change_per_cycle=CAPITAL_ALLOCATION_MAX_CHANGE,
+    change_cooldown_hours=CAPITAL_ALLOCATION_COOLDOWN_HOURS,rebalance_threshold=CAPITAL_ALLOCATION_REBALANCE_THRESHOLD,
+    heat_limit=CAPITAL_ALLOCATION_HEAT_LIMIT,correlation_threshold=ENSEMBLE_CORRELATION_THRESHOLD)
+capital_allocation_engine.ensure_schema()
+
 def production_stage_limits() -> Dict[str,Dict[str,Any]]:
     return {
         "MINIMAL_LIVE":{
@@ -738,6 +882,8 @@ OBSERVABILITY_DEPENDENCIES = {
     "Broker Connection":DEPENDENCY_CRITICAL,
     "Risk Engine":DEPENDENCY_CRITICAL,
     "Execution Engine":DEPENDENCY_CRITICAL,
+    "Smart Execution Engine":DEPENDENCY_IMPORTANT,
+    "Ensemble Engine":DEPENDENCY_NON_CRITICAL,
     "Recovery Manager":DEPENDENCY_CRITICAL,
     "Security Manager":DEPENDENCY_CRITICAL,
     "System Evaluation Engine":DEPENDENCY_IMPORTANT,
@@ -860,7 +1006,7 @@ def production_release_files() -> List[str]:
     root=Path(__file__).resolve().parent
     names=[
         "server.py","production_readiness.py","governance_engine.py","system_evaluation.py",
-        "security_manager.py","recovery_manager.py","order_state.py","observability.py",
+        "security_manager.py","recovery_manager.py","order_state.py","observability.py","smart_execution.py","ensemble_engine.py","capital_allocation.py",
         "adaptive_learning.py","validation_pipeline.py","deployment_manager.py","deployment_runtime.py",
         "requirements.txt","Dockerfile"
     ]
@@ -874,6 +1020,9 @@ def production_release_versions() -> Dict[str,Any]:
         "governance_version":f"governance@{VERSION_TAG}:config_v{security_manager.current_version()}",
         "deployment_version":f"deployment@{VERSION_TAG}",
         "execution_version":f"execution@{VERSION_TAG}",
+        "smart_execution_version":f"smart-execution@{VERSION_TAG}:SHADOW",
+        "ensemble_version":f"ensemble@{VERSION_TAG}:SHADOW",
+        "capital_allocation_version":f"capital-allocation@{VERSION_TAG}:SHADOW",
         "broker_adapter_version":f"oanda-adapter@{VERSION_TAG}",
         "data_pipeline_version":f"market-data@{VERSION_TAG}",
         "dependencies":security_manager.last_integrity.get("dependency_hash") if getattr(security_manager,"last_integrity",None) else None,
@@ -915,7 +1064,13 @@ def conn() -> sqlite3.Connection:
             decision_reason TEXT,
             setup_variant TEXT,
             features_json TEXT NOT NULL,
-            filters_json TEXT NOT NULL
+            filters_json TEXT NOT NULL,
+            ensemble_decision_id TEXT,
+            ensemble_direction TEXT,
+            ensemble_confidence REAL,
+            ensemble_agreement REAL,
+            ensemble_diversity REAL,
+            ensemble_weight_version TEXT
         )
     """)
     c.execute("""
@@ -1309,6 +1464,13 @@ def conn() -> sqlite3.Connection:
             runtime_code_hash TEXT,
             dependency_lock_hash TEXT,
             config_snapshot_hash TEXT,
+            ensemble_decision_id TEXT,
+            ensemble_direction TEXT,
+            ensemble_confidence REAL,
+            ensemble_agreement REAL,
+            ensemble_diversity REAL,
+            ensemble_weight_version TEXT,
+            ensemble_context_json TEXT NOT NULL DEFAULT '{}',
             created_ts TEXT NOT NULL,
             updated_ts TEXT NOT NULL,
             FOREIGN KEY(signal_id) REFERENCES signals(id)
@@ -1644,6 +1806,21 @@ def conn() -> sqlite3.Connection:
     c.execute("CREATE INDEX IF NOT EXISTS idx_autonomous_stage ON autonomous_hypotheses(stage,validation_samples)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_autonomous_score ON autonomous_hypotheses(score,edge)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_rule_compat ON research_rule_compatibility(compatible,checked_ts)")
+    # Step 17 migrations for existing persistent databases.
+    signal_cols={row[1] for row in c.execute("PRAGMA table_info(signals)").fetchall()}
+    for name,ddl in {
+        "ensemble_decision_id":"TEXT","ensemble_direction":"TEXT","ensemble_confidence":"REAL",
+        "ensemble_agreement":"REAL","ensemble_diversity":"REAL","ensemble_weight_version":"TEXT"
+    }.items():
+        if name not in signal_cols:c.execute(f"ALTER TABLE signals ADD COLUMN {name} {ddl}")
+    tm_cols={row[1] for row in c.execute("PRAGMA table_info(trade_memory)").fetchall()}
+    for name,ddl in {
+        "ensemble_decision_id":"TEXT","ensemble_direction":"TEXT","ensemble_confidence":"REAL",
+        "ensemble_agreement":"REAL","ensemble_diversity":"REAL","ensemble_weight_version":"TEXT",
+        "ensemble_context_json":"TEXT NOT NULL DEFAULT '{}'"
+    }.items():
+        if name not in tm_cols:c.execute(f"ALTER TABLE trade_memory ADD COLUMN {name} {ddl}")
+
     c.execute("CREATE INDEX IF NOT EXISTS idx_market_regime_history ON market_regime_history(instrument,candle_ts)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_strategy_health_status ON strategy_health(status,updated_ts)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_strategy_health_audit ON strategy_health_audit(setup_variant,ts)")
@@ -3154,7 +3331,8 @@ def ai_strategy_director_recommendation(
     instrument: str,
     variant: str,
     regime: Optional[Dict[str, Any]],
-    signal_confidence: Optional[float] = None
+    signal_confidence: Optional[float] = None,
+    ensemble_shadow: Optional[Dict[str,Any]] = None
 ) -> Dict[str, Any]:
     """
     OBSERVATION ONLY.
@@ -3244,6 +3422,13 @@ def ai_strategy_director_recommendation(
     reasons.append(f"signal_confidence={signal_score:.3f}")
     if market_regime=="ABNORMAL_UNCERTAIN" or volatility_state=="ABNORMAL":
         reasons.append("abnormal/uncertain market conditions penalized")
+    if ensemble_shadow and ensemble_shadow.get("enabled"):
+        reasons.append(
+            f"ensemble_shadow={ensemble_shadow.get('ensemble_direction','ABSTAIN')} "
+            f"conf={float(ensemble_shadow.get('ensemble_confidence') or 0):.3f} "
+            f"agreement={float(ensemble_shadow.get('agreement_score') or 0):.3f} "
+            f"diversity={float(ensemble_shadow.get('diversity_score') or 0):.3f}"
+        )
     if state in ("PAUSED","DISABLED"):
         reasons.append("observation recommendation only; execution remains unchanged")
 
@@ -3267,6 +3452,7 @@ def ai_strategy_director_recommendation(
         "signal_confidence":signal_score,
         "regime_affinity":affinity,
         "score_components":components,
+        "ensemble_shadow":ensemble_shadow or {"enabled":False},
         "reasons":reasons,
         "timestamp":now_iso()
     }
@@ -3883,6 +4069,7 @@ def record_trade_memory_entry(
             "director_score":director.get("director_score"),
             "reasons":director.get("reasons") or []
         },
+        "ensemble_shadow":r.get("ensemble_shadow") or {},
         "adaptive_risk_shadow":{
             "risk_multiplier":risk_shadow.get("risk_multiplier"),
             "allow_new_trades":risk_shadow.get("allow_new_trades"),
@@ -3901,7 +4088,10 @@ def record_trade_memory_entry(
         "fill_time":fill.get("time"),
         "actual_fill_price":fill_price,
         "units":units,
-        "entry_slippage_pips":entry_slippage_pips
+        "entry_slippage_pips":entry_slippage_pips,
+        "smart_execution_shadow":r.get("smart_execution_shadow") or {},
+        "smart_execution_actual":r.get("smart_execution_actual") or {},
+        "smart_execution_mode":"SHADOW" if SMART_EXECUTION_ENABLED else "DISABLED"
     }
 
     entry_reasons=[
@@ -3952,6 +4142,13 @@ def record_trade_memory_entry(
                version_ctx["regime_model_version"],version_ctx["deployment_version"],version_ctx["runtime_code_hash"],
                version_ctx["dependency_lock_hash"],version_ctx["config_snapshot_hash"],version_ctx.get("release_id"),
                version_ctx.get("production_certification_id"),version_ctx.get("production_stage"),str(trade_id)))
+    ens=r.get("ensemble_shadow") or {}
+    if ens.get("ensemble_decision_id"):
+        c.execute("""UPDATE trade_memory SET ensemble_decision_id=?,ensemble_direction=?,ensemble_confidence=?,
+                     ensemble_agreement=?,ensemble_diversity=?,ensemble_weight_version=?,ensemble_context_json=? WHERE trade_id=?""",
+                  (ens.get("ensemble_decision_id"),ens.get("ensemble_direction"),ens.get("ensemble_confidence"),
+                   ens.get("agreement_score"),ens.get("diversity_score"),ens.get("ensemble_weight_version"),
+                   _tm_json(ens,{}),str(trade_id)))
     row=c.execute("SELECT id FROM trade_memory WHERE trade_id=?",(str(trade_id),)).fetchone()
     c.commit();c.close()
 
@@ -5561,11 +5758,18 @@ async def recovery_price_preflight(client: httpx.AsyncClient, r: Dict[str,Any]) 
         mid=(ask+bid)/2.0
         deviation=abs(mid-float(r["entry"]))/pip_size(r["instrument"])
         market_status=str(q.get("status") or "tradeable").lower()
+        bids=q.get("bids") or []; asks=q.get("asks") or []
+        bid_liquidity=sum(float(x.get("liquidity") or 0) for x in bids if _risk_float(x.get("liquidity")) is not None)
+        ask_liquidity=sum(float(x.get("liquidity") or 0) for x in asks if _risk_float(x.get("liquidity")) is not None)
+        available_liquidity=ask_liquidity if r.get("signal")=="BUY" else bid_liquidity
+        if available_liquidity<=0: available_liquidity=None
         ok=(age<=RECOVERY_MAX_QUOTE_AGE_SECONDS and spread<=RECOVERY_MAX_SPREAD_PIPS
             and deviation<=RECOVERY_MAX_PRICE_DEVIATION_PIPS
             and market_status not in ("non-tradeable","halted","closed"))
-        return {"ok":ok,"bid":bid,"ask":ask,"mid":mid,"spread_pips":spread,
+        return {"ok":ok,"bid":bid,"ask":ask,"mid":mid,"last_price":mid,"spread_pips":spread,
                 "quote_age_seconds":age,"deviation_pips":deviation,"market_status":market_status,
+                "quote_time":q.get("time"),"available_liquidity":available_liquidity,
+                "bid_liquidity":bid_liquidity or None,"ask_liquidity":ask_liquidity or None,
                 "reason":"OK" if ok else "REQUIRE_REVALIDATION"}
     except Exception as e:
         return {"ok":False,"reason":"PRICE_PREFLIGHT_ERROR","error":str(e)}
@@ -5590,6 +5794,46 @@ async def execute_recoverable(client: httpx.AsyncClient, r: Dict[str,Any],
         if stage in production_readiness_gate.stage_limits:
             cap=float(production_readiness_gate.effective_stage_limits(stage,production_hard_limits()).get("risk_cap_multiplier") or 0.0)
             effective_units=max(1,int(effective_units*cap))
+    smart_intent=None; smart_snapshot=None; smart_shadow=None
+    if SMART_EXECUTION_ENABLED:
+        try:
+            smart_intent=smart_execution_engine.create_intent(
+                strategy_id=setup_variant(r),symbol=r["instrument"],side=r["signal"],
+                target_quantity=effective_units,maximum_quantity=effective_units,risk_approved_quantity=effective_units,
+                expected_price=float(r["entry"]),urgency="NORMAL",
+                maximum_slippage_bps=float(managed_value("smart_execution.max_slippage_bps",SMART_EXECUTION_DEFAULT_MAX_SLIPPAGE_BPS)),
+                time_limit_seconds=int(managed_value("smart_execution.intent_ttl_seconds",SMART_EXECUTION_INTENT_TTL_SECONDS)),
+                signal_time=r.get("candle_ts") or now_iso(),decision_id=str(decision_id) if decision_id is not None else None,
+                risk_decision_id=str(risk_decision_id) if risk_decision_id is not None else None,
+                risk_approval_valid=True,emergency_stop=bool(recovery_manager.state().get("emergency_stop")),
+                policy_version=f"smart_execution_shadow@{VERSION_TAG}"
+            )
+            rg=r.get("market_regime") if isinstance(r.get("market_regime"),dict) else {}
+            smart_snapshot=smart_execution_engine.capture_snapshot(
+                smart_intent["execution_intent_id"],bid=preflight.get("bid"),ask=preflight.get("ask"),
+                last_price=preflight.get("last_price") or preflight.get("mid"),
+                available_liquidity=preflight.get("available_liquidity"),recent_volume=None,
+                volatility=rg.get("volatility_state") or "UNKNOWN",market_regime=rg.get("market_regime") or "UNKNOWN",
+                timestamp=preflight.get("quote_time") or now_iso(),broker_health="OK",
+                market_status=preflight.get("market_status") or "tradeable",
+                metadata={"preflight":preflight,"order_book_available":False}
+            )
+            smart_shadow=smart_execution_engine.recommend(
+                smart_intent["execution_intent_id"],smart_snapshot,
+                risk_approval_valid=True,strategy_intent_valid=True,position_state_valid=True,
+                emergency_stop=bool(recovery_manager.state().get("emergency_stop")),
+                actual_order_type="MARKET",actual_requested_quantity=effective_units
+            )
+            r["smart_execution_shadow"]={"intent":smart_intent,"snapshot":smart_snapshot,"decision":smart_shadow}
+            if OBSERVABILITY_ENABLED:
+                _obs_module("Smart Execution Engine","OK",last_operation="shadow execution policy evaluated",
+                            details={"instrument":r["instrument"],"mode":"SHADOW","decision":smart_shadow})
+        except Exception as e:
+            r["smart_execution_shadow"]={"error":str(e),"mode":"SHADOW"}
+            if OBSERVABILITY_ENABLED:
+                _obs_module("Smart Execution Engine","DEGRADED",errors=[str(e)],
+                            details={"mode":"SHADOW","existing_execution_unchanged":True})
+    # Step 16 shadow boundary: actual order remains the existing safe MARKET/FOK path.
     u=effective_units if r["signal"]=="BUY" else -effective_units
     body={"order":{"instrument":r["instrument"],"units":str(u),"type":"MARKET","timeInForce":"FOK",
                    "positionFill":"DEFAULT",
@@ -5610,15 +5854,23 @@ async def execute_recoverable(client: httpx.AsyncClient, r: Dict[str,Any],
         "risk_multiplier":(r.get("adaptive_risk_engine") or {}).get("risk_multiplier"),
         "requested_risk":(r.get("adaptive_risk_engine") or {}).get("requested_risk"),
         "approved_risk":(r.get("adaptive_risk_engine") or {}).get("approved_risk"),
+        "ensemble_decision_id":(r.get("ensemble_shadow") or {}).get("ensemble_decision_id"),
+        "ensemble_weight_version":(r.get("ensemble_shadow") or {}).get("ensemble_weight_version"),
+        "ensemble_mode":"SHADOW",
         "risk":r.get("adaptive_risk_engine") or {}
     }
-    return await recovery_manager.submit_order(
+    submitted=await recovery_manager.submit_order(
         client,idempotency_key=key,correlation_id=correlation_id or key,
         decision_id=str(decision_id) if decision_id is not None else None,
         risk_decision_id=str(risk_decision_id) if risk_decision_id is not None else None,
         strategy_id=setup_variant(r),symbol=r["instrument"],side=r["signal"],requested_units=abs(u),
         entry_price=r["entry"],stop_loss=r["stop"],take_profit=r.get("managed_target",r["target"]),
-        order_body=body,metadata=metadata)
+        order_body=body,metadata={**metadata,"smart_execution_intent_id":smart_intent.get("execution_intent_id") if smart_intent else None,
+                                  "smart_execution_mode":"SHADOW","smart_execution_decision":smart_shadow or {}})
+    if isinstance(submitted,dict):
+        submitted["smart_execution_intent_id"]=smart_intent.get("execution_intent_id") if smart_intent else None
+        submitted["smart_execution_shadow"]=smart_shadow
+    return submitted
 
 
 async def execute(client: httpx.AsyncClient, r: Dict[str, Any]):
@@ -5658,6 +5910,21 @@ def save_signal(r: Dict[str, Any], executed: int, order_id: str, ml_probability:
         decision_reason, conf.get("variant"), json.dumps(r["features"], separators=(",", ":")), json.dumps(r["filters"], separators=(",", ":"))
     ))
     signal_id = int(cur.lastrowid)
+    ens=r.get("ensemble_shadow") or {}
+    if ens.get("ensemble_decision_id"):
+        c.execute("""UPDATE signals SET ensemble_decision_id=?,ensemble_direction=?,ensemble_confidence=?,
+                     ensemble_agreement=?,ensemble_diversity=?,ensemble_weight_version=? WHERE id=?""",
+                  (ens.get("ensemble_decision_id"),ens.get("ensemble_direction"),ens.get("ensemble_confidence"),
+                   ens.get("agreement_score"),ens.get("diversity_score"),ens.get("ensemble_weight_version"),signal_id))
+    if ENSEMBLE_ENABLED and ens.get("ensemble_decision_id"):
+        try:
+            ensemble_engine.shadow_compare(
+                ens["ensemble_decision_id"],
+                current_direction="LONG" if r.get("signal")=="BUY" else "SHORT" if r.get("signal")=="SELL" else "ABSTAIN",
+                current_confidence=conf.get("probability"),current_executed=bool(executed)
+            )
+        except Exception as e:
+            log.warning("ENSEMBLE shadow comparison link failed signal=%s err=%s",signal_id,e)
     # Learn from directional signals, including rejected ones. WAIT snapshots stay in signals for diagnostics.
     if r["signal"] in ("BUY", "SELL") and r["entry"] != r["stop"] and r["entry"] != r["target"]:
         c.execute("""
@@ -5868,6 +6135,134 @@ def record_news_research(r: Dict[str, Any]) -> None:
         },
         candle_ts=r.get("candle_ts")
     )
+
+
+
+def _ensemble_execution_cost_bps(symbol: str, before_ts: Optional[str]) -> Optional[float]:
+    """Execution-cost estimate using only TCA known before this ensemble decision."""
+    if not SMART_EXECUTION_ENABLED:
+        return None
+    c=conn()
+    params=[symbol]
+    where="symbol=?"
+    if before_ts:
+        where+=" AND ts<?";params.append(before_ts)
+    rows=c.execute(f"""SELECT total_execution_cost,filled_quantity,expected_price FROM smart_execution_tca
+                         WHERE {where} ORDER BY ts DESC LIMIT 50""",params).fetchall()
+    c.close()
+    vals=[]
+    for x in rows:
+        q=_risk_float(x["filled_quantity"]);px=_risk_float(x["expected_price"]);cost=_risk_float(x["total_execution_cost"])
+        if q and px and cost is not None and q>0 and px>0:
+            vals.append(max(0.0,float(cost)/(float(q)*float(px))*10000.0))
+    return float(statistics.median(vals)) if vals else None
+
+
+def _ensemble_expected_technical_edge_bps(r: Dict[str,Any], conf: Dict[str,Any]) -> Optional[float]:
+    if r.get("signal") not in ("BUY","SELL"):
+        return None
+    entry=_risk_float(r.get("entry"));stop=_risk_float(r.get("stop"));target=_risk_float(r.get("managed_target",r.get("target")))
+    p=_risk_float(conf.get("probability"))
+    if entry is None or stop is None or target is None or p is None or entry<=0:
+        return None
+    reward=abs(target-entry)/entry*10000.0;risk=abs(entry-stop)/entry*10000.0
+    return float(p*reward-(1-p)*risk)
+
+
+def build_ensemble_shadow_signals(r: Dict[str,Any], conf: Dict[str,Any], mlp: Optional[float]) -> List[Dict[str,Any]]:
+    """Adapt current V3.24 sources to the Step-17 Standard Signal Interface.
+
+    Price-derived subcomponents stay inside TECHNICAL_CORE; they are NOT counted as
+    separate independent voters. The ML model predicts success of the selected setup,
+    so it is a CALIBRATOR, not an independent LONG/SHORT voter.
+    """
+    symbol=r["instrument"];ts=r.get("candle_ts") or now_iso();reg=(r.get("market_regime") or {}) if isinstance(r.get("market_regime"),dict) else {}
+    dq=0.0 if r.get("market_data_stale") else 1.0
+    signal=r.get("signal")
+    tech_dir="LONG" if signal=="BUY" else "SHORT" if signal=="SELL" else "ABSTAIN"
+    tech_conf=clamp(float(r.get("technical") or 0)/100.0,0.0,1.0)
+    signals=[{
+        "strategy_id":"TECHNICAL_CORE","strategy_version":f"technical@{VERSION_TAG}","symbol":symbol,"timestamp":ts,
+        "direction":tech_dir,"confidence":tech_conf,"expected_edge":_ensemble_expected_technical_edge_bps(r,conf),
+        "market_regime":reg.get("market_regime"),"time_horizon":"INTRADAY","signal_strength":clamp(float(r.get("direction_edge") or 0)/30.0,0.15,1.0),
+        "risk_characteristics":{"rr":r.get("rr"),"countertrend":r.get("direction_state")=="COUNTERTREND"},
+        "data_quality":dq,"family":"TREND_STRUCTURE",
+        "input_dependencies":["H1_PRICE","M15_PRICE","M5_PRICE","M1_PRICE","EMA","ATR","STRUCTURE","PULLBACK","MOMENTUM"],
+        "role":"DIRECTIONAL","ttl_seconds":ENSEMBLE_SIGNAL_TTL_SECONDS,
+        "metadata":{"setup_variant":setup_variant(r),"buy_score":r.get("buy_score"),"sell_score":r.get("sell_score")}
+    }]
+    # ML is explicitly a success-probability calibrator for the technical setup.
+    signals.append({
+        "strategy_id":"ML_SUCCESS_CALIBRATOR","strategy_version":f"ml@{VERSION_TAG}","symbol":symbol,"timestamp":ts,
+        "direction":"ABSTAIN","confidence":float(mlp) if mlp is not None else .5,"expected_edge":None,
+        "market_regime":reg.get("market_regime"),"time_horizon":"INTRADAY","signal_strength":float(mlp) if mlp is not None else 0.0,
+        "risk_characteristics":{},"data_quality":dq,"family":"TECHNICAL_CALIBRATION",
+        "input_dependencies":["TECHNICAL_FEATURE_VECTOR","RESOLVED_LABELS"],"role":"CALIBRATOR",
+        "ttl_seconds":ENSEMBLE_SIGNAL_TTL_SECONDS,"status":"ONLINE" if mlp is not None else "OFFLINE",
+        "metadata":{"meaning":"probability current setup resolves positively; not a direction model"}
+    })
+    bias=str(r.get("news_bias") or "NEUTRAL").upper()
+    news_dir="LONG" if bias=="BULLISH" else "SHORT" if bias=="BEARISH" else "ABSTAIN"
+    hits=abs(int(r.get("news_positive_hits") or 0)-int(r.get("news_negative_hits") or 0));arts=len(r.get("news_articles") or [])
+    signals.append({
+        "strategy_id":"NEWS_CONTEXT","strategy_version":f"gdelt@{VERSION_TAG}","symbol":symbol,"timestamp":ts,
+        "direction":news_dir,"confidence":clamp(.45+.08*hits+.01*arts,.45,.80) if news_dir!="ABSTAIN" else .35,
+        "expected_edge":None,"market_regime":reg.get("market_regime"),"time_horizon":"INTRADAY",
+        "signal_strength":clamp(.25+.12*hits,0,1),"risk_characteristics":{"headline_count":arts},
+        "data_quality":1.0 if r.get("alignment") not in ("UNKNOWN",None) else .5,"family":"NEWS_MACRO",
+        "input_dependencies":["GDELT_180M","FX_CURRENCY_TERMS"],"role":"DIRECTIONAL","ttl_seconds":ENSEMBLE_SIGNAL_TTL_SECONDS,
+        "metadata":{"bias":bias,"alignment":r.get("alignment")}
+    })
+    # Regime is context, not another vote from the same price stream.
+    regime_dir="LONG" if reg.get("market_regime")=="BULLISH_TREND" else "SHORT" if reg.get("market_regime")=="BEARISH_TREND" else "NEUTRAL"
+    signals.append({
+        "strategy_id":"MARKET_REGIME_CONTEXT","strategy_version":f"regime@{VERSION_TAG}","symbol":symbol,"timestamp":ts,
+        "direction":regime_dir,"confidence":float(reg.get("confidence") or 0),"expected_edge":None,
+        "market_regime":reg.get("market_regime"),"time_horizon":"INTRADAY","signal_strength":float(reg.get("trend_strength") or 0),
+        "risk_characteristics":{"volatility_state":reg.get("volatility_state")},"data_quality":dq,"family":"MARKET_REGIME",
+        "input_dependencies":["H1_PRICE","M15_PRICE","M5_PRICE","M1_PRICE","ATR","EFFICIENCY_RATIO"],"role":"CONTEXT",
+        "ttl_seconds":ENSEMBLE_SIGNAL_TTL_SECONDS
+    })
+    weekend=((r.get("weekend_research") or {}).get("active_signal_context") or {})
+    if weekend:
+        wb=str(weekend.get("context_bias") or weekend.get("bias") or "NEUTRAL").upper();wv=_risk_float(weekend.get("context_score"),0.0) or 0.0
+        wd="LONG" if wb=="BULLISH" or wv>0 else "SHORT" if wb=="BEARISH" or wv<0 else "ABSTAIN"
+        signals.append({"strategy_id":"WEEKEND_CONTEXT","strategy_version":f"weekend@{VERSION_TAG}","symbol":symbol,"timestamp":ts,
+          "direction":wd,"confidence":clamp(.5+abs(wv)*.2,.5,.75),"expected_edge":None,"market_regime":reg.get("market_regime"),
+          "time_horizon":"INTRADAY","signal_strength":clamp(abs(wv),0,1),"risk_characteristics":{},"data_quality":dq,
+          "family":"WEEKEND_CONTEXT","input_dependencies":["GDELT_WEEKEND","MARKET_REOPEN_REACTION"],"role":"DIRECTIONAL",
+          "ttl_seconds":ENSEMBLE_SIGNAL_TTL_SECONDS,"metadata":{"weekend_id":weekend.get("weekend_id")}})
+    # Cross-asset observations are kept as CONTEXT until a directional relationship is validated.
+    c=conn();obs=c.execute("""SELECT * FROM external_research_observations WHERE instrument=? AND candle_ts=? AND source_type='CROSS_ASSET'""",
+                         (symbol,r.get("candle_ts"))).fetchall();c.close()
+    for o in obs:
+        key=str(o["source_key"]);val=float(o["value_num"] or 0);mid=f"CROSS_ASSET_{key}"
+        ensemble_engine.register_model(mid,f"cross_asset@{VERSION_TAG}","CROSS_ASSET","CONTEXT",
+            [f"{key}_M5_PRICE","FX_SHARED_FACTOR"],"INTRADAY")
+        signals.append({"strategy_id":mid,"strategy_version":f"cross_asset@{VERSION_TAG}","symbol":symbol,"timestamp":ts,
+          "direction":"LONG" if val>0 else "SHORT" if val<0 else "NEUTRAL","confidence":clamp(.4+abs(val)*.15,.4,.75),
+          "expected_edge":None,"market_regime":reg.get("market_regime"),"time_horizon":"INTRADAY","signal_strength":clamp(abs(val),0,1),
+          "risk_characteristics":{},"data_quality":dq,"family":"CROSS_ASSET","input_dependencies":[f"{key}_M5_PRICE","FX_SHARED_FACTOR"],
+          "role":"CONTEXT","ttl_seconds":ENSEMBLE_SIGNAL_TTL_SECONDS,"metadata":{"research_only":True,"composite":val}})
+    return signals
+
+
+def evaluate_ensemble_shadow(r: Dict[str,Any], conf: Dict[str,Any], mlp: Optional[float]) -> Dict[str,Any]:
+    if not ENSEMBLE_ENABLED:
+        return {"enabled":False,"mode":"DISABLED","ensemble_direction":"ABSTAIN","hypothetical_only":True}
+    try:
+        signals=build_ensemble_shadow_signals(r,conf,mlp)
+        reg=(r.get("market_regime") or {}).get("market_regime") if isinstance(r.get("market_regime"),dict) else None
+        execution_cost=_ensemble_execution_cost_bps(r["instrument"],r.get("candle_ts"))
+        out=ensemble_engine.evaluate(signals,method="REGIME_WEIGHTED",regime=reg,execution_cost=execution_cost,
+            target_horizon="INTRADAY",current_system_direction="LONG" if r.get("signal")=="BUY" else "SHORT" if r.get("signal")=="SELL" else "ABSTAIN",
+            current_system_confidence=conf.get("probability"),current_executed=False)
+        out["enabled"]=True;out["policy_authority"]=False;out["risk_multiplier_authority"]=False
+        return out
+    except Exception as e:
+        log.exception("ENSEMBLE shadow evaluation failed: %s",e)
+        return {"enabled":True,"mode":"SHADOW","ensemble_direction":"ABSTAIN","ensemble_confidence":0.0,
+                "hypothetical_only":True,"error":str(e),"policy_authority":False}
 
 
 def external_research_candidates(signal_row, observations):
@@ -6724,6 +7119,36 @@ def resolve_one(sample: sqlite3.Row, m1: List[Dict[str, Any]]) -> Optional[Dict[
     return None
 
 
+def resolve_ensemble_actual_outcome(signal_id: int, label: int) -> Dict[str,Any]:
+    """Attach only ACTUAL canonical outcomes to the shadow ensemble.
+
+    Opposing model signals are not marked as winners/losers from the canonical trade
+    because that would be a counterfactual assumption. They require their own shadow/
+    paper resolution path later.
+    """
+    if not ENSEMBLE_ENABLED:
+        return {"enabled":False}
+    c=conn();sig=c.execute("SELECT * FROM signals WHERE id=?",(int(signal_id),)).fetchone()
+    if not sig or not sig["ensemble_decision_id"]:
+        c.close();return {"enabled":True,"linked":False}
+    out=c.execute("SELECT * FROM ensemble_outputs WHERE ensemble_decision_id=?",(sig["ensemble_decision_id"],)).fetchone()
+    if not out:
+        c.close();return {"enabled":True,"linked":False}
+    canonical_dir="LONG" if sig["signal"]=="BUY" else "SHORT" if sig["signal"]=="SELL" else None
+    actual_return=1.0 if int(label)==1 else -1.0
+    updated=0
+    if canonical_dir:
+        cur=c.execute("""UPDATE ensemble_signals SET resolved_label=?,resolved_return=?,resolved_ts=?
+                         WHERE ensemble_cycle_id=? AND role='DIRECTIONAL' AND direction=? AND resolved_label IS NULL""",
+                      (int(label),actual_return,now_iso(),out["ensemble_cycle_id"],canonical_dir))
+        updated=cur.rowcount
+    c.execute("""UPDATE ensemble_shadow_comparisons SET actual_result=?,real_result_source='CANONICAL_RESOLVED_SIGNAL'
+                 WHERE ensemble_decision_id=?""",(actual_return,sig["ensemble_decision_id"]))
+    c.commit();c.close()
+    return {"enabled":True,"linked":True,"ensemble_decision_id":sig["ensemble_decision_id"],
+            "actual_models_resolved":updated,"counterfactual_opposing_models_resolved":0}
+
+
 def resolve_pending(inst: str, m1: List[Dict[str, Any]]) -> int:
     c = conn()
     rows = c.execute("SELECT * FROM learning_samples WHERE status='PENDING' AND instrument=? ORDER BY id ASC", (inst,)).fetchall()
@@ -6735,9 +7160,13 @@ def resolve_pending(inst: str, m1: List[Dict[str, Any]]) -> int:
                       (out["status"], out["label"], now_iso(), out["bars"], out["mfe_r"], out["mae_r"], out["note"], s["id"]))
             resolved += 1
             try:
-                attach_ai_director_outcome(int(row["signal_id"]), int(label))
+                attach_ai_director_outcome(int(s["signal_id"]), int(out["label"]))
             except Exception as e:
-                log.warning("AI_DIRECTOR outcome link failed signal_id=%s err=%s", row["signal_id"], e)
+                log.warning("AI_DIRECTOR outcome link failed signal_id=%s err=%s", s["signal_id"], e)
+            try:
+                resolve_ensemble_actual_outcome(int(s["signal_id"]), int(out["label"]))
+            except Exception as e:
+                log.warning("ENSEMBLE outcome link failed signal_id=%s err=%s", s["signal_id"], e)
     c.commit(); c.close()
     return resolved
 
@@ -7328,6 +7757,62 @@ def run_governance_cycle(trigger: str="periodic") -> Dict[str,Any]:
         return {"enabled":True,"status":"FAILED","error":str(e),"mode":governance_engine.mode}
 
 
+def refresh_smart_execution_observability() -> Dict[str,Any]:
+    if not SMART_EXECUTION_ENABLED:
+        return {"enabled":False}
+    try:
+        dash=smart_execution_engine.dashboard()
+        deg=dash.get("degradation") or {}
+        _obs_module("Smart Execution Engine","DEGRADED" if deg.get("status")=="EXECUTION_DEGRADATION_DETECTED" else "OK",
+                    last_operation="smart execution shadow monitoring",details=dash)
+        if deg.get("status")=="EXECUTION_DEGRADATION_DETECTED":
+            observability_manager.alert("EXECUTION_DEGRADATION_DETECTED","HIGH","Smart Execution Engine",
+                "EXECUTION_DEGRADATION_DETECTED","Smart execution quality deteriorated",details=deg)
+        else:
+            observability_manager.recover("EXECUTION_DEGRADATION_DETECTED","Smart execution quality recovered")
+        reasons=set(deg.get("reasons") or [])
+        if "FILL_RATE_DOWN" in reasons:
+            observability_manager.alert("FILL_RATE_DEGRADED","HIGH","Smart Execution Engine","FILL_RATE_DEGRADED",
+                                        "Fill rate deteriorated versus historical execution baseline",details=deg)
+        else: observability_manager.recover("FILL_RATE_DEGRADED","Fill rate recovered")
+        if "BROKER_LATENCY_DEGRADATION" in reasons:
+            observability_manager.alert("BROKER_LATENCY_DEGRADED","WARNING","Smart Execution Engine","BROKER_LATENCY_DEGRADED",
+                                        "Broker execution latency deteriorated",details=deg)
+        else: observability_manager.recover("BROKER_LATENCY_DEGRADED","Broker execution latency recovered")
+        # Bridge engine-local alerts into the central monitoring layer with deduplication handled by ObservabilityManager.
+        c=conn();rows=[dict(x) for x in c.execute("SELECT * FROM smart_execution_alerts ORDER BY id DESC LIMIT 50").fetchall()];c.close()
+        for a in rows:
+            observability_manager.alert(f"SMART_EXEC:{a['event_type']}:{a.get('execution_intent_id') or a.get('symbol')}",
+                                        a.get("severity") or "WARNING","Smart Execution Engine",a["event_type"],
+                                        a.get("message") or a["event_type"],details=_obs_json_value(a.get("details_json"),{}))
+        return dash
+    except Exception as e:
+        _obs_module("Smart Execution Engine","ERROR",errors=[str(e)])
+        observability_manager.alert("SMART_EXECUTION_MONITOR_FAILED","WARNING","Smart Execution Engine",
+                                    "SMART_EXECUTION_MONITOR_FAILED","Smart Execution monitoring refresh failed",details={"error":str(e)})
+        return {"enabled":True,"status":"ERROR","error":str(e)}
+
+
+def refresh_ensemble_observability() -> Dict[str,Any]:
+    if not ENSEMBLE_ENABLED:
+        return {"enabled":False}
+    try:
+        dash=ensemble_engine.dashboard()
+        status="DEGRADED" if dash.get("ensemble_status")=="ABSTAIN" and dash.get("active_models") else "OK"
+        _obs_module("Ensemble Engine",status,last_operation="ensemble shadow monitoring",details=dash)
+        c=conn();rows=[dict(x) for x in c.execute("SELECT * FROM ensemble_alerts ORDER BY id DESC LIMIT 50").fetchall()];c.close()
+        for a in rows:
+            observability_manager.alert(f"ENSEMBLE:{a['event_type']}:{a.get('ensemble_decision_id') or a.get('symbol')}",
+                                        a.get("severity") or "WARNING","Ensemble Engine",a["event_type"],
+                                        a.get("message") or a["event_type"],details=_obs_json_value(a.get("details_json"),{}))
+        return dash
+    except Exception as e:
+        _obs_module("Ensemble Engine","ERROR",errors=[str(e)])
+        observability_manager.alert("ENSEMBLE_MONITOR_FAILED","WARNING","Ensemble Engine",
+                                    "ENSEMBLE_MONITOR_FAILED","Ensemble monitoring refresh failed",details={"error":str(e)})
+        return {"enabled":True,"status":"ERROR","error":str(e)}
+
+
 async def observability_loop_monitor():
     obs_loop_interval=int(managed_value("observability.loop_interval_seconds",OBSERVABILITY_LOOP_INTERVAL_SECONDS)); expected=time.monotonic()+obs_loop_interval
     while True:
@@ -7346,6 +7831,9 @@ async def observability_loop_monitor():
                 run_system_evaluation(source="periodic")
             if GOVERNANCE_ENABLED and governance_engine.due(GOVERNANCE_EVALUATION_INTERVAL_MINUTES):
                 run_governance_cycle("periodic")
+            if SMART_EXECUTION_ENABLED:
+                refresh_smart_execution_observability()
+                refresh_ensemble_observability()
             if PRODUCTION_READINESS_ENABLED:
                 pst=production_readiness_gate.state()
                 if pst.get("production_stage") in ("MINIMAL_LIVE","LIMITED_LIVE","CONTROLLED_LIVE","PRODUCTION_APPROVED","SUSPENDED"):
@@ -7388,6 +7876,8 @@ async def observability_loop_monitor():
         try:
             thresholds={"Market Data":OBSERVABILITY_HEARTBEAT_STALE_SECONDS,"Broker Connection":OBSERVABILITY_BROKER_STALE_SECONDS,
                         "Risk Engine":OBSERVABILITY_HEARTBEAT_STALE_SECONDS,"Execution Engine":OBSERVABILITY_HEARTBEAT_STALE_SECONDS,
+                        "Smart Execution Engine":OBSERVABILITY_HEARTBEAT_STALE_SECONDS*3,
+                        "Ensemble Engine":OBSERVABILITY_HEARTBEAT_STALE_SECONDS*3,
                         "AI Strategy Director":OBSERVABILITY_HEARTBEAT_STALE_SECONDS*2,
                         "Market Regime Detector":OBSERVABILITY_HEARTBEAT_STALE_SECONDS*2,
                         "Trade Memory":OBSERVABILITY_HEARTBEAT_STALE_SECONDS*3,
@@ -7522,8 +8012,21 @@ async def scan(client: httpx.AsyncClient, inst: str) -> Dict[str, Any]:
         "compatibility_required":MULTI_FILTER_COMPAT_ENABLED,
         "autonomous_discovery":AUTONOMOUS_DISCOVERY_ENABLED
     }
+    # Ensemble Engine — SHADOW ONLY. It evaluates multiple current information sources
+    # before the Director but cannot change r, conf, units or execution_decision().
+    ensemble_shadow=evaluate_ensemble_shadow(r,conf,mlp)
+    r["ensemble_shadow"]=ensemble_shadow
+    if OBSERVABILITY_ENABLED:
+        _obs_module("Ensemble Engine","OK" if not ensemble_shadow.get("error") else "DEGRADED",
+                    last_operation="shadow ensemble evaluation",
+                    details={"instrument":inst,"direction":ensemble_shadow.get("ensemble_direction"),
+                             "confidence":ensemble_shadow.get("ensemble_confidence"),
+                             "agreement":ensemble_shadow.get("agreement_score"),
+                             "diversity":ensemble_shadow.get("diversity_score"),
+                             "policy_authority":False})
+
     # AI Strategy Director — OBSERVATION ONLY.
-    # It records what it would recommend but does not alter r, conf, units or execution_decision().
+    # It reviews Ensemble shadow context but the ensemble has no authority over execution.
     current_regime = r.get("market_regime")
     if not isinstance(current_regime, dict):
         current_regime = state.get("market_regimes",{}).get(inst)
@@ -7532,7 +8035,8 @@ async def scan(client: httpx.AsyncClient, inst: str) -> Dict[str, Any]:
         instrument=inst,
         variant=setup_variant(r),
         regime=current_regime,
-        signal_confidence=conf.get("dynamic_confidence")
+        signal_confidence=conf.get("probability"),
+        ensemble_shadow=ensemble_shadow
     )
     director_id = log_ai_director_decision(director)
     obs_director_ms=(time.perf_counter()-obs_director_started)*1000
@@ -7565,10 +8069,20 @@ async def scan(client: httpx.AsyncClient, inst: str) -> Dict[str, Any]:
         variant=setup_variant(r),
         regime=current_regime,
         director=director,
-        signal_confidence=conf.get("dynamic_confidence"),
+        signal_confidence=conf.get("probability"),
         risk_context=broker_risk_context,
         requested_units=UNITS
     )
+    risk_shadow.setdefault("metrics",{})["ensemble_shadow"]={
+        "ensemble_decision_id":ensemble_shadow.get("ensemble_decision_id"),
+        "direction":ensemble_shadow.get("ensemble_direction"),
+        "confidence":ensemble_shadow.get("ensemble_confidence"),
+        "agreement":ensemble_shadow.get("agreement_score"),
+        "diversity":ensemble_shadow.get("diversity_score"),
+        "family_weights":(ensemble_shadow.get("family_weight_info") or {}).get("family_totals"),
+        "risk_increase_authority":False,
+        "correlated_votes_do_not_multiply_risk":True
+    }
     risk_shadow_id = log_adaptive_risk_decision(risk_shadow)
     obs_risk_ms=(time.perf_counter()-obs_risk_started)*1000
     if obs_trace_id: observability_manager.trace_phase(obs_trace_id,"risk",risk_decision_id=risk_shadow_id)
@@ -7670,9 +8184,10 @@ async def scan(client: httpx.AsyncClient, inst: str) -> Dict[str, Any]:
                 actual_units=_risk_float((fill.get("tradeOpened") or {}).get("units"))
                 if actual_units is None and x.get("filled_units") is not None:
                     actual_units=float(x.get("filled_units"))
-                if actual_units is not None and abs(abs(actual_units)-UNITS)>0.5:
+                requested_execution_units=abs(float(((x.get("intent") or {}).get("requested_units") if isinstance(x,dict) else None) or UNITS))
+                if actual_units is not None and abs(abs(actual_units)-requested_execution_units)>0.5:
                     observability_manager.alert(f"PARTIAL_FILL:{oid or obs_trace_id}","HIGH","Execution Engine","PARTIAL_FILL_UNEXPECTED",
-                        "Filled units differ from requested units; remaining amount will not be resent automatically",correlation_id=obs_trace_id,details={"requested_units":UNITS,"filled_units":actual_units,"remaining_units":x.get("remaining_units")})
+                        "Filled units differ from requested units; remaining amount will not be resent automatically",correlation_id=obs_trace_id,details={"requested_units":requested_execution_units,"filled_units":actual_units,"remaining_units":x.get("remaining_units")})
             if obs_trace_id:
                 observability_manager.trace_phase(obs_trace_id,"fill",order_id=oid,trade_id=trade_id)
                 observability_manager.link_trace(obs_trace_id,order_id=oid,trade_id=trade_id)
@@ -7690,6 +8205,28 @@ async def scan(client: httpx.AsyncClient, inst: str) -> Dict[str, Any]:
             actual_filled_units=_risk_float((fill.get("tradeOpened") or {}).get("units"))
             if actual_filled_units is None:
                 actual_filled_units=_risk_float(x.get("filled_units"),UNITS)
+            if SMART_EXECUTION_ENABLED and isinstance(x,dict) and x.get("smart_execution_intent_id") and actual_filled_units is not None:
+                try:
+                    smart_execution_engine.link_trade(x["smart_execution_intent_id"],trade_id)
+                    smart_fill=smart_execution_engine.record_fill(
+                        x["smart_execution_intent_id"],fill_quantity=abs(float(actual_filled_units)),
+                        fill_price=float(fill_price),broker_order_id=oid or None,broker_fill_id=fill.get("id"),
+                        broker_event_id=str(fill.get("id") or oid or "") or None,order_type="MARKET",
+                        broker_ack_latency_ms=obs_broker_ms,first_fill_latency_ms=obs_broker_ms,
+                        fees=float(_risk_float(fill.get("commission"),0.0) or 0.0),session=_tm_session(r.get("candle_ts") or now_iso())
+                    )
+                    smart_tca=smart_fill.get("tca") or {}
+                    smart_cmp=smart_execution_engine.shadow_compare(
+                        x["smart_execution_intent_id"],actual_order_type="MARKET",actual_quantity=abs(float(actual_filled_units)),
+                        actual_slippage_bps=smart_tca.get("slippage_bps"),actual_cost=smart_tca.get("total_execution_cost"),
+                        actual_fill_rate=smart_tca.get("fill_rate"))
+                    r["smart_execution_actual"]={"fill":smart_fill,"tca":smart_tca,"shadow_comparison":smart_cmp}
+                except Exception as e:
+                    r["smart_execution_actual"]={"error":str(e)}
+                    if OBSERVABILITY_ENABLED:
+                        observability_manager.alert(f"SMART_EXECUTION_RECORD:{oid or obs_trace_id}","WARNING","Smart Execution Engine",
+                            "SMART_EXECUTION_TCA_RECORD_FAILED","Smart Execution shadow/TCA recording failed; existing execution state is unchanged",
+                            correlation_id=obs_trace_id,details={"error":str(e)})
             register_trade_management(trade_id,r,float(r.get("managed_target",r["target"])),actual_filled_units)
             log.info("EXECUTED %s %s quality=%s confidence=%s order=%s slippage=%.2f protection=%s",
                      r["signal"], inst, r["score"], conf.get("probability"), oid, slippage, protection["status"])
@@ -7814,7 +8351,7 @@ async def scan(client: httpx.AsyncClient, inst: str) -> Dict[str, Any]:
                     "actual_order":{"order_id":oid,"trade_id":trade_id},"fill":fill,
                     "slippage_pips":slippage,"latency_ms":locals().get("obs_broker_ms"),
                     "fees":_risk_float(fill.get("commission"),0.0),
-                    "partial_fill":bool(locals().get("actual_filled_units") is not None and abs(abs(float(actual_filled_units))-abs(float(UNITS)))>0.5),
+                    "partial_fill":bool(locals().get("actual_filled_units") is not None and abs(abs(float(actual_filled_units))-abs(float(locals().get("requested_execution_units",UNITS))))>0.5),
                     "rejected":False,"reconciliation_ok":rec_status in ("MATCHED","MINOR_MISMATCH"),
                     "protection_ok":protection.get("status")=="OK","audit_ok":True,"trade_memory_ok":True,
                     "details":{"correlation_id":obs_trace_id,"risk_decision_id":risk_shadow_id,"director_decision_id":director_id,
@@ -8149,6 +8686,17 @@ def observability_dashboard_snapshot() -> Dict[str,Any]:
             governance_snapshot.update(governance_engine.dashboard())
         except Exception as e:
             governance_snapshot.update({"status":"ERROR","error":str(e)})
+    smart_execution_snapshot={"enabled":SMART_EXECUTION_ENABLED,"mode":"SHADOW","policy_authority":False}
+    if SMART_EXECUTION_ENABLED:
+        try:
+            smart_execution_snapshot.update(smart_execution_engine.dashboard())
+        except Exception as e:
+            smart_execution_snapshot.update({"status":"ERROR","error":str(e)})
+    ensemble_snapshot={"enabled":ENSEMBLE_ENABLED,"mode":"SHADOW","policy_authority":False,
+                       "risk_increase_authority":False,"signal_authority":False}
+    if ENSEMBLE_ENABLED:
+        try:ensemble_snapshot.update(ensemble_engine.dashboard())
+        except Exception as e:ensemble_snapshot.update({"status":"ERROR","error":str(e)})
     recovery_snapshot={"enabled":RECOVERY_MANAGER_ENABLED}
     if RECOVERY_MANAGER_ENABLED:
         try:
@@ -8162,6 +8710,8 @@ def observability_dashboard_snapshot() -> Dict[str,Any]:
         "recovery":recovery_snapshot,
         "system_evaluation":system_evaluation_snapshot,
         "governance":governance_snapshot,
+        "smart_execution":smart_execution_snapshot,
+        "ensemble":ensemble_snapshot,
         "security_change_control":security_snapshot,
         "startup_health":state.get("startup_health"),"modules":observability_manager.module_rows(),
         "alerts":observability_manager.active_alerts(),"system_metrics":dict(sysm) if sysm else None,
@@ -8211,6 +8761,11 @@ async def start():
                 last_operation="governance policy/state loaded",
                 details={"mode":governance_engine.mode if GOVERNANCE_ENABLED else "DISABLED",
                          "shadow_first":True,"trading_signal_authority":False})
+    _obs_module("Smart Execution Engine","OK" if SMART_EXECUTION_ENABLED else "PAUSED",
+                last_operation="smart execution schema/policy loaded",
+                details={"mode":"SHADOW" if SMART_EXECUTION_ENABLED else "DISABLED",
+                         "shadow_first":True,"signal_authority":False,"risk_increase_authority":False,
+                         "actual_order_policy_unchanged":True})
     if PRODUCTION_READINESS_ENABLED:
         pst=production_readiness_gate.state()
         _obs_module("Production Readiness Gate","OK" if pst.get("readiness_state") not in ("BLOCKED","SUSPENDED") else "DEGRADED",
@@ -8965,6 +9520,8 @@ async def status():
             "ml_shadow": ML_SHADOW, "ml_role": "secondary_refinement",
             "market_regime_enabled": MARKET_REGIME_ENABLED,
             "market_regimes": state.get("market_regimes",{}),
+            "smart_execution":{"enabled":SMART_EXECUTION_ENABLED,"mode":"SHADOW","policy_authority":False},
+            "capital_allocation":{"enabled":CAPITAL_ALLOCATION_ENABLED,"mode":"SHADOW","risk_limit_authority":False,"order_authority":False},
             "scanner": scanner_health_snapshot()}
 
 
@@ -8985,6 +9542,96 @@ async def health_thresholds(): return threshold_report()
 @app.get("/api/execution-audit")
 async def execution_audit(limit: int = 100):
     c=conn(); rows=[dict(x) for x in c.execute("SELECT * FROM execution_audit ORDER BY id DESC LIMIT ?",(min(max(limit,1),500),))]; c.close(); return rows
+
+@app.get("/api/smart-execution/dashboard")
+async def smart_execution_dashboard_api():
+    return smart_execution_engine.dashboard() if SMART_EXECUTION_ENABLED else {"enabled":False}
+
+@app.get("/api/smart-execution/intents")
+async def smart_execution_intents_api(limit: int=100):
+    if not SMART_EXECUTION_ENABLED:return {"enabled":False,"intents":[]}
+    c=conn();rows=[dict(x) for x in c.execute("SELECT * FROM smart_execution_intents ORDER BY created_at DESC LIMIT ?",(min(max(limit,1),500),)).fetchall()];c.close()
+    return {"enabled":True,"mode":"SHADOW","intents":rows}
+
+@app.get("/api/smart-execution/tca")
+async def smart_execution_tca_api(limit: int=100):
+    if not SMART_EXECUTION_ENABLED:return {"enabled":False,"tca":[]}
+    c=conn();rows=[dict(x) for x in c.execute("SELECT * FROM smart_execution_tca ORDER BY ts DESC LIMIT ?",(min(max(limit,1),500),)).fetchall()];c.close()
+    return {"enabled":True,"mode":"SHADOW","tca":rows,"daily_costs":smart_execution_engine.daily_costs(),
+            "degradation":smart_execution_engine.degradation()}
+
+@app.get("/api/smart-execution/shadow-comparisons")
+async def smart_execution_shadow_comparisons_api(limit: int=100):
+    if not SMART_EXECUTION_ENABLED:return {"enabled":False,"comparisons":[]}
+    c=conn();rows=[dict(x) for x in c.execute("SELECT * FROM smart_execution_shadow_comparisons ORDER BY ts DESC LIMIT ?",(min(max(limit,1),500),)).fetchall()];c.close()
+    return {"enabled":True,"hypothetical_fill_not_assumed":True,"comparisons":rows}
+
+@app.post("/api/smart-execution/policy-candidate")
+async def smart_execution_policy_candidate_api(payload: Dict[str,Any]=Body(...),authorization: Optional[str]=Header(None)):
+    actor=_security_actor(authorization,"run_research")
+    if not SMART_EXECUTION_ENABLED:raise HTTPException(409,"SMART_EXECUTION_DISABLED")
+    candidate=smart_execution_engine.candidate_execution_policy(
+        str(payload.get("parent_policy") or f"smart_execution_shadow@{VERSION_TAG}"),
+        payload.get("proposal") or {},payload.get("evidence") or {})
+    security_manager.audit(actor,"SMART_EXECUTION_POLICY_CANDIDATE_CREATED",f"execution:{candidate['candidate_id']}",None,candidate,
+                           "execution-policy candidate is research-only and cannot auto-deploy","CREATED")
+    return candidate
+
+
+@app.get("/api/capital-allocation/dashboard")
+async def capital_allocation_dashboard_api():
+    return capital_allocation_engine.dashboard() if CAPITAL_ALLOCATION_ENABLED else {"enabled":False}
+
+@app.get("/api/capital-allocation/decisions")
+async def capital_allocation_decisions_api(limit:int=100):
+    if not CAPITAL_ALLOCATION_ENABLED:return {"enabled":False,"decisions":[]}
+    c=conn();rows=[dict(x) for x in c.execute("SELECT * FROM allocation_decisions ORDER BY ts DESC LIMIT ?",(min(max(limit,1),500),)).fetchall()];c.close()
+    return {"enabled":True,"mode":"SHADOW","decisions":rows}
+
+@app.post("/api/capital-allocation/policy-candidate")
+async def capital_allocation_policy_candidate_api(payload:Dict[str,Any]=Body(...),authorization:Optional[str]=Header(None)):
+    actor=_security_actor(authorization,"run_research")
+    if not CAPITAL_ALLOCATION_ENABLED:raise HTTPException(409,"CAPITAL_ALLOCATION_DISABLED")
+    governance=governance_engine.check_action("ALLOCATION_POLICY_CHANGE",target="capital_allocation.policy",context={"trigger":"ALLOCATION_POLICY_CANDIDATE","magnitude":"MODERATE","affected_modules":["CAPITAL_ALLOCATION_ENGINE","RISK_ENGINE"]}) if GOVERNANCE_ENABLED else None
+    candidate=capital_allocation_engine.candidate_policy(str(payload.get("parent_policy") or "CURRENT_SHADOW"),payload.get("proposal") or {},payload.get("evidence") or {})
+    security_manager.audit(actor,"ALLOCATION_POLICY_CANDIDATE_CREATED",f"allocation:{candidate['candidate_id']}",None,candidate,"allocation candidate cannot auto-deploy or increase hard risk limits","CREATED")
+    return {"candidate":candidate,"governance":governance}
+
+@app.get("/api/ensemble/dashboard")
+async def ensemble_dashboard_api():
+    return ensemble_engine.dashboard() if ENSEMBLE_ENABLED else {"enabled":False}
+
+@app.get("/api/ensemble/model-map")
+async def ensemble_model_map_api():
+    if not ENSEMBLE_ENABLED:return {"enabled":False}
+    return {"enabled":True,"mode":"SHADOW","models":ensemble_engine.registry(),
+            "correlation_audit":ensemble_engine.correlation_audit(),
+            "production_replacement":False,"meta_model_implemented":False}
+
+@app.get("/api/ensemble/outputs")
+async def ensemble_outputs_api(limit:int=100):
+    if not ENSEMBLE_ENABLED:return {"enabled":False,"outputs":[]}
+    c=conn();rows=[dict(x) for x in c.execute("SELECT * FROM ensemble_outputs ORDER BY ts DESC LIMIT ?",(min(max(limit,1),500),)).fetchall()];c.close()
+    return {"enabled":True,"mode":"SHADOW","outputs":rows,"value_added":ensemble_engine.value_added()}
+
+@app.get("/api/ensemble/weights")
+async def ensemble_weights_api(limit:int=100):
+    if not ENSEMBLE_ENABLED:return {"enabled":False,"weights":[]}
+    c=conn();rows=[dict(x) for x in c.execute("SELECT * FROM ensemble_weight_versions ORDER BY created_at DESC LIMIT ?",(min(max(limit,1),500),)).fetchall()];c.close()
+    return {"enabled":True,"mode":"SHADOW","weights":rows}
+
+@app.post("/api/ensemble/weight-candidate")
+async def ensemble_weight_candidate_api(payload:Dict[str,Any]=Body(...),authorization:Optional[str]=Header(None)):
+    actor=_security_actor(authorization,"run_research")
+    if not ENSEMBLE_ENABLED:raise HTTPException(409,"ENSEMBLE_DISABLED")
+    governance=governance_engine.check_action("ENSEMBLE_WEIGHT_CHANGE",target="ensemble.weights",
+        context={"trigger":"ENSEMBLE_WEIGHT_CANDIDATE","magnitude":"MODERATE","affected_modules":["ENSEMBLE_ENGINE"]}) if GOVERNANCE_ENABLED else None
+    candidate=ensemble_engine.candidate_weights(str(payload.get("parent_weight_version") or "CURRENT_SHADOW"),
+                                                payload.get("proposal") or {},payload.get("evidence") or {})
+    security_manager.audit(actor,"ENSEMBLE_WEIGHT_CANDIDATE_CREATED",f"ensemble:{candidate['candidate_id']}",None,candidate,
+                           "ensemble weights remain research-only and cannot auto-deploy","CREATED")
+    return {"candidate":candidate,"governance":governance}
+
 
 @app.get("/api/decisions")
 async def decisions(limit: int = 100):
@@ -9631,7 +10278,7 @@ async def discovery():
 async def home():
     return """<!doctype html><html lang='es'><meta name='viewport' content='width=device-width'><title>Market Alert V1.7</title>
 <style>body{font-family:system-ui;background:#0b1020;color:#eef2ff;max-width:1050px;margin:auto;padding:24px}.c{background:#151c32;border:1px solid #2c3656;border-radius:16px;padding:18px;margin:12px 0}pre{white-space:pre-wrap;word-break:break-word;background:#080c17;padding:14px;border-radius:12px}.tag{display:inline-block;padding:5px 9px;border-radius:999px;background:#25304f;margin-right:6px}</style>
-<h1>Market Alert V3.23 · Production Readiness & Minimal Live Certification</h1><div class=c><span class=tag>OANDA PRACTICE ONLY</span><span class=tag>24/7</span><span class=tag>Sin límite diario</span><span class=tag>Confianza calibrada</span>
+<h1>Market Alert V3.25 · Intelligent Ensemble Shadow</h1><div class=c><span class=tag>OANDA PRACTICE ONLY</span><span class=tag>24/7</span><span class=tag>Sin límite diario</span><span class=tag>Confianza calibrada</span>
 <p><b>Quality Score ≠ probabilidad.</b> La confianza dinámica se calibra con resultados reales. Con poca muestra se limita deliberadamente y el 90% requiere evidencia sustancial.</p></div>
 <div class=c><h2>Estado</h2><pre id=s>Cargando…</pre></div><div class=c><h2>Aprendizaje</h2><pre id=l>Cargando…</pre></div><div class=c><h2>Última decisión</h2><pre id=d>Cargando…</pre></div><div class=c><h2>Últimas señales</h2><pre id=h>Cargando…</pre></div>
 <script>async function u(){s.textContent=JSON.stringify(await fetch('/api/status').then(r=>r.json()),null,2);l.textContent=JSON.stringify(await fetch('/api/learning').then(r=>r.json()),null,2);d.textContent=JSON.stringify(await fetch('/api/decisions?limit=5').then(r=>r.json()),null,2);h.textContent=JSON.stringify(await fetch('/api/signals?limit=15').then(r=>r.json()),null,2)}u();setInterval(u,15000)</script></html>"""
