@@ -1,0 +1,175 @@
+{
+  "scenario_A_successful_activation": {
+    "release_candidate": "rc_3.23_1316991322_2c46745da6",
+    "final_paper": "PASS",
+    "production_dry_run": "PASS",
+    "go_report": "GO",
+    "readiness": "READY_FOR_MINIMAL_LIVE",
+    "minimal_live_activation": {
+      "ok": true,
+      "stage": "MINIMAL_LIVE",
+      "limits": {
+        "risk_cap_multiplier": 0.05,
+        "max_trade_risk_fraction": 0.0005,
+        "max_portfolio_exposure_fraction": 0.005,
+        "max_daily_loss_fraction": 0.0025,
+        "max_drawdown_fraction": 0.005,
+        "min_trades_for_promotion": 10,
+        "min_days_for_promotion": 5,
+        "max_slippage_pips": 2.0,
+        "max_reconciliation_mismatches": 0,
+        "principle": "STAGE_CAP_NEVER_EXCEEDS_RISK_ENGINE_HARD_LIMIT"
+      },
+      "no_auto_scale": true
+    },
+    "live_metrics": {
+      "stage": "MINIMAL_LIVE",
+      "trades": 12,
+      "fill_rate": 1.0,
+      "rejection_rate": 0.0,
+      "avg_slippage_pips": 0.20000000000000004,
+      "avg_latency_ms": 55.0,
+      "expectancy_r": 0.15,
+      "reconciliation_mismatches": 0,
+      "protection_failures": 0,
+      "fees": 0.12,
+      "partial_fills": 0
+    },
+    "promotion_to_limited": {
+      "action": "PROMOTE",
+      "new_stage": "LIMITED_LIVE",
+      "evidence": {
+        "current_stage": "MINIMAL_LIVE",
+        "time_in_stage_days": 6.000000055173611,
+        "trades": 12,
+        "pnl": 1.8,
+        "drawdown": 0.001,
+        "expectancy": 0.15,
+        "slippage": 0.20000000000000004,
+        "execution_quality": {
+          "fill_rate": 1.0,
+          "rejection_rate": 0.0,
+          "latency_ms": 55.0
+        },
+        "incidents": {
+          "p0": 0,
+          "p1": 0
+        },
+        "reconciliation_status": "MATCHED",
+        "system_evaluation": null,
+        "governance": null,
+        "risk": null,
+        "live_stability": {
+          "score": 100,
+          "state": "STABLE",
+          "components": {
+            "operational_reliability": 1.0,
+            "execution_quality": 1.0,
+            "risk_consistency": 1.0,
+            "reconciliation_accuracy": 1.0,
+            "incident_reliability": 1.0
+          },
+          "not_pnl_only": true
+        },
+        "limits": {
+          "risk_cap_multiplier": 0.05,
+          "max_trade_risk_fraction": 0.0005,
+          "max_portfolio_exposure_fraction": 0.005,
+          "max_daily_loss_fraction": 0.0025,
+          "max_drawdown_fraction": 0.005,
+          "min_trades_for_promotion": 10,
+          "min_days_for_promotion": 5,
+          "max_slippage_pips": 2.0,
+          "max_reconciliation_mismatches": 0,
+          "principle": "STAGE_CAP_NEVER_EXCEEDS_RISK_ENGINE_HARD_LIMIT"
+        },
+        "paper_vs_real": {
+          "status": "CONSISTENT",
+          "material": false,
+          "reasons": [],
+          "differences": {},
+          "paper_run_id": "paper_d542aa2f0f4b4d2d8109fd9677815a26",
+          "stage": "MINIMAL_LIVE"
+        }
+      },
+      "limits": {
+        "risk_cap_multiplier": 0.1,
+        "max_trade_risk_fraction": 0.001,
+        "max_portfolio_exposure_fraction": 0.01,
+        "max_daily_loss_fraction": 0.005,
+        "max_drawdown_fraction": 0.01,
+        "min_trades_for_promotion": 25,
+        "min_days_for_promotion": 10,
+        "max_slippage_pips": 2.0,
+        "max_reconciliation_mismatches": 0,
+        "principle": "STAGE_CAP_NEVER_EXCEEDS_RISK_ENGINE_HARD_LIMIT"
+      }
+    },
+    "final_state": {
+      "singleton": 1,
+      "readiness_state": "LIMITED_LIVE",
+      "production_stage": "LIMITED_LIVE",
+      "release_id": "rc_3.23_1316991322_2c46745da6",
+      "certification_id": "cert_2197fe1261314b26ae15943d3e18ac21",
+      "production_authorized": 1,
+      "production_suspended": 0,
+      "suspension_reason": null,
+      "last_stage_change_ts": "2026-08-15T20:50:06.411707+00:00",
+      "stage_started_ts": "2026-08-15T20:50:06.411707+00:00",
+      "last_certification_ts": "2026-08-15T20:50:06.349457+00:00",
+      "last_reconciliation_ts": null,
+      "last_reconciliation_status": null,
+      "last_health_check_ts": "2026-08-15T20:50:06.349466+00:00",
+      "last_health_status": "READY_FOR_MINIMAL_LIVE",
+      "last_broker_verified_ts": "2026-08-15T20:50:06.326096+00:00",
+      "last_data_fresh_ts": null,
+      "actual_exposure_fraction": 0.0,
+      "updated_ts": "2026-08-15T20:50:06.411707+00:00"
+    }
+  },
+  "scenario_B_real_problem": {
+    "start": "MINIMAL_LIVE",
+    "incident_id": "pinc_95091981917f40a2beccea021781b1a9",
+    "incident": "POSITION_MISMATCH / RECONCILIATION_CRITICAL",
+    "pretrade_after_mismatch": {
+      "allow_new_real_order": false,
+      "reasons": [
+        "READINESS_NOT_LIVE",
+        "PRODUCTION_STAGE_NOT_LIVE",
+        "PRODUCTION_SUSPENDED",
+        "RECONCILIATION_NOT_OK"
+      ],
+      "stage": "SUSPENDED",
+      "readiness": "SUSPENDED"
+    },
+    "suspended_state_before_resume": "SUSPENDED",
+    "resume": {
+      "action": "LIMITED_RESTART",
+      "stage": "MINIMAL_LIVE",
+      "promotion_requires_new_observation": true
+    },
+    "final_state": {
+      "singleton": 1,
+      "readiness_state": "MINIMAL_LIVE",
+      "production_stage": "MINIMAL_LIVE",
+      "release_id": "rc_3.23_7839080584_2c46745da6",
+      "certification_id": "cert_e991f92dac3640009745ec9003f9fab7",
+      "production_authorized": 1,
+      "production_suspended": 0,
+      "suspension_reason": null,
+      "last_stage_change_ts": "2026-08-15T20:50:06.518818+00:00",
+      "stage_started_ts": "2026-08-15T20:50:06.518818+00:00",
+      "last_certification_ts": "2026-08-15T20:50:06.489123+00:00",
+      "last_reconciliation_ts": null,
+      "last_reconciliation_status": null,
+      "last_health_check_ts": "2026-08-15T20:50:06.489135+00:00",
+      "last_health_status": "READY_FOR_MINIMAL_LIVE",
+      "last_broker_verified_ts": "2026-08-15T20:50:06.464409+00:00",
+      "last_data_fresh_ts": null,
+      "actual_exposure_fraction": 0.0,
+      "updated_ts": "2026-08-15T20:50:06.518818+00:00"
+    },
+    "traceability": "release/certification/stage and incident records preserved"
+  },
+  "important": "Simulation only. No real broker or capital was used."
+}

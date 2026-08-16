@@ -1,0 +1,67 @@
+{
+  "version": "3.26",
+  "mode": "SHADOW",
+  "hard_risk_limits_changed": false,
+  "martingale": false,
+  "order_authority": false,
+  "risk_limit_authority": false,
+  "step18_tests": {
+    "total": 18,
+    "passed": 18,
+    "failed": 0
+  },
+  "full_regression": {
+    "total": 119,
+    "passed": 119,
+    "failed": 0,
+    "warnings": 4
+  },
+  "step14_regression": {
+    "framework_version": "3.26",
+    "environment": "INTEGRATION_TEST",
+    "total_tests": 28,
+    "passed": 28,
+    "failed": 0,
+    "warnings": 0,
+    "critical_failures": 0,
+    "safety_violations": 0,
+    "pass_fail_gate": {
+      "ready_for_step15": true,
+      "gates": {
+        "zero_critical_safety_failures": true,
+        "zero_risk_limit_bypasses": true,
+        "zero_duplicate_order_vulnerabilities": true,
+        "restart_recovery_successful": true,
+        "reconciliation_passes": true,
+        "database_failure_recovery_passes": true,
+        "broker_exit_failure_passes": true,
+        "deterministic_replay_passes": true,
+        "audit_reproducibility_passes": true,
+        "emergency_stop_survives_restart": true,
+        "governance_protections_pass": true,
+        "data_leakage_pass": true,
+        "canary_rollback_pass": true,
+        "smart_execution_shadow_pass": true,
+        "ensemble_shadow_pass": true,
+        "full_extreme_simulation_pass": true
+      },
+      "critical_failures": [],
+      "safety_violations": [],
+      "principle": "ANY_UNRESOLVED_CRITICAL_FAILURE_BLOCKS_STEP15"
+    }
+  },
+  "simulation_properties": {
+    "allocation_never_exceeds_authorized": true,
+    "example_uses_less_than_available": true,
+    "risk_engine_veto_respected": true,
+    "smart_execution_receives_only_approved": true,
+    "capital_allocator_order_authority": false
+  },
+  "dynamic_allocation_value_added": "INSUFFICIENT_DATA / NO_DYNAMIC_ALLOCATION_ADVANTAGE_CLAIMED",
+  "pending": [
+    "Accumulate real shadow observations before Validation/Paper.",
+    "Empirical covariance/correlation history is still limited; conservative family/cluster proxies remain necessary.",
+    "Tax effects are not modeled because the current project does not provide a tax model.",
+    "Capital Allocation remains SHADOW and cannot alter production allocations."
+  ]
+}

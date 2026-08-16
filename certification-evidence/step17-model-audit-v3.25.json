@@ -1,0 +1,190 @@
+{
+  "version": "3.25",
+  "ensemble_mode": "SHADOW",
+  "production_replacement": false,
+  "meta_model_implemented": false,
+  "models": [
+    {
+      "strategy_id": "MARKET_REGIME_CONTEXT",
+      "strategy_version": "regime@3.25",
+      "family": "MARKET_REGIME",
+      "role": "CONTEXT",
+      "input_dependencies_json": "[\"H1_PRICE\",\"M15_PRICE\",\"M5_PRICE\",\"M1_PRICE\",\"ATR\",\"EFFICIENCY_RATIO\"]",
+      "time_horizon": "INTRADAY",
+      "enabled": 1,
+      "max_weight": null,
+      "registered_at": "2026-08-16T04:47:53.906006+00:00",
+      "updated_at": "2026-08-16T04:47:53.906013+00:00",
+      "metadata_json": "{}"
+    },
+    {
+      "strategy_id": "ML_SUCCESS_CALIBRATOR",
+      "strategy_version": "ml@3.25",
+      "family": "TECHNICAL_CALIBRATION",
+      "role": "CALIBRATOR",
+      "input_dependencies_json": "[\"TECHNICAL_FEATURE_VECTOR\",\"RESOLVED_LABELS\"]",
+      "time_horizon": "INTRADAY",
+      "enabled": 1,
+      "max_weight": null,
+      "registered_at": "2026-08-16T04:47:53.902536+00:00",
+      "updated_at": "2026-08-16T04:47:53.902543+00:00",
+      "metadata_json": "{}"
+    },
+    {
+      "strategy_id": "NEWS_CONTEXT",
+      "strategy_version": "gdelt@3.25",
+      "family": "NEWS_MACRO",
+      "role": "DIRECTIONAL",
+      "input_dependencies_json": "[\"GDELT_180M\",\"FX_CURRENCY_TERMS\"]",
+      "time_horizon": "INTRADAY",
+      "enabled": 1,
+      "max_weight": null,
+      "registered_at": "2026-08-16T04:47:53.904302+00:00",
+      "updated_at": "2026-08-16T04:47:53.904309+00:00",
+      "metadata_json": "{}"
+    },
+    {
+      "strategy_id": "TECHNICAL_CORE",
+      "strategy_version": "technical@3.25",
+      "family": "TREND_STRUCTURE",
+      "role": "DIRECTIONAL",
+      "input_dependencies_json": "[\"H1_PRICE\",\"M15_PRICE\",\"M5_PRICE\",\"M1_PRICE\",\"EMA\",\"ATR\",\"STRUCTURE\",\"PULLBACK\",\"MOMENTUM\"]",
+      "time_horizon": "INTRADAY",
+      "enabled": 1,
+      "max_weight": null,
+      "registered_at": "2026-08-16T04:47:53.900606+00:00",
+      "updated_at": "2026-08-16T04:47:53.900622+00:00",
+      "metadata_json": "{}"
+    },
+    {
+      "strategy_id": "WEEKEND_CONTEXT",
+      "strategy_version": "weekend@3.25",
+      "family": "WEEKEND_CONTEXT",
+      "role": "DIRECTIONAL",
+      "input_dependencies_json": "[\"GDELT_WEEKEND\",\"MARKET_REOPEN_REACTION\"]",
+      "time_horizon": "INTRADAY",
+      "enabled": 1,
+      "max_weight": null,
+      "registered_at": "2026-08-16T04:47:53.907857+00:00",
+      "updated_at": "2026-08-16T04:47:53.907864+00:00",
+      "metadata_json": "{}"
+    }
+  ],
+  "correlation_audit": {
+    "pairs": [
+      {
+        "a": "MARKET_REGIME_CONTEXT",
+        "b": "ML_SUCCESS_CALIBRATOR",
+        "feature_similarity": 0.0,
+        "same_family": false,
+        "likely_correlated": false
+      },
+      {
+        "a": "MARKET_REGIME_CONTEXT",
+        "b": "NEWS_CONTEXT",
+        "feature_similarity": 0.0,
+        "same_family": false,
+        "likely_correlated": false
+      },
+      {
+        "a": "MARKET_REGIME_CONTEXT",
+        "b": "TECHNICAL_CORE",
+        "feature_similarity": 0.5,
+        "same_family": false,
+        "likely_correlated": false
+      },
+      {
+        "a": "MARKET_REGIME_CONTEXT",
+        "b": "WEEKEND_CONTEXT",
+        "feature_similarity": 0.0,
+        "same_family": false,
+        "likely_correlated": false
+      },
+      {
+        "a": "ML_SUCCESS_CALIBRATOR",
+        "b": "NEWS_CONTEXT",
+        "feature_similarity": 0.0,
+        "same_family": false,
+        "likely_correlated": false
+      },
+      {
+        "a": "ML_SUCCESS_CALIBRATOR",
+        "b": "TECHNICAL_CORE",
+        "feature_similarity": 0.0,
+        "same_family": false,
+        "likely_correlated": false
+      },
+      {
+        "a": "ML_SUCCESS_CALIBRATOR",
+        "b": "WEEKEND_CONTEXT",
+        "feature_similarity": 0.0,
+        "same_family": false,
+        "likely_correlated": false
+      },
+      {
+        "a": "NEWS_CONTEXT",
+        "b": "TECHNICAL_CORE",
+        "feature_similarity": 0.0,
+        "same_family": false,
+        "likely_correlated": false
+      },
+      {
+        "a": "NEWS_CONTEXT",
+        "b": "WEEKEND_CONTEXT",
+        "feature_similarity": 0.0,
+        "same_family": false,
+        "likely_correlated": false
+      },
+      {
+        "a": "TECHNICAL_CORE",
+        "b": "WEEKEND_CONTEXT",
+        "feature_similarity": 0.0,
+        "same_family": false,
+        "likely_correlated": false
+      }
+    ],
+    "high_similarity": []
+  },
+  "semantic_dependencies": [
+    {
+      "source": "TECHNICAL_CORE",
+      "dependency": "same multi-timeframe price/EMA/ATR/structure stream",
+      "correlation_risk": "HIGH_INSIDE_SUBCOMPONENTS",
+      "treatment": "ONE_DIRECTIONAL_FAMILY_NOT_MULTIPLE_VOTES"
+    },
+    {
+      "source": "MARKET_REGIME_CONTEXT",
+      "dependency": "shares H1/M15/M5/M1 price and ATR with TECHNICAL_CORE",
+      "feature_overlap": 0.5,
+      "treatment": "CONTEXT_NOT_DIRECTIONAL_VOTE"
+    },
+    {
+      "source": "ML_SUCCESS_CALIBRATOR",
+      "dependency": "trained from technical feature vector/outcomes",
+      "treatment": "CALIBRATOR_NOT_DIRECTIONAL_VOTE"
+    },
+    {
+      "source": "NEWS_CONTEXT",
+      "dependency": "GDELT headlines",
+      "treatment": "INDEPENDENT_DIRECTIONAL_CONTEXT_WHEN_FRESH"
+    },
+    {
+      "source": "WEEKEND_CONTEXT",
+      "dependency": "weekend GDELT/reopen reaction",
+      "treatment": "CONDITIONAL_DIRECTIONAL_CONTEXT"
+    },
+    {
+      "source": "CROSS_ASSET_*",
+      "dependency": "other FX pairs/shared factor",
+      "treatment": "RESEARCH_CONTEXT_UNTIL_DIRECTIONAL_RELATIONSHIP_VALIDATED"
+    }
+  ],
+  "current_independence_conclusion": "Current system has limited genuinely independent directional evidence; low diversity/ABSTAIN is expected and preferable to fabricated consensus.",
+  "baseline_methods": [
+    "MAJORITY",
+    "WEIGHTED",
+    "CONFIDENCE_WEIGHTED",
+    "PERFORMANCE_WEIGHTED",
+    "REGIME_WEIGHTED"
+  ]
+}

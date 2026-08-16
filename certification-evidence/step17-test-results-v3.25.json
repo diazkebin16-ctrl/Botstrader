@@ -1,0 +1,27 @@
+{
+  "version": "3.25",
+  "step": 17,
+  "regression_suites": [
+    "test_ensemble_engine.py (17)",
+    "test_ensemble_integration.py (6)",
+    "test_smart_execution.py (21)",
+    "test_smart_execution_integration.py (2)",
+    "test_production_readiness.py",
+    "test_system_integration_framework.py",
+    "test_governance_engine.py",
+    "test_system_evaluation.py",
+    "test_security_manager.py",
+    "test_security_integration.py",
+    "test_recovery_manager.py",
+    "test_observability.py",
+    "test_deployment_manager.py",
+    "test_validation_pipeline.py (7)"
+  ],
+  "all_passed": true,
+  "step14_scenarios": "28/28",
+  "critical_failures": 0,
+  "safety_violations": 0,
+  "ensemble_mode": "SHADOW",
+  "production_activation": false,
+  "known_production_blocker": "Adaptive Risk Engine remains shadow-only; V3.25 also requires recertification before any real-capital use."
+}

@@ -1,0 +1,502 @@
+{
+  "version": "3.25",
+  "seed": 170025,
+  "cycles": 400,
+  "evidence_type": "SEEDED_SYNTHETIC_ENSEMBLE_MECHANICS_SIMULATION",
+  "critical_scenario": {
+    "scenario": "5? requested example uses 3 correlated trend LONG + breakout LONG + mean-reversion SHORT + abstain",
+    "naive_directional_vote": {
+      "LONG": 4,
+      "SHORT": 1,
+      "ABSTAIN": 1,
+      "naive_long_share": 0.8
+    },
+    "correlation_aware_output": {
+      "ensemble_decision_id": "ens_dec_d20ec31fa9554d98ae46b2cf9e65a425",
+      "ensemble_cycle_id": "ens_cycle_872de40ed2d14607a3b8a02f5a662bdb",
+      "symbol": "EUR_USD",
+      "ts": "2026-08-16T04:53:40.827134+00:00",
+      "mode": "SHADOW",
+      "method": "REGIME_WEIGHTED",
+      "ensemble_direction": "LONG",
+      "ensemble_confidence": 0.3009584313613806,
+      "agreement_score": 0.4641016151377546,
+      "disagreement_score": 0.5358983848622454,
+      "diversity_score": 0.59,
+      "weighted_expected_edge": 2.186533479473212,
+      "expected_execution_cost": 1.2,
+      "expected_net_edge": 0.9865334794732121,
+      "market_regime": "HIGH_VOLATILITY_TREND",
+      "data_quality": 1.0,
+      "participating_models": [
+        "TREND_A",
+        "TREND_B",
+        "TREND_C",
+        "BREAKOUT",
+        "MEAN_REVERSION"
+      ],
+      "abstaining_models": [
+        "VOL_CONTEXT"
+      ],
+      "offline_models": [],
+      "model_contributions": [
+        {
+          "strategy_id": "TREND_A",
+          "family": "TREND_FAMILY",
+          "direction": "LONG",
+          "weight": 0.15470053837925155,
+          "confidence": 0.9,
+          "signal_strength": 0.85,
+          "contribution": 0.1314954576223638,
+          "reliability": {
+            "global": {
+              "score": 0.5,
+              "samples": 0,
+              "evidence": "LOW_EVIDENCE",
+              "calibration": null,
+              "brier": null,
+              "stability": 0.5
+            },
+            "regime": {
+              "score": 0.5,
+              "samples": 0,
+              "evidence": "LOW_EVIDENCE",
+              "calibration": null,
+              "brier": null,
+              "stability": 0.5
+            },
+            "raw_weight": 0.35
+          }
+        },
+        {
+          "strategy_id": "TREND_B",
+          "family": "TREND_FAMILY",
+          "direction": "LONG",
+          "weight": 0.15470053837925155,
+          "confidence": 0.88,
+          "signal_strength": 0.85,
+          "contribution": 0.1314954576223638,
+          "reliability": {
+            "global": {
+              "score": 0.5,
+              "samples": 0,
+              "evidence": "LOW_EVIDENCE",
+              "calibration": null,
+              "brier": null,
+              "stability": 0.5
+            },
+            "regime": {
+              "score": 0.5,
+              "samples": 0,
+              "evidence": "LOW_EVIDENCE",
+              "calibration": null,
+              "brier": null,
+              "stability": 0.5
+            },
+            "raw_weight": 0.35
+          }
+        },
+        {
+          "strategy_id": "TREND_C",
+          "family": "TREND_FAMILY",
+          "direction": "LONG",
+          "weight": 0.15470053837925155,
+          "confidence": 0.86,
+          "signal_strength": 0.85,
+          "contribution": 0.1314954576223638,
+          "reliability": {
+            "global": {
+              "score": 0.5,
+              "samples": 0,
+              "evidence": "LOW_EVIDENCE",
+              "calibration": null,
+              "brier": null,
+              "stability": 0.5
+            },
+            "regime": {
+              "score": 0.5,
+              "samples": 0,
+              "evidence": "LOW_EVIDENCE",
+              "calibration": null,
+              "brier": null,
+              "stability": 0.5
+            },
+            "raw_weight": 0.35
+          }
+        },
+        {
+          "strategy_id": "BREAKOUT",
+          "family": "BREAKOUT_FAMILY",
+          "direction": "LONG",
+          "weight": 0.2679491924311227,
+          "confidence": 0.72,
+          "signal_strength": 0.85,
+          "contribution": 0.22775681356645427,
+          "reliability": {
+            "global": {
+              "score": 0.5,
+              "samples": 0,
+              "evidence": "LOW_EVIDENCE",
+              "calibration": null,
+              "brier": null,
+              "stability": 0.5
+            },
+            "regime": {
+              "score": 0.5,
+              "samples": 0,
+              "evidence": "LOW_EVIDENCE",
+              "calibration": null,
+              "brier": null,
+              "stability": 0.5
+            },
+            "raw_weight": 0.35
+          }
+        },
+        {
+          "strategy_id": "MEAN_REVERSION",
+          "family": "MEAN_REVERSION_FAMILY",
+          "direction": "SHORT",
+          "weight": 0.2679491924311227,
+          "confidence": 0.8,
+          "signal_strength": 0.85,
+          "contribution": -0.22775681356645427,
+          "reliability": {
+            "global": {
+              "score": 0.5,
+              "samples": 0,
+              "evidence": "LOW_EVIDENCE",
+              "calibration": null,
+              "brier": null,
+              "stability": 0.5
+            },
+            "regime": {
+              "score": 0.5,
+              "samples": 0,
+              "evidence": "LOW_EVIDENCE",
+              "calibration": null,
+              "brier": null,
+              "stability": 0.5
+            },
+            "raw_weight": 0.35
+          }
+        }
+      ],
+      "correlation": {
+        "matrix": {
+          "TREND_A": {
+            "TREND_A": 1.0,
+            "TREND_B": 1.0,
+            "TREND_C": 1.0,
+            "BREAKOUT": 0.0,
+            "MEAN_REVERSION": 0.0
+          },
+          "TREND_B": {
+            "TREND_B": 1.0,
+            "TREND_A": 1.0,
+            "TREND_C": 1.0,
+            "BREAKOUT": 0.0,
+            "MEAN_REVERSION": 0.0
+          },
+          "TREND_C": {
+            "TREND_C": 1.0,
+            "TREND_A": 1.0,
+            "TREND_B": 1.0,
+            "BREAKOUT": 0.0,
+            "MEAN_REVERSION": 0.0
+          },
+          "BREAKOUT": {
+            "BREAKOUT": 1.0,
+            "TREND_A": 0.0,
+            "TREND_B": 0.0,
+            "TREND_C": 0.0,
+            "MEAN_REVERSION": 0.0
+          },
+          "MEAN_REVERSION": {
+            "MEAN_REVERSION": 1.0,
+            "TREND_A": 0.0,
+            "TREND_B": 0.0,
+            "TREND_C": 0.0,
+            "BREAKOUT": 0.0
+          }
+        },
+        "pair_details": {
+          "TREND_A|TREND_B": {
+            "signal_correlation": null,
+            "return_correlation": null,
+            "feature_similarity": 1.0,
+            "regime_behavior_similarity": null,
+            "position_overlap": 0.0,
+            "effective_correlation": 1.0,
+            "signal_samples": 0,
+            "return_samples": 0,
+            "shared_regimes": 0
+          },
+          "TREND_A|TREND_C": {
+            "signal_correlation": null,
+            "return_correlation": null,
+            "feature_similarity": 1.0,
+            "regime_behavior_similarity": null,
+            "position_overlap": 0.0,
+            "effective_correlation": 1.0,
+            "signal_samples": 0,
+            "return_samples": 0,
+            "shared_regimes": 0
+          },
+          "TREND_A|BREAKOUT": {
+            "signal_correlation": null,
+            "return_correlation": null,
+            "feature_similarity": 0.0,
+            "regime_behavior_similarity": null,
+            "position_overlap": 0.0,
+            "effective_correlation": 0.0,
+            "signal_samples": 0,
+            "return_samples": 0,
+            "shared_regimes": 0
+          },
+          "TREND_A|MEAN_REVERSION": {
+            "signal_correlation": null,
+            "return_correlation": null,
+            "feature_similarity": 0.0,
+            "regime_behavior_similarity": null,
+            "position_overlap": 0.0,
+            "effective_correlation": 0.0,
+            "signal_samples": 0,
+            "return_samples": 0,
+            "shared_regimes": 0
+          },
+          "TREND_B|TREND_C": {
+            "signal_correlation": null,
+            "return_correlation": null,
+            "feature_similarity": 1.0,
+            "regime_behavior_similarity": null,
+            "position_overlap": 0.0,
+            "effective_correlation": 1.0,
+            "signal_samples": 0,
+            "return_samples": 0,
+            "shared_regimes": 0
+          },
+          "TREND_B|BREAKOUT": {
+            "signal_correlation": null,
+            "return_correlation": null,
+            "feature_similarity": 0.0,
+            "regime_behavior_similarity": null,
+            "position_overlap": 0.0,
+            "effective_correlation": 0.0,
+            "signal_samples": 0,
+            "return_samples": 0,
+            "shared_regimes": 0
+          },
+          "TREND_B|MEAN_REVERSION": {
+            "signal_correlation": null,
+            "return_correlation": null,
+            "feature_similarity": 0.0,
+            "regime_behavior_similarity": null,
+            "position_overlap": 0.0,
+            "effective_correlation": 0.0,
+            "signal_samples": 0,
+            "return_samples": 0,
+            "shared_regimes": 0
+          },
+          "TREND_C|BREAKOUT": {
+            "signal_correlation": null,
+            "return_correlation": null,
+            "feature_similarity": 0.0,
+            "regime_behavior_similarity": null,
+            "position_overlap": 0.0,
+            "effective_correlation": 0.0,
+            "signal_samples": 0,
+            "return_samples": 0,
+            "shared_regimes": 0
+          },
+          "TREND_C|MEAN_REVERSION": {
+            "signal_correlation": null,
+            "return_correlation": null,
+            "feature_similarity": 0.0,
+            "regime_behavior_similarity": null,
+            "position_overlap": 0.0,
+            "effective_correlation": 0.0,
+            "signal_samples": 0,
+            "return_samples": 0,
+            "shared_regimes": 0
+          },
+          "BREAKOUT|MEAN_REVERSION": {
+            "signal_correlation": null,
+            "return_correlation": null,
+            "feature_similarity": 0.0,
+            "regime_behavior_similarity": null,
+            "position_overlap": 0.0,
+            "effective_correlation": 0.0,
+            "signal_samples": 0,
+            "return_samples": 0,
+            "shared_regimes": 0
+          }
+        },
+        "high_pairs": [
+          {
+            "a": "TREND_A",
+            "b": "TREND_B",
+            "correlation": 1.0,
+            "source": "feature_dependency",
+            "components": {
+              "signal_correlation": null,
+              "return_correlation": null,
+              "feature_similarity": 1.0,
+              "regime_behavior_similarity": null,
+              "position_overlap": 0.0,
+              "effective_correlation": 1.0,
+              "signal_samples": 0,
+              "return_samples": 0,
+              "shared_regimes": 0
+            }
+          },
+          {
+            "a": "TREND_A",
+            "b": "TREND_C",
+            "correlation": 1.0,
+            "source": "feature_dependency",
+            "components": {
+              "signal_correlation": null,
+              "return_correlation": null,
+              "feature_similarity": 1.0,
+              "regime_behavior_similarity": null,
+              "position_overlap": 0.0,
+              "effective_correlation": 1.0,
+              "signal_samples": 0,
+              "return_samples": 0,
+              "shared_regimes": 0
+            }
+          },
+          {
+            "a": "TREND_B",
+            "b": "TREND_C",
+            "correlation": 1.0,
+            "source": "feature_dependency",
+            "components": {
+              "signal_correlation": null,
+              "return_correlation": null,
+              "feature_similarity": 1.0,
+              "regime_behavior_similarity": null,
+              "position_overlap": 0.0,
+              "effective_correlation": 1.0,
+              "signal_samples": 0,
+              "return_samples": 0,
+              "shared_regimes": 0
+            }
+          }
+        ],
+        "position_overlap_note": "Position overlap is applied when strategies expose an explicit overlap group; otherwise it is not invented."
+      },
+      "families": {
+        "TREND_FAMILY": [
+          "TREND_A",
+          "TREND_B",
+          "TREND_C"
+        ],
+        "BREAKOUT_FAMILY": [
+          "BREAKOUT"
+        ],
+        "MEAN_REVERSION_FAMILY": [
+          "MEAN_REVERSION"
+        ]
+      },
+      "reasoning_summary": [
+        "ENSEMBLE_SHADOW_EVALUATION_COMPLETE"
+      ],
+      "ensemble_weight_version": "ens_w_58cb34ca7772",
+      "hypothetical_only": true,
+      "current_system_direction": "LONG",
+      "current_system_confidence": 0.75,
+      "current_executed": false,
+      "weights": {
+        "TREND_A": 0.15470053837925155,
+        "TREND_B": 0.15470053837925155,
+        "TREND_C": 0.15470053837925155,
+        "BREAKOUT": 0.2679491924311227,
+        "MEAN_REVERSION": 0.2679491924311227
+      },
+      "family_weight_info": {
+        "correlation_discounts": {
+          "TREND_A": {
+            "correlated_peers": [
+              "TREND_B",
+              "TREND_C"
+            ],
+            "factor": 0.5773502691896258
+          },
+          "TREND_B": {
+            "correlated_peers": [
+              "TREND_A",
+              "TREND_C"
+            ],
+            "factor": 0.5773502691896258
+          },
+          "TREND_C": {
+            "correlated_peers": [
+              "TREND_A",
+              "TREND_B"
+            ],
+            "factor": 0.5773502691896258
+          },
+          "BREAKOUT": {
+            "correlated_peers": [],
+            "factor": 1.0
+          },
+          "MEAN_REVERSION": {
+            "correlated_peers": [],
+            "factor": 1.0
+          }
+        },
+        "family_totals": {
+          "MEAN_REVERSION_FAMILY": 0.2679491924311227,
+          "BREAKOUT_FAMILY": 0.2679491924311227,
+          "TREND_FAMILY": 0.4641016151377546
+        },
+        "unused_weight": 0,
+        "weight_stability": {
+          "cooldown_active": false,
+          "parent_version": null,
+          "changes": {}
+        }
+      },
+      "calibrators": []
+    },
+    "proof": {
+      "trend_family_total_weight": 0.4641016151377546,
+      "max_family_weight": 0.5,
+      "trend_family_is_capped": true,
+      "independent_short_weight": 0.2679491924311227,
+      "independent_short_not_erased": true,
+      "ensemble_confidence": 0.3009584313613806,
+      "not_naive_80_percent_confidence": true,
+      "risk_increase_authority": false,
+      "direct_execution_authority": false
+    }
+  },
+  "naive_majority": {
+    "cycles": 400,
+    "active_decisions": 400,
+    "abstentions": 0,
+    "accuracy_active": 0.545,
+    "expectancy_proxy": 0.09,
+    "total_proxy": 36,
+    "profit_factor_proxy": 1.1978021978021978
+  },
+  "correlation_aware_ensemble": {
+    "cycles": 400,
+    "active_decisions": 253,
+    "abstentions": 147,
+    "accuracy_active": 0.549407114624506,
+    "expectancy_proxy": 0.09881422924901186,
+    "total_proxy": 25,
+    "profit_factor_proxy": 1.219298245614035
+  },
+  "ensemble_diagnostics": {
+    "abstain_rate": 0.3675,
+    "average_diversity": 0.5674950466489311,
+    "average_agreement": 0.5310955880195728,
+    "average_confidence": 0.30117848627181465
+  },
+  "interpretation": "Synthetic simulation validates correlation-aware weighting, abstention and calibration mechanics. It is not evidence of live ensemble alpha.",
+  "ensemble_value_added_live_status": "NO_ENSEMBLE_ADVANTAGE_DETECTED_UNTIL_SHADOW_OUTCOMES_ACCUMULATE",
+  "production_activation": false
+}

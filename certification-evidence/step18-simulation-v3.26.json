@@ -1,0 +1,165 @@
+{
+  "engine_shadow_result": {
+    "enabled": true,
+    "mode": "SHADOW",
+    "hypothetical_only": true,
+    "signal_authority": false,
+    "order_authority": false,
+    "risk_limit_authority": false,
+    "allocation_version": "alloc-3.26-b01376fef38f",
+    "policy": "DYNAMIC",
+    "authorized_total_risk": 100.0,
+    "used_risk_budget": 0.7531980616863944,
+    "unused_risk_budget": 99.24680193831361,
+    "allocations": {
+      "A": 0.21995467163461155,
+      "B": 0.1146620715129543,
+      "C": 0.3569130847257724,
+      "D": 0.06166823381305618
+    },
+    "strategies": {
+      "A": {
+        "risk_allocated": 0.21995467163461155,
+        "capital_allocated": null,
+        "strategy_allocation_percentage": 0.0021995467163461154,
+        "allocation_confidence": 0.7817400000000001,
+        "reliability_adjusted_edge": 1.5634800000000002,
+        "marginal_risk_contribution": 1.2631533469425782,
+        "allocation_reason": "MAX_ASSET:FX;PORTFOLIO_HEAT_REDUCTION",
+        "family": "TREND",
+        "symbol": "AUSD",
+        "direction": "LONG"
+      },
+      "B": {
+        "risk_allocated": 0.1146620715129543,
+        "capital_allocated": null,
+        "strategy_allocation_percentage": 0.001146620715129543,
+        "allocation_confidence": 0.7641,
+        "reliability_adjusted_edge": 0.91692,
+        "marginal_risk_contribution": 1.3502929159212638,
+        "allocation_reason": "MAX_ASSET:FX;PORTFOLIO_HEAT_REDUCTION",
+        "family": "TREND",
+        "symbol": "BUSD",
+        "direction": "LONG"
+      },
+      "C": {
+        "risk_allocated": 0.3569130847257724,
+        "capital_allocated": null,
+        "strategy_allocation_percentage": 0.003569130847257724,
+        "allocation_confidence": 0.8069400000000001,
+        "reliability_adjusted_edge": 2.5822080000000005,
+        "marginal_risk_contribution": 1.1987730490868835,
+        "allocation_reason": "MAX_ASSET:FX;PORTFOLIO_HEAT_REDUCTION",
+        "family": "BREAKOUT",
+        "symbol": "CUSD",
+        "direction": "LONG"
+      },
+      "D": {
+        "risk_allocated": 0.06166823381305618,
+        "capital_allocated": null,
+        "strategy_allocation_percentage": 0.0006166823381305618,
+        "allocation_confidence": 0.5535000000000001,
+        "reliability_adjusted_edge": 0.38745000000000007,
+        "marginal_risk_contribution": 1.3146575852271338,
+        "allocation_reason": "MAX_ASSET:FX;PORTFOLIO_HEAT_REDUCTION",
+        "family": "MEAN_REVERSION",
+        "symbol": "DUSD",
+        "direction": "LONG"
+      }
+    },
+    "portfolio_heat": 1.0,
+    "stress_heat": 1.7199181535227968,
+    "diversification_score": 0.7031666666666667,
+    "allocation_efficiency_score": 1.8515021843935895,
+    "allocation_turnover": 0.0,
+    "risk_off": false,
+    "low_opportunity": false,
+    "correlations": {
+      "matrix": {
+        "A": {
+          "A": 1.0,
+          "B": 0.92,
+          "C": 0,
+          "D": 0
+        },
+        "B": {
+          "B": 1.0,
+          "A": 0.92,
+          "C": 0,
+          "D": 0
+        },
+        "C": {
+          "C": 1.0,
+          "A": 0,
+          "B": 0,
+          "D": 0
+        },
+        "D": {
+          "D": 1.0,
+          "A": 0,
+          "B": 0,
+          "C": 0
+        }
+      },
+      "high_pairs": [
+        {
+          "a": "A",
+          "b": "B",
+          "correlation": 0.92
+        }
+      ]
+    },
+    "alerts": [
+      "CORRELATION_SPIKE",
+      "HIDDEN_CONCENTRATION_DETECTED",
+      "PORTFOLIO_HEAT_HIGH"
+    ],
+    "reason": "MAX_ASSET:FX;PORTFOLIO_HEAT_REDUCTION",
+    "limits": {
+      "max_strategy": 0.25,
+      "max_family": 0.4,
+      "max_symbol": 0.25,
+      "max_asset": 0.4,
+      "max_directional": 0.65,
+      "max_cluster": 0.35,
+      "heat_limit": 1.0
+    },
+    "stress": {
+      "correlation_stress_heat": 1.7199181535227968,
+      "volatility_spike_multiplier": 1.35
+    }
+  },
+  "requested_example": {
+    "authorized": 100,
+    "proposal": {
+      "A": 15.0,
+      "B": 8.0,
+      "C": 20.0,
+      "D": 3.0
+    },
+    "unallocated": 54.0
+  },
+  "risk_engine_review": {
+    "caps": {
+      "A": 15.0,
+      "B": 8.0,
+      "C": 18.0,
+      "D": 3.0
+    },
+    "approved": {
+      "A": 15.0,
+      "B": 8.0,
+      "C": 18.0,
+      "D": 3.0
+    },
+    "used": 44.0,
+    "unallocated": 56.0
+  },
+  "properties": {
+    "allocation_never_exceeds_authorized": true,
+    "example_uses_less_than_available": true,
+    "risk_engine_veto_respected": true,
+    "smart_execution_receives_only_approved": true,
+    "capital_allocator_order_authority": false
+  }
+}
