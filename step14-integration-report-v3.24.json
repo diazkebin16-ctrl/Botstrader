@@ -2,7 +2,7 @@
   "framework_version": "3.24",
   "environment": "INTEGRATION_TEST",
   "seed": 140013,
-  "generated_at": "2026-08-15T21:39:17.065711+00:00",
+  "generated_at": "2026-08-15T21:33:15.887151+00:00",
   "total_tests": 27,
   "passed": 27,
   "failed": 0,
@@ -10,10 +10,10 @@
   "critical_failures": 0,
   "safety_violations": 0,
   "performance_metrics": {
-    "total_duration_ms": 4572.185337998235,
-    "average_scenario_ms": 169.34019770363832,
-    "max_scenario_ms": 1041.1932050010364,
-    "mean_recovery_ms": 86.46954800133244
+    "total_duration_ms": 6800.992537999264,
+    "average_scenario_ms": 251.88861251849124,
+    "max_scenario_ms": 1688.7408330003382,
+    "mean_recovery_ms": 120.80854800296947
   },
   "pass_fail_gate": {
     "ready_for_step15": true,
@@ -45,7 +45,7 @@
       "name": "Golden Path",
       "severity_if_failed": "CRITICAL",
       "passed": true,
-      "duration_ms": 58.828442997764796,
+      "duration_ms": 47.520678002911154,
       "components": [
         "Market Regime",
         "Strategy",
@@ -82,43 +82,43 @@
       "metrics": {},
       "events": [
         {
-          "ts": "2026-08-15T21:39:12.511978+00:00",
+          "ts": "2026-08-15T21:33:09.105596+00:00",
           "event_type": "MARKET_DATA",
           "valid": true
         },
         {
-          "ts": "2026-08-15T21:39:12.511995+00:00",
+          "ts": "2026-08-15T21:33:09.105613+00:00",
           "event_type": "REGIME_DETECTED",
           "regime": "BULLISH_TREND",
           "confidence": 0.9
         },
         {
-          "ts": "2026-08-15T21:39:12.511999+00:00",
+          "ts": "2026-08-15T21:33:09.105617+00:00",
           "event_type": "STRATEGY_SIGNAL",
           "strategy": "STRAT_A",
           "signal": "BUY",
           "confidence": 0.8
         },
         {
-          "ts": "2026-08-15T21:39:12.512002+00:00",
+          "ts": "2026-08-15T21:33:09.105619+00:00",
           "event_type": "AI_DIRECTOR",
           "state": "ACTIVE",
           "confidence": 0.85
         },
         {
-          "ts": "2026-08-15T21:39:12.512004+00:00",
+          "ts": "2026-08-15T21:33:09.105621+00:00",
           "event_type": "RISK_ENGINE",
           "allow": true,
           "risk": 0.005,
           "hard_limit": 0.01
         },
         {
-          "ts": "2026-08-15T21:39:12.550463+00:00",
+          "ts": "2026-08-15T21:33:09.131938+00:00",
           "event_type": "BROKER_FILL",
           "intent_state": "FILLED"
         },
         {
-          "ts": "2026-08-15T21:39:12.550478+00:00",
+          "ts": "2026-08-15T21:33:09.131950+00:00",
           "event_type": "TRADE_MEMORY",
           "trade_id": "T-GOLD"
         }
@@ -134,7 +134,7 @@
       "name": "Stress Market and Rapid Regime Change",
       "severity_if_failed": "HIGH",
       "passed": true,
-      "duration_ms": 18.290844000148354,
+      "duration_ms": 14.836188001936534,
       "components": [
         "Market Regime",
         "AI Director",
@@ -176,7 +176,7 @@
       "name": "Partial Fill + Disconnect",
       "severity_if_failed": "CRITICAL",
       "passed": true,
-      "duration_ms": 152.14416700109723,
+      "duration_ms": 166.44366499895114,
       "components": [
         "Execution",
         "Broker",
@@ -215,7 +215,7 @@
             "skipped": "DUPLICATE_INTENT_PREVENTED",
             "duplicate_prevented": true,
             "intent": {
-              "execution_intent_id": "intent_01340cffa3cc4d6eae239a57dc3d7081",
+              "execution_intent_id": "intent_f37efdead5a4400f8143352d213a50f3",
               "idempotency_key": "94e4e86aca181839df84c784af156ed07c336eb385a1af92446218316b706ac1",
               "account_scope": "PARTIAL",
               "correlation_id": "corr-partial",
@@ -238,15 +238,15 @@
               "broker_event_id": null,
               "broker_transaction_cursor_before": null,
               "request_json": "{\"order\":{\"instrument\":\"EUR_USD\",\"type\":\"MARKET\",\"units\":\"100\"}}",
-              "response_json": "{\"clientExtensions\":{\"id\":\"ri_94e4e86aca181839df84c784af156ed07c336eb385a1af92\"},\"currentUnits\":\"37\",\"id\":\"T37\",\"openTime\":\"2026-08-15T21:39:12.625368+00:00\",\"price\":\"1.1002\",\"stopLossOrder\":{\"id\":\"SL37\",\"price\":\"1.099\"},\"takeProfitOrder\":{\"id\":\"TP37\",\"price\":\"1.102\"}}",
+              "response_json": "{\"clientExtensions\":{\"id\":\"ri_94e4e86aca181839df84c784af156ed07c336eb385a1af92\"},\"currentUnits\":\"37\",\"id\":\"T37\",\"openTime\":\"2026-08-15T21:33:09.192725+00:00\",\"price\":\"1.1002\",\"stopLossOrder\":{\"id\":\"SL37\",\"price\":\"1.099\"},\"takeProfitOrder\":{\"id\":\"TP37\",\"price\":\"1.102\"}}",
               "metadata_json": "{}",
               "execution_quality_compromised": 1,
               "last_error": null,
-              "created_ts": "2026-08-15T21:39:12.590090+00:00",
-              "submitted_ts": "2026-08-15T21:39:12.598635+00:00",
-              "acknowledged_ts": "2026-08-15T21:39:12.690580+00:00",
-              "filled_ts": "2026-08-15T21:39:12.690580+00:00",
-              "updated_ts": "2026-08-15T21:39:12.690580+00:00"
+              "created_ts": "2026-08-15T21:33:09.160973+00:00",
+              "submitted_ts": "2026-08-15T21:33:09.168085+00:00",
+              "acknowledged_ts": "2026-08-15T21:33:09.275929+00:00",
+              "filled_ts": "2026-08-15T21:33:09.275929+00:00",
+              "updated_ts": "2026-08-15T21:33:09.275929+00:00"
             }
           },
           "details": {}
@@ -262,19 +262,19 @@
       "metrics": {},
       "events": [
         {
-          "ts": "2026-08-15T21:39:12.722369+00:00",
+          "ts": "2026-08-15T21:33:09.314520+00:00",
           "event_type": "ORDER_STATUS_UNKNOWN"
         },
         {
-          "ts": "2026-08-15T21:39:12.722383+00:00",
+          "ts": "2026-08-15T21:33:09.314534+00:00",
           "event_type": "SAFE_MODE"
         },
         {
-          "ts": "2026-08-15T21:39:12.722386+00:00",
+          "ts": "2026-08-15T21:33:09.314536+00:00",
           "event_type": "RECONNECT"
         },
         {
-          "ts": "2026-08-15T21:39:12.722390+00:00",
+          "ts": "2026-08-15T21:33:09.314540+00:00",
           "event_type": "PARTIAL_FILL",
           "filled": 37.0,
           "remaining": 63.0
@@ -291,7 +291,7 @@
       "name": "Broker Failure During Exit",
       "severity_if_failed": "CRITICAL",
       "passed": true,
-      "duration_ms": 30.808769002760528,
+      "duration_ms": 34.17050899952301,
       "components": [
         "Execution",
         "Broker",
@@ -331,11 +331,11 @@
       "metrics": {},
       "events": [
         {
-          "ts": "2026-08-15T21:39:12.751276+00:00",
+          "ts": "2026-08-15T21:33:09.346485+00:00",
           "event_type": "EXIT_REQUEST"
         },
         {
-          "ts": "2026-08-15T21:39:12.751291+00:00",
+          "ts": "2026-08-15T21:33:09.346500+00:00",
           "event_type": "BROKER_CONNECTION_LOST"
         }
       ],
@@ -350,7 +350,7 @@
       "name": "Duplicate and Out-of-Order Events",
       "severity_if_failed": "CRITICAL",
       "passed": true,
-      "duration_ms": 17.643398998188786,
+      "duration_ms": 19.374258001334965,
       "components": [
         "Order State",
         "Recovery",
@@ -392,7 +392,7 @@
       "name": "Position Mismatch + Missing Protective Order",
       "severity_if_failed": "CRITICAL",
       "passed": true,
-      "duration_ms": 28.01515299870516,
+      "duration_ms": 29.098201001033885,
       "components": [
         "Recovery",
         "Reconciliation",
@@ -433,13 +433,13 @@
       "metrics": {},
       "events": [
         {
-          "ts": "2026-08-15T21:39:12.798212+00:00",
+          "ts": "2026-08-15T21:33:09.396387+00:00",
           "event_type": "POSITION_MISMATCH",
           "internal": 100,
           "broker": 60
         },
         {
-          "ts": "2026-08-15T21:39:12.798225+00:00",
+          "ts": "2026-08-15T21:33:09.396400+00:00",
           "event_type": "PROTECTIVE_ORDER_MISSING"
         }
       ],
@@ -454,7 +454,7 @@
       "name": "Database Failure Atomicity / Recovery",
       "severity_if_failed": "CRITICAL",
       "passed": true,
-      "duration_ms": 143.61643200027174,
+      "duration_ms": 131.60876499750884,
       "components": [
         "Persistence",
         "Execution",
@@ -492,11 +492,11 @@
       "metrics": {},
       "events": [
         {
-          "ts": "2026-08-15T21:39:12.942479+00:00",
+          "ts": "2026-08-15T21:33:09.528794+00:00",
           "event_type": "DATABASE_UNAVAILABLE"
         },
         {
-          "ts": "2026-08-15T21:39:12.942495+00:00",
+          "ts": "2026-08-15T21:33:09.528814+00:00",
           "event_type": "DATABASE_RECOVERED"
         }
       ],
@@ -511,7 +511,7 @@
       "name": "Injected Component Latency",
       "severity_if_failed": "HIGH",
       "passed": true,
-      "duration_ms": 120.38632799885818,
+      "duration_ms": 120.35439400278847,
       "components": [
         "Market Data",
         "AI Director",
@@ -525,7 +525,7 @@
           "property": "LATENCY_INJECTION_EFFECTIVE",
           "passed": true,
           "expected": ">=100ms",
-          "actual": 120.34807900272426,
+          "actual": 120.30732600032934,
           "details": {}
         },
         {
@@ -537,7 +537,7 @@
         }
       ],
       "metrics": {
-        "broker_latency_ms": 120.34807900272426,
+        "broker_latency_ms": 120.30732600032934,
         "risk_multiplier": 0.5
       },
       "events": [],
@@ -552,7 +552,7 @@
       "name": "Stale/Corrupt Market Data",
       "severity_if_failed": "CRITICAL",
       "passed": true,
-      "duration_ms": 19.88492300006328,
+      "duration_ms": 22.146602997963782,
       "components": [
         "Market Data",
         "Recovery",
@@ -578,7 +578,7 @@
       "metrics": {},
       "events": [
         {
-          "ts": "2026-08-15T21:39:13.081553+00:00",
+          "ts": "2026-08-15T21:33:09.670145+00:00",
           "event_type": "MARKET_DATA_UNRELIABLE"
         }
       ],
@@ -593,7 +593,7 @@
       "name": "Risk/Director/Governance/Learning/Evaluation Failure",
       "severity_if_failed": "CRITICAL",
       "passed": true,
-      "duration_ms": 0.014733999705640599,
+      "duration_ms": 0.01572099790791981,
       "components": [
         "Risk Engine",
         "AI Director",
@@ -652,7 +652,7 @@
       "name": "Volatility + Latency + DB Degraded + Drawdown",
       "severity_if_failed": "CRITICAL",
       "passed": true,
-      "duration_ms": 237.26905700095813,
+      "duration_ms": 389.9911080006859,
       "components": [
         "Market",
         "Broker",
@@ -688,25 +688,25 @@
       "metrics": {},
       "events": [
         {
-          "ts": "2026-08-15T21:39:13.319404+00:00",
+          "ts": "2026-08-15T21:33:10.060592+00:00",
           "event_type": "VOLATILITY_SPIKE"
         },
         {
-          "ts": "2026-08-15T21:39:13.319418+00:00",
+          "ts": "2026-08-15T21:33:10.060602+00:00",
           "event_type": "BROKER_LATENCY",
           "ms": 2800
         },
         {
-          "ts": "2026-08-15T21:39:13.319421+00:00",
+          "ts": "2026-08-15T21:33:10.060604+00:00",
           "event_type": "DATABASE_DEGRADED"
         },
         {
-          "ts": "2026-08-15T21:39:13.319424+00:00",
+          "ts": "2026-08-15T21:33:10.060605+00:00",
           "event_type": "STRATEGY_DRAWDOWN",
           "drawdown": 0.09
         },
         {
-          "ts": "2026-08-15T21:39:13.319427+00:00",
+          "ts": "2026-08-15T21:33:10.060608+00:00",
           "event_type": "ADAPTATION_FROZEN",
           "decision": "FREEZE"
         }
@@ -722,7 +722,7 @@
       "name": "Restart / Crash Loop State Persistence",
       "severity_if_failed": "CRITICAL",
       "passed": true,
-      "duration_ms": 59.42135999794118,
+      "duration_ms": 69.50777099700645,
       "components": [
         "Recovery",
         "Governance",
@@ -831,7 +831,7 @@
       "name": "Canary Degradation / Rollback",
       "severity_if_failed": "CRITICAL",
       "passed": true,
-      "duration_ms": 0.04199599788989872,
+      "duration_ms": 0.040883998735807836,
       "components": [
         "Validation",
         "Deployment",
@@ -874,7 +874,7 @@
       "name": "Governance/Security Guardrails",
       "severity_if_failed": "CRITICAL",
       "passed": true,
-      "duration_ms": 279.03193599922815,
+      "duration_ms": 505.3175430002739,
       "components": [
         "Governance",
         "Change Management",
@@ -924,7 +924,7 @@
       "name": "Extreme Drawdown and Staged Recovery",
       "severity_if_failed": "CRITICAL",
       "passed": true,
-      "duration_ms": 251.60141100059263,
+      "duration_ms": 422.91574200135074,
       "components": [
         "Risk Engine",
         "Governance",
@@ -967,7 +967,7 @@
       "name": "Risk Boundary and Numerical Precision",
       "severity_if_failed": "CRITICAL",
       "passed": true,
-      "duration_ms": 0.024692999431863427,
+      "duration_ms": 0.02696999945328571,
       "components": [
         "Risk Engine",
         "Position Sizing",
@@ -1053,7 +1053,7 @@
       "name": "Clock/Timezone and Data Leakage",
       "severity_if_failed": "CRITICAL",
       "passed": true,
-      "duration_ms": 1.7092320013034623,
+      "duration_ms": 1.4674869998998474,
       "components": [
         "Strategy",
         "Adaptive Learning",
@@ -1096,7 +1096,7 @@
       "name": "Overfitting Challenge",
       "severity_if_failed": "HIGH",
       "passed": true,
-      "duration_ms": 1.2367339986667503,
+      "duration_ms": 1.11742800072534,
       "components": [
         "Adaptive Learning",
         "Validation Pipeline",
@@ -1128,7 +1128,7 @@
       "name": "Regime Misclassification + Confidence Miscalibration",
       "severity_if_failed": "CRITICAL",
       "passed": true,
-      "duration_ms": 33.26471699983813,
+      "duration_ms": 38.17932799938717,
       "components": [
         "Market Regime",
         "Strategies",
@@ -1197,7 +1197,7 @@
       "name": "Strategy Correlation Shock",
       "severity_if_failed": "HIGH",
       "passed": true,
-      "duration_ms": 359.0072980005061,
+      "duration_ms": 515.8260309981415,
       "components": [
         "Trade Memory",
         "System Evaluation",
@@ -1225,7 +1225,7 @@
       "name": "Concurrent Signals/Fills/Persistence",
       "severity_if_failed": "CRITICAL",
       "passed": true,
-      "duration_ms": 863.5826870013261,
+      "duration_ms": 1194.9649950001913,
       "components": [
         "Execution",
         "Persistence",
@@ -1281,7 +1281,7 @@
       "name": "Load / Soak / Resource Drift",
       "severity_if_failed": "HIGH",
       "passed": true,
-      "duration_ms": 662.4467530018592,
+      "duration_ms": 1139.230218999728,
       "components": [
         "Persistence",
         "Trade Memory",
@@ -1293,23 +1293,23 @@
           "property": "DB_P95_LATENCY_ACCEPTABLE",
           "passed": true,
           "expected": "<100ms",
-          "actual": 0.7405559990729671,
+          "actual": 2.190601000620518,
           "details": {}
         },
         {
           "property": "NO_OBVIOUS_MEMORY_LEAK",
           "passed": true,
           "expected": "<20MB",
-          "actual": 56214,
+          "actual": 56164,
           "details": {}
         }
       ],
       "metrics": {
         "iterations": 1500,
-        "avg_db_insert_ms": 0.43789665666069294,
-        "p95_db_insert_ms": 0.7405559990729671,
-        "memory_growth_bytes": 56214,
-        "peak_bytes": 62927
+        "avg_db_insert_ms": 0.7545633646417022,
+        "p95_db_insert_ms": 2.190601000620518,
+        "memory_growth_bytes": 56164,
+        "peak_bytes": 62877
       },
       "events": [],
       "failures": [],
@@ -1323,7 +1323,7 @@
       "name": "Randomized / Property-Based Safety",
       "severity_if_failed": "CRITICAL",
       "passed": true,
-      "duration_ms": 1.565346999996109,
+      "duration_ms": 1.8069489997287747,
       "components": [
         "Risk",
         "Execution",
@@ -18947,7 +18947,7 @@
       "name": "Deterministic Historical Event Replay",
       "severity_if_failed": "CRITICAL",
       "passed": true,
-      "duration_ms": 0.14489800014416687,
+      "duration_ms": 0.17212899911100976,
       "components": [
         "Execution",
         "Risk",
@@ -18995,7 +18995,7 @@
       "name": "Trade Decision Trace Reproducibility",
       "severity_if_failed": "CRITICAL",
       "passed": true,
-      "duration_ms": 128.35777000145754,
+      "duration_ms": 157.96088600109215,
       "components": [
         "Market Regime",
         "Strategies",
@@ -19019,8 +19019,8 @@
             "director_decision_id": 7,
             "risk_decision_id": 7,
             "deployment_version": "trace_dep_v1",
-            "governance_decision_id": "gov_0185f82459ea4a74bc214b13922e77b3",
-            "system_evaluation_id": "seval_e2ac21722acc42a9933bb5df4b77278b",
+            "governance_decision_id": "gov_18faaf87be814559bc94864724a13747",
+            "system_evaluation_id": "seval_5078204a902e4136afc9c5215f14b3cc",
             "risk_config_version": "config_v1",
             "runtime_code_hash": "codehash"
           },
@@ -19035,8 +19035,8 @@
           "director_decision_id": 7,
           "risk_decision_id": 7,
           "deployment_version": "trace_dep_v1",
-          "governance_decision_id": "gov_0185f82459ea4a74bc214b13922e77b3",
-          "system_evaluation_id": "seval_e2ac21722acc42a9933bb5df4b77278b",
+          "governance_decision_id": "gov_18faaf87be814559bc94864724a13747",
+          "system_evaluation_id": "seval_5078204a902e4136afc9c5215f14b3cc",
           "risk_config_version": "config_v1",
           "runtime_code_hash": "codehash"
         }
@@ -19053,7 +19053,7 @@
       "name": "Smart Execution Shadow / Partial Fill Revalidation",
       "severity_if_failed": "CRITICAL",
       "passed": true,
-      "duration_ms": 62.65305199849536,
+      "duration_ms": 88.15725300155464,
       "components": [
         "Risk Engine",
         "Smart Execution",
@@ -19116,7 +19116,7 @@
       ],
       "metrics": {
         "initial_decision": {
-          "decision_record_id": "sed_76d98b521e1346998b28a09ae1722c40",
+          "decision_record_id": "sed_17bd5fd151dd43db888fea1e6eb8571d",
           "action": "EXECUTE",
           "order_type": "LIMIT",
           "execution_method": "PASSIVE_LIMIT_EXECUTION",
@@ -19134,7 +19134,7 @@
           "expected_gross_edge": null,
           "expected_net_edge": null,
           "execution_regime": "NORMAL_EXECUTION",
-          "execution_confidence": 0.99996664,
+          "execution_confidence": 0.99995164,
           "spread_state": "NORMAL_SPREAD",
           "liquidity_state": "LOW_LIQUIDITY",
           "reasons": [
@@ -19145,7 +19145,7 @@
           "target_quantity": 100.0
         },
         "revalidation": {
-          "decision_record_id": "sed_308822f888a94773ae8f673e58ef590f",
+          "decision_record_id": "sed_73c71bf8b7084d0db9b02ef4f92f1b6b",
           "action": "CANCEL_REMAINING_EXECUTION",
           "order_type": "LIMIT",
           "execution_method": "PASSIVE_LIMIT_EXECUTION",
@@ -19163,7 +19163,7 @@
           "expected_gross_edge": null,
           "expected_net_edge": null,
           "execution_regime": "HIGH_VOLATILITY_EXECUTION",
-          "execution_confidence": 0.35256871782372723,
+          "execution_confidence": 0.35256023782372725,
           "spread_state": "NORMAL_SPREAD",
           "liquidity_state": "LOW_LIQUIDITY",
           "reasons": [
@@ -19176,9 +19176,9 @@
           "remaining_quantity": 60.0
         },
         "tca": {
-          "tca_id": "tca_65d9cdaa61a04c9f95121ef14c3c4361",
-          "execution_intent_id": "se_2b58121a8cdf44158523ffdfbaca5417",
-          "ts": "2026-08-15T21:39:15.985727+00:00",
+          "tca_id": "tca_87830de87af448bb9ce02dffe4513ccb",
+          "execution_intent_id": "se_5d8bb0af8aa342fe8a281bad416c386c",
+          "ts": "2026-08-15T21:33:14.145954+00:00",
           "strategy_id": "STRAT_A",
           "symbol": "EUR_USD",
           "side": "BUY",
@@ -19219,7 +19219,7 @@
           "signal_authority": false,
           "risk_increase_authority": false,
           "current_execution_regime": "HIGH_VOLATILITY_EXECUTION",
-          "execution_confidence": 0.35256871782372723,
+          "execution_confidence": 0.35256023782372725,
           "execution_quality_score": 61.9779338241986,
           "average_slippage_bps": 0.9090082719751748,
           "fill_rate": 0.4,
@@ -19228,7 +19228,7 @@
           "active_execution_intents": [],
           "partial_fills": [
             {
-              "execution_intent_id": "se_2b58121a8cdf44158523ffdfbaca5417",
+              "execution_intent_id": "se_5d8bb0af8aa342fe8a281bad416c386c",
               "trade_id": null,
               "decision_id": null,
               "risk_decision_id": null,
@@ -19242,26 +19242,26 @@
               "expected_price": 1.1001,
               "maximum_slippage_bps": 8.0,
               "time_limit_seconds": 60,
-              "signal_time": "2026-08-15T21:39:15.962517+00:00",
-              "created_at": "2026-08-15T21:39:15.962517+00:00",
-              "expires_at": "2026-08-15T21:40:15.962517+00:00",
+              "signal_time": "2026-08-15T21:33:14.111251+00:00",
+              "created_at": "2026-08-15T21:33:14.111251+00:00",
+              "expires_at": "2026-08-15T21:34:14.111251+00:00",
               "risk_approval_valid_until": null,
               "mode": "SHADOW",
               "status": "CANCELLED",
               "execution_regime": "HIGH_VOLATILITY_EXECUTION",
-              "execution_confidence": 0.35256871782372723,
+              "execution_confidence": 0.35256023782372725,
               "actual_policy": "MARKET",
               "shadow_policy": "LIMIT",
               "actual_requested_quantity": 60.0,
               "shadow_requested_quantity": 20.0,
               "filled_quantity": 40.0,
               "remaining_quantity": 60.0,
-              "market_snapshot_id": "snap_e46c3f07970441a4ba19b1b0fe142bf5",
+              "market_snapshot_id": "snap_1f217dd2f6cf486791cfb2b44841ce8a",
               "last_reason": "LOW_LIQUIDITY_REDUCE_SIZE; SLIPPAGE_GUARD_REDUCED_SIZE",
-              "last_revalidated_at": "2026-08-15T21:39:16.001511+00:00",
+              "last_revalidated_at": "2026-08-15T21:33:14.166279+00:00",
               "policy_version": "execution_policy_v1",
               "engine_version": "3.24",
-              "updated_at": "2026-08-15T21:39:16.012114+00:00"
+              "updated_at": "2026-08-15T21:33:14.184273+00:00"
             }
           ],
           "expired_intents": 0,
@@ -19336,30 +19336,30 @@
       },
       "events": [
         {
-          "ts": "2026-08-15T21:39:16.014698+00:00",
+          "ts": "2026-08-15T21:33:14.188767+00:00",
           "event_type": "RISK_ENGINE_AUTHORIZES",
           "maximum_units": 100
         },
         {
-          "ts": "2026-08-15T21:39:16.014711+00:00",
+          "ts": "2026-08-15T21:33:14.188781+00:00",
           "event_type": "SMART_EXECUTION_REDUCES",
           "recommended_units": 60.0,
           "order_type": "LIMIT"
         },
         {
-          "ts": "2026-08-15T21:39:16.014714+00:00",
+          "ts": "2026-08-15T21:33:14.188784+00:00",
           "event_type": "PARTIAL_FILL",
           "filled": 40.0,
           "remaining": 60.0
         },
         {
-          "ts": "2026-08-15T21:39:16.014716+00:00",
+          "ts": "2026-08-15T21:33:14.188786+00:00",
           "event_type": "MARKET_CHANGES",
           "volatility": "EXTREME",
           "available_liquidity": 20
         },
         {
-          "ts": "2026-08-15T21:39:16.014718+00:00",
+          "ts": "2026-08-15T21:33:14.188788+00:00",
           "event_type": "REVALIDATION",
           "action": "CANCEL_REMAINING_EXECUTION"
         }
@@ -19375,7 +19375,7 @@
       "name": "Full Coordinated Extreme Simulation",
       "severity_if_failed": "CRITICAL",
       "passed": true,
-      "duration_ms": 1041.1932050010364,
+      "duration_ms": 1688.7408330003382,
       "components": [
         "Market Regime",
         "Strategy",
@@ -19465,7 +19465,7 @@
         }
       ],
       "metrics": {
-        "recovery_time_ms": 86.46954800133244,
+        "recovery_time_ms": 120.80854800296947,
         "system_eval_before": "HIGH_RISK",
         "system_eval_after": "HEALTHY",
         "meta_risk": "CRITICAL",
@@ -19475,102 +19475,102 @@
       },
       "events": [
         {
-          "ts": "2026-08-15T21:39:16.092962+00:00",
+          "ts": "2026-08-15T21:33:14.319753+00:00",
           "event_type": "NORMAL_MARKET"
         },
         {
-          "ts": "2026-08-15T21:39:16.385530+00:00",
+          "ts": "2026-08-15T21:33:14.860659+00:00",
           "event_type": "STRATEGY_TRADING",
           "strategy": "STRAT_A"
         },
         {
-          "ts": "2026-08-15T21:39:16.385541+00:00",
+          "ts": "2026-08-15T21:33:14.860674+00:00",
           "event_type": "CANDIDATE_CANARY",
           "candidate_id": "CANARY-X"
         },
         {
-          "ts": "2026-08-15T21:39:16.385544+00:00",
+          "ts": "2026-08-15T21:33:14.860676+00:00",
           "event_type": "REGIME_CHANGE",
           "from_regime": "BULLISH_TREND",
           "to": "HIGH_VOLATILITY"
         },
         {
-          "ts": "2026-08-15T21:39:16.385546+00:00",
+          "ts": "2026-08-15T21:33:14.860679+00:00",
           "event_type": "VOLATILITY_SPIKE"
         },
         {
-          "ts": "2026-08-15T21:39:16.385548+00:00",
+          "ts": "2026-08-15T21:33:14.860681+00:00",
           "event_type": "BROKER_LATENCY",
           "ms": 3000
         },
         {
-          "ts": "2026-08-15T21:39:16.422170+00:00",
+          "ts": "2026-08-15T21:33:14.923014+00:00",
           "event_type": "PARTIAL_FILL_PENDING"
         },
         {
-          "ts": "2026-08-15T21:39:16.422185+00:00",
+          "ts": "2026-08-15T21:33:14.923028+00:00",
           "event_type": "DATABASE_TEMPORARILY_FAILS",
           "simulated": true
         },
         {
-          "ts": "2026-08-15T21:39:16.631231+00:00",
+          "ts": "2026-08-15T21:33:15.291236+00:00",
           "event_type": "SYSTEM_EVALUATION",
           "status": "HIGH_RISK",
           "score": 13.54338287473319
         },
         {
-          "ts": "2026-08-15T21:39:16.661664+00:00",
+          "ts": "2026-08-15T21:33:15.330261+00:00",
           "event_type": "GOVERNANCE_META_RISK",
           "score": 99.04,
           "state": "CRITICAL"
         },
         {
-          "ts": "2026-08-15T21:39:16.661667+00:00",
+          "ts": "2026-08-15T21:33:15.330265+00:00",
           "event_type": "ADAPTATION_FROZEN",
           "state": "ADAPTATION_FROZEN"
         },
         {
-          "ts": "2026-08-15T21:39:16.669346+00:00",
+          "ts": "2026-08-15T21:33:15.344728+00:00",
           "event_type": "RISK_ENGINE_REDUCES_EXPOSURE",
           "risk_multiplier": 0.3
         },
         {
-          "ts": "2026-08-15T21:39:16.669360+00:00",
+          "ts": "2026-08-15T21:33:15.344744+00:00",
           "event_type": "BROKER_DISCONNECT"
         },
         {
-          "ts": "2026-08-15T21:39:16.669362+00:00",
+          "ts": "2026-08-15T21:33:15.344748+00:00",
           "event_type": "SAFE_MODE"
         },
         {
-          "ts": "2026-08-15T21:39:16.771608+00:00",
+          "ts": "2026-08-15T21:33:15.489948+00:00",
           "event_type": "RECONNECT"
         },
         {
-          "ts": "2026-08-15T21:39:16.771624+00:00",
+          "ts": "2026-08-15T21:33:15.489968+00:00",
           "event_type": "RECONCILIATION",
           "status": "MINOR_MISMATCH"
         },
         {
-          "ts": "2026-08-15T21:39:16.771628+00:00",
+          "ts": "2026-08-15T21:33:15.489972+00:00",
           "event_type": "POSITION_RESTORED",
           "filled": 37.0,
           "remaining": 63.0
         },
         {
-          "ts": "2026-08-15T21:39:17.032726+00:00",
+          "ts": "2026-08-15T21:33:15.843640+00:00",
           "event_type": "GOVERNANCE_REVIEW",
           "result": "APPROVED",
           "to_state": "REVIEW"
         },
         {
-          "ts": "2026-08-15T21:39:17.060248+00:00",
+          "ts": "2026-08-15T21:33:15.880706+00:00",
           "event_type": "LIMITED_RECOVERY",
           "state": "LIMITED_ADAPTATION",
           "result": "APPROVED"
         },
         {
-          "ts": "2026-08-15T21:39:17.060260+00:00",
+          "ts": "2026-08-15T21:33:15.880722+00:00",
           "event_type": "SYSTEM_STABILIZES",
           "evaluation": "HEALTHY"
         }
@@ -19578,7 +19578,7 @@
       "failures": [],
       "warnings": [],
       "safety_violations": [],
-      "recovery_time_ms": 86.46954800133244,
+      "recovery_time_ms": 120.80854800296947,
       "deterministic_seed": null
     }
   ],
@@ -19613,13 +19613,6 @@
     },
     {
       "component": "Monitoring",
-      "scenario": "GOLDEN_PATH",
-      "expected_behavior": "Safety/consistency assertions defined by scenario",
-      "result": "PASS",
-      "severity_if_failed": "CRITICAL"
-    },
-    {
-      "component": "Smart Execution",
       "scenario": "GOLDEN_PATH",
       "expected_behavior": "Safety/consistency assertions defined by scenario",
       "result": "PASS",
@@ -19696,13 +19689,6 @@
       "severity_if_failed": "CRITICAL"
     },
     {
-      "component": "Smart Execution",
-      "scenario": "PARTIAL_FILL_DISCONNECT",
-      "expected_behavior": "Safety/consistency assertions defined by scenario",
-      "result": "PASS",
-      "severity_if_failed": "CRITICAL"
-    },
-    {
       "component": "Execution",
       "scenario": "PARTIAL_FILL_DISCONNECT",
       "expected_behavior": "Safety/consistency assertions defined by scenario",
@@ -19725,13 +19711,6 @@
     },
     {
       "component": "Recovery",
-      "scenario": "BROKER_FAILURE_EXIT",
-      "expected_behavior": "Safety/consistency assertions defined by scenario",
-      "result": "PASS",
-      "severity_if_failed": "CRITICAL"
-    },
-    {
-      "component": "Smart Execution",
       "scenario": "BROKER_FAILURE_EXIT",
       "expected_behavior": "Safety/consistency assertions defined by scenario",
       "result": "PASS",
@@ -19823,13 +19802,6 @@
     },
     {
       "component": "Change Management",
-      "scenario": "DATABASE_FAILURE",
-      "expected_behavior": "Safety/consistency assertions defined by scenario",
-      "result": "PASS",
-      "severity_if_failed": "CRITICAL"
-    },
-    {
-      "component": "Smart Execution",
       "scenario": "DATABASE_FAILURE",
       "expected_behavior": "Safety/consistency assertions defined by scenario",
       "result": "PASS",
@@ -20200,13 +20172,6 @@
       "severity_if_failed": "CRITICAL"
     },
     {
-      "component": "Smart Execution",
-      "scenario": "CONCURRENCY",
-      "expected_behavior": "Safety/consistency assertions defined by scenario",
-      "result": "PASS",
-      "severity_if_failed": "CRITICAL"
-    },
-    {
       "component": "Execution",
       "scenario": "CONCURRENCY",
       "expected_behavior": "Safety/consistency assertions defined by scenario",
@@ -20270,13 +20235,6 @@
       "severity_if_failed": "CRITICAL"
     },
     {
-      "component": "Smart Execution",
-      "scenario": "PROPERTY_FUZZ",
-      "expected_behavior": "Safety/consistency assertions defined by scenario",
-      "result": "PASS",
-      "severity_if_failed": "CRITICAL"
-    },
-    {
       "component": "Execution",
       "scenario": "PROPERTY_FUZZ",
       "expected_behavior": "Safety/consistency assertions defined by scenario",
@@ -20292,13 +20250,6 @@
     },
     {
       "component": "Recovery",
-      "scenario": "DETERMINISTIC_REPLAY",
-      "expected_behavior": "Safety/consistency assertions defined by scenario",
-      "result": "PASS",
-      "severity_if_failed": "CRITICAL"
-    },
-    {
-      "component": "Smart Execution",
       "scenario": "DETERMINISTIC_REPLAY",
       "expected_behavior": "Safety/consistency assertions defined by scenario",
       "result": "PASS",
@@ -20368,13 +20319,6 @@
       "severity_if_failed": "CRITICAL"
     },
     {
-      "component": "Smart Execution",
-      "scenario": "AUDIT_REPRODUCIBILITY",
-      "expected_behavior": "Safety/consistency assertions defined by scenario",
-      "result": "PASS",
-      "severity_if_failed": "CRITICAL"
-    },
-    {
       "component": "Execution",
       "scenario": "AUDIT_REPRODUCIBILITY",
       "expected_behavior": "Safety/consistency assertions defined by scenario",
@@ -20418,13 +20362,6 @@
     },
     {
       "component": "Governance",
-      "scenario": "SMART_EXECUTION_SHADOW",
-      "expected_behavior": "Safety/consistency assertions defined by scenario",
-      "result": "PASS",
-      "severity_if_failed": "CRITICAL"
-    },
-    {
-      "component": "Smart Execution",
       "scenario": "SMART_EXECUTION_SHADOW",
       "expected_behavior": "Safety/consistency assertions defined by scenario",
       "result": "PASS",
@@ -20502,13 +20439,6 @@
     },
     {
       "component": "Governance",
-      "scenario": "FULL_EXTREME_SIMULATION",
-      "expected_behavior": "Safety/consistency assertions defined by scenario",
-      "result": "PASS",
-      "severity_if_failed": "CRITICAL"
-    },
-    {
-      "component": "Smart Execution",
       "scenario": "FULL_EXTREME_SIMULATION",
       "expected_behavior": "Safety/consistency assertions defined by scenario",
       "result": "PASS",
