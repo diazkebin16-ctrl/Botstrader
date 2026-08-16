@@ -1,0 +1,35 @@
+{
+  "version": "3.27",
+  "step": 19,
+  "status": "COMPLETE",
+  "mode": "ANOMALY_SHADOW_MODE",
+  "critical_failures": 0,
+  "safety_violations": 0,
+  "risk_bypasses": 0,
+  "lookahead_leakage": 0,
+  "test_suites_passed": 19,
+  "test_suites_failed": 0,
+  "static_test_functions": 149,
+  "step14": "29/29 PASS",
+  "replay_validation": {
+    "tp": 12,
+    "fp": 0,
+    "fn": 0,
+    "tn": 5,
+    "precision": 1.0,
+    "recall": 1.0,
+    "false_positive_rate": 0.0
+  },
+  "synthetic_validation": {
+    "tp": 10,
+    "fp": 0,
+    "fn": 0,
+    "precision_claim_scope": "SYNTHETIC_ONLY"
+  },
+  "historical_validation_status": "NOT_AVAILABLE_IN_RELEASE_PACKAGE",
+  "rare_event_clustering_default_state": "INSUFFICIENT_EVENT_HISTORY until minimum history exists",
+  "open_high_or_critical_items": 0,
+  "production_authority": false,
+  "promotion_beyond_shadow": "NOT_CERTIFIED",
+  "final_conclusion": "STEP 19 = COMPLETE"
+}

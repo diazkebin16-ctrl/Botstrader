@@ -1,0 +1,26 @@
+{
+  "version": "3.27",
+  "open_items": [
+    {
+      "severity": "MEDIUM",
+      "item": "No raw historical market microstructure dataset bundled for independent real historical precision/recall.",
+      "blocking": "Blocks promotion beyond Shadow; does not invalidate Shadow-mode Step 19 implementation."
+    },
+    {
+      "severity": "MEDIUM",
+      "item": "Real-world precision/recall remains unmeasured until sufficient shadow observations are accumulated.",
+      "blocking": "Blocks enforcement promotion."
+    },
+    {
+      "severity": "LOW",
+      "item": "Rare-event clustering is intentionally inactive until >=12 rare events.",
+      "blocking": false
+    },
+    {
+      "severity": "LOW",
+      "item": "Black-box ML anomaly models are intentionally deferred.",
+      "blocking": false
+    }
+  ],
+  "high_or_critical_open_items": 0
+}
