@@ -389,6 +389,16 @@ class EnsembleEngine:
                  current_executed:bool=False)->Dict[str,Any]:
         method=method if method in BASELINES else "REGIME_WEIGHTED";cycle="ens_cycle_"+uuid.uuid4().hex
         std=self.record_signals(cycle,signals);at=datetime.now(timezone.utc)
+        # One model must contribute at most one opinion per ensemble cycle.
+        # Keep the newest observation for each strategy_id so repeated collection
+        # of the same cross-asset/context model cannot inflate votes, abstentions,
+        # disagreement, or diversity metrics.
+        latest_by_model={}
+        for sig in std:
+            prev=latest_by_model.get(sig.strategy_id)
+            if prev is None or (parse_ts(sig.timestamp) or datetime.min.replace(tzinfo=timezone.utc)) >= (parse_ts(prev.timestamp) or datetime.min.replace(tzinfo=timezone.utc)):
+                latest_by_model[sig.strategy_id]=sig
+        std=list(latest_by_model.values())
         fresh=[];abstain=[];offline=[];stale=[]
         for s in std:
             if s.status!="ONLINE":offline.append(s.strategy_id);continue
@@ -454,9 +464,9 @@ class EnsembleEngine:
           "ts":now_iso(),"mode":self.mode,"method":method,"ensemble_direction":direction,"ensemble_confidence":conf,
           "agreement_score":agreement,"disagreement_score":disagreement,"diversity_score":div,
           "weighted_expected_edge":weighted_edge,"expected_execution_cost":execution_cost,"expected_net_edge":net_edge,
-          "market_regime":regime,"data_quality":dq,"participating_models":[s.strategy_id for s in active],
-          "abstaining_models":abstain+stale,"offline_models":offline,"model_contributions":contributions,
-          "correlation":corr,"families":families,"reasoning_summary":reasons,"ensemble_weight_version":wversion,
+          "market_regime":regime,"data_quality":dq,"participating_models":list(dict.fromkeys(s.strategy_id for s in active)),
+          "abstaining_models":list(dict.fromkeys(abstain+stale)),"offline_models":list(dict.fromkeys(offline)),"model_contributions":contributions,
+          "correlation":corr,"families":families,"reasoning_summary":list(dict.fromkeys(reasons)),"ensemble_weight_version":wversion,
           "hypothetical_only":True,"current_system_direction":current_system_direction,
           "current_system_confidence":current_system_confidence,"current_executed":current_executed,
           "weights":weights,"family_weight_info":capinfo,"calibrators":calibrators}

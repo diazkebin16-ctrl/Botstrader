@@ -5689,7 +5689,7 @@ async def recovery_startup_sequence() -> Dict[str,Any]:
                 market_ts=m1[-1]["t"]
                 dt=_parse_iso(market_ts)
                 age=(datetime.now(timezone.utc)-dt).total_seconds() if dt else 999999
-                market_ok=age<=RECOVERY_MARKET_DATA_MAX_AGE_SECONDS or not fx_market_open()
+                market_ok=age<=RECOVERY_MARKET_DATA_MAX_AGE_SECONDS or market_is_weekend_closed()
                 recovery_manager.market_data_update(market_ts,market_ok)
             recovery_manager.startup_stage("CONNECT_MARKET_DATA","OK" if market_ok else "ERROR",
                                            {"timestamp":market_ts})
@@ -7198,7 +7198,15 @@ def learning_stats() -> Dict[str, Any]:
         "executed_resolved": executed_resolved, "win_rate_executed": (executed_wins / executed_resolved) if executed_resolved else None,
         "blocked_resolved": blocked_resolved, "counterfactual_win_rate_blocked": (blocked_wins / blocked_resolved) if blocked_resolved else None,
         "ml_min_samples": ML_MIN_SAMPLES, "model_ready": Path(MODEL_PATH).exists(), "last_model_run": dict(run) if run else None,
-        "mode":"CONTINUOUS_RESEARCH","changes_execution":ADAPTIVE_CONFIDENCE,"ml_role":"secondary_refinement","discovery_min_samples":DISCOVERY_MIN_SAMPLES,
+        "mode":"CONTINUOUS_RESEARCH",
+        # Keep authority semantics explicit: adaptive learning itself is
+        # observation-only and cannot mutate production execution. The separate
+        # calibrated-confidence gate may influence whether the legacy signal
+        # pipeline executes, but that is not Adaptive Learning deployment authority.
+        "changes_execution":False,
+        "adaptive_learning_changes_production_execution":False,
+        "adaptive_confidence_gate_enabled":bool(ADAPTIVE_CONFIDENCE),
+        "ml_role":"secondary_refinement","discovery_min_samples":DISCOVERY_MIN_SAMPLES,
         "shadow_lab":{"enabled":RESEARCH_LAB_ENABLED,"trials_total":shadow_total,"resolved_labeled":shadow_resolved,"pending":shadow_pending},
         "filter_research":{"experimental":stages.get("EXPERIMENTAL",0),"evaluating":stages.get("EVALUATING",0),"validated":stages.get("VALIDATED",0),"rejected":stages.get("REJECTED",0),"automatic_live_activation":False},
         "external_research":{"enabled":EXTERNAL_RESEARCH_ENABLED,"symbols":EXTERNAL_RESEARCH_SYMBOLS,
@@ -7349,21 +7357,29 @@ def observability_market_data_update(inst: str,m1: List[Dict[str,Any]],fetch_lat
     age=_obs_latest_market_age(m1)
     market_closed=market_is_weekend_closed()
     stale=(not market_closed) and (age is None or age>OBSERVABILITY_MARKET_STALE_SECONDS)
-    status="STALE" if stale else "OK"
+    fresh=(not market_closed) and (not stale)
+    market_data_state="MARKET_CLOSED" if market_closed else ("STALE" if stale else "FRESH")
+    # MARKET_CLOSED is healthy for monitoring/research but is not equivalent to
+    # fresh tradable market data. This prevents weekend candles from being
+    # reported as fresh merely because the market is intentionally closed.
+    status="STALE" if stale else ("MARKET_CLOSED" if market_closed else "OK")
     _obs_module("Market Data",status,fetch_latency_ms,
                 errors=["MARKET_DATA_STALE"] if stale else [],
-                last_operation="M1 candle batch received" if not stale else None,
+                warnings=["MARKET_CLOSED"] if market_closed else [],
+                last_operation="M1 candle batch received" if (fresh or market_closed) else None,
                 details={"instrument":inst,"last_candle":m1[-1]["t"].isoformat() if m1 else None,
-                         "market_data_age_seconds":age,"market_closed":market_closed,"tick_feed":"NOT_AVAILABLE",
-                         "order_book":"NOT_AVAILABLE"})
+                         "market_data_age_seconds":age,"market_closed":market_closed,"market_data_state":market_data_state,
+                         "fresh_for_trading":fresh,"tick_feed":"NOT_AVAILABLE","order_book":"NOT_AVAILABLE"})
     key=f"MARKET_DATA_STALE:{inst}"
     if stale:
         observability_manager.alert(key,"CRITICAL","Market Data","MARKET_DATA_STALE",
                                     f"{inst} market data is stale",group_key="MARKET_DATA_STALE",
                                     details={"age_seconds":age,"threshold":OBSERVABILITY_MARKET_STALE_SECONDS})
     else:
-        observability_manager.recover(key,f"{inst} market data recovered",{"age_seconds":age})
-    return {"stale":stale,"age_seconds":age,"fetch_latency_ms":fetch_latency_ms}
+        observability_manager.recover(key,f"{inst} market data recovered/closed normally",
+                                      {"age_seconds":age,"market_closed":market_closed,"market_data_state":market_data_state})
+    return {"stale":stale,"fresh":fresh,"market_closed":market_closed,"market_data_state":market_data_state,
+            "age_seconds":age,"fetch_latency_ms":fetch_latency_ms}
 
 
 def _obs_realized_period_pnl(days: int) -> float:
@@ -7557,7 +7573,10 @@ async def observability_startup_health_check() -> Dict[str,Any]:
         # Market data on first configured instrument.
         try:
             t=time.perf_counter();m1=await candles(client,INSTRUMENTS[0],"M1",60);lat=(time.perf_counter()-t)*1000
-            mh=observability_market_data_update(INSTRUMENTS[0],m1,lat);checks["market_data"]={"ok":not mh["stale"],**mh}
+            mh=observability_market_data_update(INSTRUMENTS[0],m1,lat)
+            # Closed-market research is a valid startup state, but report it
+            # explicitly rather than pretending old candles are fresh.
+            checks["market_data"]={"ok":(not mh["stale"]),**mh}
         except Exception as e:
             checks["market_data"]={"ok":False,"error":str(e)};_obs_module("Market Data","ERROR",errors=[str(e)])
             observability_manager.alert("STARTUP_MARKET_DATA","CRITICAL","Market Data","STARTUP_HEALTH_FAILURE","Startup market data check failed",details={"error":str(e)})
@@ -7901,7 +7920,11 @@ async def scan(client: httpx.AsyncClient, inst: str) -> Dict[str, Any]:
     obs_market_ms=(time.perf_counter()-obs_market_started)*1000
     obs_market_health=observability_market_data_update(inst,m1,obs_market_ms) if OBSERVABILITY_ENABLED else {"stale":False,"age_seconds":None}
     if RECOVERY_MANAGER_ENABLED and m1:
-        recovery_manager.market_data_update(m1[-1]["t"],not bool(obs_market_health.get("stale")))
+        # During a normal weekend close, old candles are expected and should not
+        # open the MARKET_DATA circuit. Outside a scheduled close, reliability
+        # still requires non-stale data.
+        market_reliable=bool(obs_market_health.get("market_closed")) or not bool(obs_market_health.get("stale"))
+        recovery_manager.market_data_update(m1[-1]["t"],market_reliable)
     if obs_trace_id: observability_manager.trace_phase(obs_trace_id,"market_data")
     current_price=float(m1[-1]["c"]) if m1 else 0.0
     trade_memory_excursions=update_trade_memory_excursions(inst,m1) if TRADE_MEMORY_ENABLED else 0
@@ -8514,9 +8537,14 @@ async def worker():
 
 
 async def supervised_worker_loop():
+    first_launch=True
     while True:
         app.state.restart_requested = False
-        state["worker_restarts"] += 1
+        # The initial worker launch is not a restart. Increment only when the
+        # supervisor has to launch a replacement worker after the first one.
+        if not first_launch:
+            state["worker_restarts"] += 1
+        first_launch=False
         task = asyncio.create_task(worker(), name="scanner-worker")
         app.state.scanner_worker_task = task
         try:
