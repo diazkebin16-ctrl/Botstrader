@@ -49,3 +49,30 @@ def test_initial_supervisor_launch_is_not_counted_as_restart():
     assert 'first_launch=True' in block
     assert 'if not first_launch:' in block
     assert 'state["worker_restarts"] += 1' in block
+
+
+def test_market_closed_is_hard_execution_veto(monkeypatch):
+    monkeypatch.setattr(server, 'market_is_weekend_closed', lambda at=None: True)
+    class NeverClient:
+        async def request(self, *a, **k):
+            raise AssertionError('broker request must not be reached while market is closed')
+    r={'instrument':'EUR_USD','signal':'BUY','entry':1.1,'stop':1.09,'target':1.12}
+    out=asyncio.run(server.execute(NeverClient(), r))
+    assert out['skipped']=='MARKET_CLOSED'
+    assert out['market_closed'] is True
+
+
+def test_recoverable_path_blocks_market_closed_before_preflight(monkeypatch):
+    monkeypatch.setattr(server, 'market_is_weekend_closed', lambda at=None: True)
+    called={'preflight':False}
+    async def preflight(*a, **k):
+        called['preflight']=True
+        raise AssertionError('price preflight/broker path must not be reached')
+    monkeypatch.setattr(server, 'recovery_price_preflight', preflight)
+    class DummyRecovery:
+        def journal(self,*a,**k): pass
+    monkeypatch.setattr(server,'recovery_manager',DummyRecovery())
+    r={'instrument':'EUR_USD','signal':'BUY','entry':1.1,'stop':1.09,'target':1.12}
+    out=asyncio.run(server.execute_recoverable(None,r,'trace',1,1))
+    assert out['skipped']=='MARKET_CLOSED'
+    assert called['preflight'] is False

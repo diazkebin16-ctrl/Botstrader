@@ -42,3 +42,11 @@ Additional fix: recovery startup no longer references the undefined `fx_market_o
 - `system_integration_test_framework.py`: exit code **0** after the runtime hardening.
 
 No hard risk limits were increased. Smart Execution, Capital Allocation, Ensemble, Adaptive Risk and Anomaly/Governance controls retain their existing SHADOW/advisory authority boundaries.
+
+
+## Market-closed hard execution gate
+- Added a deterministic `MARKET_CLOSED` veto before both recoverable and legacy broker order paths.
+- The veto is independent of signal quality, confidence, AUTO mode, and Risk Engine recommendations.
+- Scan results now expose `market_closed`, `market_data_state`, and `market_data_fresh_for_trading`.
+- The normal decision pipeline also returns `MARKET_CLOSED: new orders blocked by hard execution gate`.
+- Added regression tests proving broker/preflight code is unreachable while the FX weekend market-closed state is active.

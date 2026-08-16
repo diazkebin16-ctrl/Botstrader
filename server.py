@@ -5778,6 +5778,15 @@ async def recovery_price_preflight(client: httpx.AsyncClient, r: Dict[str,Any]) 
 async def execute_recoverable(client: httpx.AsyncClient, r: Dict[str,Any],
                               correlation_id: Optional[str], decision_id: Optional[str],
                               risk_decision_id: Optional[str]) -> Dict[str,Any]:
+    # Hard execution invariant: a known-closed FX market can never reach the broker
+    # order endpoint, regardless of signal, confidence, Risk Engine output, or AUTO mode.
+    if market_is_weekend_closed():
+        payload={"reason":"MARKET_CLOSED","market_closed":True,"market_data_state":"MARKET_CLOSED"}
+        try:
+            recovery_manager.journal("REJECT_EXECUTION",correlation_id,strategy_id=setup_variant(r),payload=payload)
+        except Exception:
+            pass
+        return {"skipped":"MARKET_CLOSED",**payload}
     if SINGLE and await haspos(client,r["instrument"]):
         return {"skipped":"existing_position"}
     preflight=await recovery_price_preflight(client,r)
@@ -5874,6 +5883,9 @@ async def execute_recoverable(client: httpx.AsyncClient, r: Dict[str,Any],
 
 
 async def execute(client: httpx.AsyncClient, r: Dict[str, Any]):
+    # Legacy/fallback execution path carries the same hard market-closed veto.
+    if market_is_weekend_closed():
+        return {"skipped":"MARKET_CLOSED","reason":"MARKET_CLOSED","market_closed":True,"market_data_state":"MARKET_CLOSED"}
     if SINGLE and await haspos(client, r["instrument"]):
         return {"skipped": "existing_position"}
     d = 3 if "JPY" in r["instrument"] else 5
@@ -7980,6 +7992,9 @@ async def scan(client: httpx.AsyncClient, inst: str) -> Dict[str, Any]:
     r = analyze(h1, m15, m5, m1, inst)
     obs_strategy_ms=(time.perf_counter()-obs_strategy_started)*1000
     r["market_data_stale"]=bool(obs_market_health.get("stale"))
+    r["market_closed"]=bool(obs_market_health.get("market_closed"))
+    r["market_data_state"]=obs_market_health.get("market_data_state") or ("STALE" if r["market_data_stale"] else "FRESH")
+    r["market_data_fresh_for_trading"]=bool(obs_market_health.get("fresh"))
     r["correlation_id"]=obs_trace_id
     if obs_trace_id: observability_manager.trace_phase(obs_trace_id,"signal",strategy_id=setup_variant(r))
     if OBSERVABILITY_ENABLED:
@@ -8123,6 +8138,8 @@ async def scan(client: httpx.AsyncClient, inst: str) -> Dict[str, Any]:
         decision={"execute":False,"reason":"SYSTEM_NOT_READY: startup health check incomplete/failed"}
     if r.get("market_data_stale"):
         decision={"execute":False,"reason":"MARKET_DATA_STALE: current data rejected by fail-safe"}
+    if r.get("market_closed") or r.get("market_data_state")=="MARKET_CLOSED":
+        decision={"execute":False,"reason":"MARKET_CLOSED: new orders blocked by hard execution gate"}
     if DEPLOYMENT_MANAGER_ENABLED and deployment_manager.kill("SYSTEM").get("active"):
         decision={"execute":False,"reason":"GLOBAL KILL SWITCH: new trades blocked"}
     if TRADING_ENVIRONMENT=="PRODUCTION" and PRODUCTION_READINESS_ENABLED and decision.get("execute"):
