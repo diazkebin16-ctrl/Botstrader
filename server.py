@@ -6032,6 +6032,7 @@ def save_signal(r: Dict[str, Any], executed: int, order_id: str, ml_probability:
                      ensemble_agreement=?,ensemble_diversity=?,ensemble_weight_version=? WHERE id=?""",
                   (ens.get("ensemble_decision_id"),ens.get("ensemble_direction"),ens.get("ensemble_confidence"),
                    ens.get("agreement_score"),ens.get("diversity_score"),ens.get("ensemble_weight_version"),signal_id))
+    c.commit()
     if ENSEMBLE_ENABLED and ens.get("ensemble_decision_id"):
         try:
             ensemble_engine.shadow_compare(
