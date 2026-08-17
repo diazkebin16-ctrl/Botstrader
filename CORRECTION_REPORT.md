@@ -64,3 +64,14 @@ No hard risk limits were increased. Smart Execution, Capital Allocation, Ensembl
   sufficient executed-trade evidence.
 - This prevents hypothetical losses from being treated as actual executed losses by
   AI Strategy Director / Adaptive Risk.
+
+
+## V3.27 complete ML training import fix
+- Completed the dependency imports used by `train_shadow_model`.
+- Added `joblib`, `TimeSeriesSplit`, `Pipeline`, `StandardScaler`,
+  `LogisticRegression`, `accuracy_score`, `roc_auc_score`, `log_loss`,
+  and `brier_score_loss`.
+- Added regression tests that verify all trainer symbols exist and that the
+  time-series logistic-regression pipeline can actually fit/predict.
+- This fixes the runtime progression from `np is not defined` to
+  `TimeSeriesSplit is not defined` and prevents the next missing-symbol failure.

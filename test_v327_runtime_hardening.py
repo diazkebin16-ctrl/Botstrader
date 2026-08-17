@@ -121,3 +121,40 @@ def test_counterfactual_health_cannot_become_operational_watch(monkeypatch):
     out = server._evaluate_one_strategy_health("CF_TEST")
     assert out["status"] == "LEARNING"
     assert "counterfactual" in out["reason"]
+
+
+def test_shadow_training_dependencies_are_imported():
+    required = [
+        "np",
+        "joblib",
+        "TimeSeriesSplit",
+        "Pipeline",
+        "StandardScaler",
+        "LogisticRegression",
+        "accuracy_score",
+        "roc_auc_score",
+        "log_loss",
+        "brier_score_loss",
+    ]
+    missing = [name for name in required if not hasattr(server, name)]
+    assert missing == [], f"missing ML training imports: {missing}"
+
+
+def test_timeseries_pipeline_can_fit_small_binary_dataset():
+    X = server.np.asarray([
+        [0.0, 0.1], [0.1, 0.2], [0.2, 0.1], [0.3, 0.4],
+        [0.4, 0.3], [0.5, 0.6], [0.6, 0.5], [0.7, 0.8],
+        [0.8, 0.7], [0.9, 1.0], [1.0, 0.9], [1.1, 1.2],
+    ])
+    y = server.np.asarray([0, 0, 1, 1, 0, 1, 0, 1, 0, 1, 0, 1])
+    splits = list(server.TimeSeriesSplit(n_splits=3).split(X))
+    assert len(splits) == 3
+    tr, te = splits[-1]
+    model = server.Pipeline([
+        ("scale", server.StandardScaler()),
+        ("clf", server.LogisticRegression(max_iter=1000, class_weight="balanced")),
+    ])
+    model.fit(X[tr], y[tr])
+    prob = model.predict_proba(X[te])[:, 1]
+    assert len(prob) == len(te)
+    assert all(0.0 <= float(p) <= 1.0 for p in prob)
