@@ -1109,6 +1109,7 @@ def conn() -> sqlite3.Connection:
     c = sqlite3.connect(DB)
     c.row_factory = sqlite3.Row
     c.execute("PRAGMA journal_mode=WAL")
+    c.execute("PRAGMA busy_timeout=5000")
     c.execute("PRAGMA synchronous=NORMAL")
     c.execute("""
         CREATE TABLE IF NOT EXISTS signals(
@@ -7626,7 +7627,7 @@ def observability_silent_anomalies() -> List[Dict[str,Any]]:
 def observability_refresh_noncritical_modules():
     c=conn()
     al=c.execute("SELECT completed_ts,status,summary_json FROM adaptive_learning_runs ORDER BY id DESC LIMIT 1").fetchone()
-    vr=c.execute("SELECT completed_ts,final_status FROM candidate_validation_runs ORDER BY id DESC LIMIT 1").fetchone()
+    vr=c.execute("SELECT completed_ts,final_status FROM candidate_validation_runs ORDER BY completed_ts DESC LIMIT 1").fetchone()
     paper=c.execute("SELECT MAX(created_ts) ts,COUNT(*) n FROM candidate_paper_trades").fetchone()
     c.close()
     _obs_module("Adaptive Learning","OK" if ADAPTIVE_LEARNING_ENABLED else "PAUSED",last_operation=al["completed_ts"] if al else None,
