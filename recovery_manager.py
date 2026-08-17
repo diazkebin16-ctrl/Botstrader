@@ -91,6 +91,7 @@ class RecoveryManager:
         max_read_retries: int = 4,
         backoff_base_seconds: float = 0.4,
         backoff_cap_seconds: float = 8.0,
+        allow_orphan_quarantine: bool = False,
     ):
         self.db_path=db_path
         self.base_url=base_url.rstrip("/")
@@ -104,6 +105,9 @@ class RecoveryManager:
         self.max_read_retries=max(0,int(max_read_retries))
         self.backoff_base=max(0.05,float(backoff_base_seconds))
         self.backoff_cap=max(self.backoff_base,float(backoff_cap_seconds))
+        # Practice-only escape hatch for stale local position rows. In live/production
+        # this must remain False: an unexplained missing broker trade is reconciliation-required.
+        self.allow_orphan_quarantine=bool(allow_orphan_quarantine)
         self._request_lock=asyncio.Lock()
         self._last_request_monotonic=0.0
 
@@ -933,6 +937,57 @@ class RecoveryManager:
         c.close()
         return {str(x["trade_id"]):x for x in rows}
 
+    def _quarantine_missing_internal_trade(self, trade_id: str, internal: Dict[str,Any]) -> bool:
+        """Quarantine a stale *local* open trade without inventing a broker close.
+
+        This is deliberately available only when the caller configured
+        ``allow_orphan_quarantine`` (practice accounts).  The record is not marked
+        CLOSED and therefore cannot become a fabricated win/loss.  It is removed
+        from active position/risk management while preserving the full audit trail.
+        """
+        if not self.allow_orphan_quarantine:
+            return False
+        c=self.conn()
+        try:
+            # Do not quarantine an unresolved submission/order state.  Those remain
+            # safety-critical until broker evidence resolves them.
+            unresolved=c.execute("""SELECT 1 FROM recovery_order_intents
+                WHERE account_scope=? AND broker_trade_id=?
+                  AND state IN ('SUBMITTING','SUBMITTED','ACKNOWLEDGED','PARTIALLY_FILLED','UNKNOWN')
+                LIMIT 1""",(self.account_scope,str(trade_id))).fetchone()
+            if unresolved:
+                return False
+            ts=now_iso()
+            c.execute("UPDATE active_trade_management SET closed=1,last_action='BROKER_MISSING_QUARANTINED',updated_ts=? WHERE trade_id=? AND closed=0",
+                      (ts,str(trade_id)))
+            # BROKER_MISSING is intentionally non-CLOSED: learning/performance code
+            # must not treat an unknown outcome as a resolved trade.
+            try:
+                row=c.execute("SELECT data_quality_json FROM trade_memory WHERE trade_id=?",(str(trade_id),)).fetchone()
+                quality={}
+                if row and row['data_quality_json']:
+                    try: quality=json.loads(row['data_quality_json'])
+                    except Exception: quality={}
+                quality.update({
+                    'broker_trade_missing':True,
+                    'broker_exit_unverified':True,
+                    'excluded_from_learning':True,
+                    'quarantined_ts':ts,
+                })
+                c.execute("""UPDATE trade_memory SET status='BROKER_MISSING',
+                    execution_quality_compromised=1,data_quality_json=?,updated_ts=?
+                    WHERE trade_id=? AND status='OPEN'""",(_j(quality),ts,str(trade_id)))
+            except sqlite3.OperationalError:
+                pass
+            c.commit()
+            self.journal('POSITION_ORPHAN_QUARANTINED',trade_id=str(trade_id),
+                         strategy_id=internal.get('setup_variant'),
+                         payload={'reason':'internal open trade absent from authoritative broker open-trade snapshot',
+                                  'learning_outcome_invented':False})
+            return True
+        finally:
+            c.close()
+
     def reconcile_snapshot(self,snapshot:Dict[str,Any]) -> Dict[str,Any]:
         self.set_state("RECONCILING","comparing internal state with broker",safe_mode=True,new_trades_allowed=False)
         recon_id="recon_"+uuid.uuid4().hex
@@ -1046,9 +1101,17 @@ class RecoveryManager:
 
         for tid,intr in internal.items():
             if tid not in broker_trades:
-                # It may have closed; Trade Memory reconciliation should confirm later.
-                status="RECONCILIATION_REQUIRED";reason="internal open trade absent from broker open-trade snapshot"
-                self._record_reconciliation_item(recon_id,"POSITION",tid,status,"HIGH",intr,{},reason)
+                # Never infer a profitable/loss-making close from absence alone.  On
+                # practice accounts we may quarantine a stale local row so it cannot
+                # poison risk/recovery forever; production keeps the hard block.
+                quarantined=self._quarantine_missing_internal_trade(tid,intr)
+                if quarantined:
+                    status="MINOR_MISMATCH";reason="stale local trade quarantined; broker outcome remains unknown and excluded from learning"
+                    severity="INFO"
+                else:
+                    status="RECONCILIATION_REQUIRED";reason="internal open trade absent from broker open-trade snapshot; broker close not proven"
+                    severity="HIGH"
+                self._record_reconciliation_item(recon_id,"POSITION",tid,status,severity,intr,{},reason)
                 counts[status]+=1
                 if severity_rank[status]>severity_rank[worst]:worst=status
 

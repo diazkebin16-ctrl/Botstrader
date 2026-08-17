@@ -77,8 +77,20 @@ SINGLE = os.getenv("SINGLE_POSITION_PER_INSTRUMENT", "true").lower() == "true"
 SESSION = os.getenv("SESSION_FILTER", "true").lower() == "true"
 NEWS = os.getenv("NEWS_FILTER", "true").lower() == "true"
 MIN_RR = float(os.getenv("MIN_RR", "1.5"))
-DB = os.getenv("DB_PATH", "/data/market_alert.db" if os.path.isdir("/data") else "market_alert.db")
-MODEL_PATH = os.getenv("MODEL_PATH", "/data/market_alert_model.joblib" if os.path.isdir("/data") else "market_alert_model.joblib")
+# Persistence resolution: explicit DB_PATH wins.  Railway volumes expose their
+# mount path via RAILWAY_VOLUME_MOUNT_PATH; /data remains the conventional fallback.
+def _persistent_base_dir() -> Optional[str]:
+    explicit=os.getenv("RAILWAY_VOLUME_MOUNT_PATH","").strip()
+    if explicit and os.path.isdir(explicit):
+        return explicit
+    if os.path.isdir("/data"):
+        return "/data"
+    return None
+
+_PERSISTENT_BASE=_persistent_base_dir()
+DB = os.getenv("DB_PATH", os.path.join(_PERSISTENT_BASE,"market_alert.db") if _PERSISTENT_BASE else "market_alert.db")
+MODEL_PATH = os.getenv("MODEL_PATH", os.path.join(_PERSISTENT_BASE,"market_alert_model.joblib") if _PERSISTENT_BASE else "market_alert_model.joblib")
+DB_PERSISTENT = bool(os.path.isabs(DB) and _PERSISTENT_BASE and os.path.commonpath([os.path.abspath(DB),os.path.abspath(_PERSISTENT_BASE)])==os.path.abspath(_PERSISTENT_BASE))
 ML_SHADOW = os.getenv("ML_SHADOW", "true").lower() == "true"
 ML_MIN_SAMPLES = max(50, int(os.getenv("ML_MIN_SAMPLES", "100")))
 ML_RETRAIN_HOURS = max(1, int(os.getenv("ML_RETRAIN_HOURS", "24")))
@@ -333,6 +345,7 @@ RECOVERY_BACKOFF_CAP_SECONDS = max(1.0,float(os.getenv("RECOVERY_BACKOFF_CAP_SEC
 RECOVERY_RECONCILE_INTERVAL_SECONDS = max(30,int(os.getenv("RECOVERY_RECONCILE_INTERVAL_SECONDS","120")))
 RECOVERY_MARKET_DATA_MAX_AGE_SECONDS = max(30,int(os.getenv("RECOVERY_MARKET_DATA_MAX_AGE_SECONDS","180")))
 RECOVERY_BLOCK_ADAPTIVE_LEARNING_COMPROMISED = os.getenv("RECOVERY_BLOCK_ADAPTIVE_LEARNING_COMPROMISED","true").lower()=="true"
+RECOVERY_PRACTICE_ORPHAN_QUARANTINE = os.getenv("RECOVERY_PRACTICE_ORPHAN_QUARANTINE", "true").lower() == "true"
 RECOVERY_MAX_QUOTE_AGE_SECONDS = max(2,float(os.getenv("RECOVERY_MAX_QUOTE_AGE_SECONDS","10")))
 RECOVERY_MAX_SPREAD_PIPS = max(.5,float(os.getenv("RECOVERY_MAX_SPREAD_PIPS","5")))
 RECOVERY_MAX_PRICE_DEVIATION_PIPS = max(2,float(os.getenv("RECOVERY_MAX_PRICE_DEVIATION_PIPS","20")))
@@ -914,7 +927,8 @@ recovery_manager = RecoveryManager(
     request_min_interval_ms=RECOVERY_REQUEST_MIN_INTERVAL_MS,
     max_read_retries=RECOVERY_MAX_READ_RETRIES,
     backoff_base_seconds=RECOVERY_BACKOFF_BASE_SECONDS,
-    backoff_cap_seconds=RECOVERY_BACKOFF_CAP_SECONDS
+    backoff_cap_seconds=RECOVERY_BACKOFF_CAP_SECONDS,
+    allow_orphan_quarantine=bool(PRIMARY_OANDA_ENV=="practice" and RECOVERY_PRACTICE_ORPHAN_QUARANTINE)
 )
 
 canary_recovery_manager = RecoveryManager(
@@ -7225,7 +7239,8 @@ def learning_stats() -> Dict[str, Any]:
     return {
         "samples_total": total, "resolved_labeled": resolved, "pending_or_unlabeled": total - resolved,
         "pending": pending, "ambiguous": ambiguous, "timeouts": timeouts,
-        "db_path": DB, "persistent_db_recommended": DB.startswith("/data/"),
+        "db_path": DB, "persistent_db_recommended": DB_PERSISTENT,
+        "db_persistence": {"persistent":DB_PERSISTENT,"base":_PERSISTENT_BASE,"railway_volume_mount":os.getenv("RAILWAY_VOLUME_MOUNT_PATH")},
         "win_rate_all": (wins / resolved) if resolved else None,
         "executed_resolved": executed_resolved, "win_rate_executed": (executed_wins / executed_resolved) if executed_resolved else None,
         "blocked_resolved": blocked_resolved, "counterfactual_win_rate_blocked": (blocked_wins / blocked_resolved) if blocked_resolved else None,
