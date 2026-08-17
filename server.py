@@ -77,20 +77,69 @@ SINGLE = os.getenv("SINGLE_POSITION_PER_INSTRUMENT", "true").lower() == "true"
 SESSION = os.getenv("SESSION_FILTER", "true").lower() == "true"
 NEWS = os.getenv("NEWS_FILTER", "true").lower() == "true"
 MIN_RR = float(os.getenv("MIN_RR", "1.5"))
-# Persistence resolution: explicit DB_PATH wins.  Railway volumes expose their
-# mount path via RAILWAY_VOLUME_MOUNT_PATH; /data remains the conventional fallback.
+# Storage resolution. A Railway volume cannot be created by application code;
+# the runtime can only detect and use a mounted persistent path.  We therefore
+# separate "configured" from "recommended" and never claim that the ephemeral
+# container filesystem is persistent.
+IS_RAILWAY = bool(os.getenv("RAILWAY_ENVIRONMENT") or os.getenv("RAILWAY_PROJECT_ID") or os.getenv("RAILWAY_SERVICE_ID"))
+PERSISTENT_STORAGE_PATH = os.getenv("PERSISTENT_STORAGE_PATH","").strip()
+RAILWAY_VOLUME_MOUNT_PATH = os.getenv("RAILWAY_VOLUME_MOUNT_PATH","").strip()
+PERSISTENCE_REQUIRED = os.getenv(
+    "PERSISTENCE_REQUIRED", "true" if TRADING_ENVIRONMENT=="PRODUCTION" else "false"
+).lower()=="true"
+
 def _persistent_base_dir() -> Optional[str]:
-    explicit=os.getenv("RAILWAY_VOLUME_MOUNT_PATH","").strip()
-    if explicit and os.path.isdir(explicit):
-        return explicit
-    if os.path.isdir("/data"):
-        return "/data"
+    candidates=[PERSISTENT_STORAGE_PATH,RAILWAY_VOLUME_MOUNT_PATH,"/data"]
+    for raw in candidates:
+        if not raw: continue
+        path=os.path.abspath(os.path.expanduser(raw))
+        if os.path.isdir(path) and os.access(path,os.W_OK):
+            return path
     return None
 
 _PERSISTENT_BASE=_persistent_base_dir()
 DB = os.getenv("DB_PATH", os.path.join(_PERSISTENT_BASE,"market_alert.db") if _PERSISTENT_BASE else "market_alert.db")
 MODEL_PATH = os.getenv("MODEL_PATH", os.path.join(_PERSISTENT_BASE,"market_alert_model.joblib") if _PERSISTENT_BASE else "market_alert_model.joblib")
-DB_PERSISTENT = bool(os.path.isabs(DB) and _PERSISTENT_BASE and os.path.commonpath([os.path.abspath(DB),os.path.abspath(_PERSISTENT_BASE)])==os.path.abspath(_PERSISTENT_BASE))
+
+def _path_within(path: str, base: Optional[str]) -> bool:
+    if not base or not os.path.isabs(path): return False
+    try:
+        return os.path.commonpath([os.path.abspath(path),os.path.abspath(base)])==os.path.abspath(base)
+    except ValueError:
+        return False
+
+DB_PERSISTENT = _path_within(DB,_PERSISTENT_BASE)
+MODEL_PERSISTENT = _path_within(MODEL_PATH,_PERSISTENT_BASE)
+
+# Explicit DB_PATH/MODEL_PATH parents are created when possible. This supports a
+# mounted volume such as /data without silently manufacturing a fake "persistent"
+# directory on an ephemeral filesystem.
+for _storage_path in (DB,MODEL_PATH):
+    _parent=os.path.dirname(os.path.abspath(_storage_path))
+    if _parent and _parent!=os.getcwd() and (os.path.isabs(_storage_path) or os.path.dirname(_storage_path)):
+        os.makedirs(_parent,exist_ok=True)
+
+def storage_status() -> Dict[str,Any]:
+    persistent=bool(DB_PERSISTENT and MODEL_PERSISTENT)
+    railway_missing=bool(IS_RAILWAY and not persistent)
+    if persistent:
+        status="PERSISTENT"
+        action=None
+    elif railway_missing:
+        status="ACTION_REQUIRED_RAILWAY_VOLUME"
+        action="Attach a Railway Volume mounted at /data (or set PERSISTENT_STORAGE_PATH/DB_PATH to its mount path)."
+    else:
+        status="EPHEMERAL"
+        action="Configure a persistent volume/path before relying on learning across restarts."
+    return {
+        "status":status,"persistent":persistent,"db_persistent":bool(DB_PERSISTENT),
+        "model_persistent":bool(MODEL_PERSISTENT),"db_path":DB,"model_path":MODEL_PATH,
+        "base":_PERSISTENT_BASE,"is_railway":IS_RAILWAY,
+        "railway_volume_mount":RAILWAY_VOLUME_MOUNT_PATH or None,
+        "persistent_storage_path":PERSISTENT_STORAGE_PATH or None,
+        "persistence_required":bool(PERSISTENCE_REQUIRED),
+        "action_required":bool(not persistent),"action":action,
+    }
 ML_SHADOW = os.getenv("ML_SHADOW", "true").lower() == "true"
 ML_MIN_SAMPLES = max(50, int(os.getenv("ML_MIN_SAMPLES", "100")))
 ML_RETRAIN_HOURS = max(1, int(os.getenv("ML_RETRAIN_HOURS", "24")))
@@ -124,7 +173,7 @@ TREND_RUNNER_MIN_SCORE = max(0.0, float(os.getenv("TREND_RUNNER_MIN_SCORE", "0.6
 TREND_RUNNER_TP_R = max(2.0, float(os.getenv("TREND_RUNNER_TP_R", "3.0")))
 TREND_RUNNER_TRAIL_START_R = max(1.5, float(os.getenv("TREND_RUNNER_TRAIL_START_R", "1.75")))
 TREND_RUNNER_TRAIL_DISTANCE_R = max(0.40, float(os.getenv("TREND_RUNNER_TRAIL_DISTANCE_R", "0.90")))
-VERSION_TAG = "3.26"
+VERSION_TAG = "3.27"
 ENTRY_TIMING_ENABLED = os.getenv("ENTRY_TIMING_ENABLED", "true").lower() == "true"
 MAX_ENTRY_EXTENSION_ATR = max(0.5, float(os.getenv("MAX_ENTRY_EXTENSION_ATR", "1.20")))
 MIN_ROOM_TO_BARRIER_R = max(1.0, float(os.getenv("MIN_ROOM_TO_BARRIER_R", "1.50")))
@@ -397,7 +446,7 @@ logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(
 for _handler in logging.getLogger().handlers:
     _handler.addFilter(RedactingFilter())
 log = logging.getLogger("market-alert")
-app = FastAPI(title="Market Alert V3.26 — Dynamic Capital Allocation Shadow")
+app = FastAPI(title="Market Alert V3.27 — Integrated Shadow Runtime")
 state: Dict[str, Any] = {
     "started": datetime.now(timezone.utc).isoformat(),
     "last_scan": None,
@@ -414,7 +463,7 @@ state: Dict[str, Any] = {
     "learning": {"last_train": None, "model_ready": False, "note": "Waiting for resolved samples"},
     "system_ready": False,
     "startup_health": None,
-    "observability": {"last_refresh": None, "last_broker_snapshot": None},
+    "observability": {"enabled": OBSERVABILITY_ENABLED, "version": VERSION_TAG, "last_refresh": None, "last_broker_snapshot": None},
 }
 
 FEATURE_COLUMNS = [
@@ -897,6 +946,7 @@ sync_security_runtime_config()
 
 OBSERVABILITY_DEPENDENCIES = {
     "Database":DEPENDENCY_CRITICAL,
+    "Persistent Storage":DEPENDENCY_IMPORTANT,
     "Market Data":DEPENDENCY_CRITICAL,
     "Market Regime Detector":DEPENDENCY_IMPORTANT,
     "Broker Connection":DEPENDENCY_CRITICAL,
@@ -1143,6 +1193,8 @@ def conn() -> sqlite3.Connection:
             recent_win_rate REAL,
             performance_penalty REAL,
             hard_filters_ok INTEGER NOT NULL,
+            safety_filters_ok INTEGER,
+            quality_filters_ok INTEGER,
             auto_trade INTEGER NOT NULL,
             executed INTEGER NOT NULL,
             reason TEXT NOT NULL
@@ -1194,6 +1246,15 @@ def conn() -> sqlite3.Connection:
     for name, ddl in sample_migrations.items():
         if name not in sample_cols:
             c.execute(f"ALTER TABLE learning_samples ADD COLUMN {name} {ddl}")
+
+    # V3.27 decision telemetry: distinguish safety invariants from quality-entry gates.
+    decision_cols = {row[1] for row in c.execute("PRAGMA table_info(decision_log)").fetchall()}
+    for name, ddl in {
+        "safety_filters_ok":"INTEGER",
+        "quality_filters_ok":"INTEGER",
+    }.items():
+        if name not in decision_cols:
+            c.execute(f"ALTER TABLE decision_log ADD COLUMN {name} {ddl}")
 
     c.execute("""
         CREATE TABLE IF NOT EXISTS discovered_patterns(
@@ -5592,16 +5653,24 @@ def save_decision(r: Dict[str, Any], conf: Dict[str, Any], executed: int, reason
         if prev:
             c.close()
             return
+    safety_ok=bool(r.get("signal") in ("BUY","SELL") and not r.get("blocked",True))
+    try:
+        quality_ok=bool(safety_ok and quality_entry_gate(r,conf).get("ok"))
+    except Exception:
+        quality_ok=False
+    # Legacy hard_filters_ok now means all deterministic pre-confidence gates,
+    # not merely the low-level price/risk safety checks.
+    hard_ok=bool(safety_ok and quality_ok)
     c.execute("""
         INSERT INTO decision_log(ts,candle_ts,instrument,signal,setup_variant,quality_score,dynamic_confidence,
           confidence_source,confidence_samples,required_confidence,recent_win_rate,performance_penalty,
-          hard_filters_ok,auto_trade,executed,reason)
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+          hard_filters_ok,safety_filters_ok,quality_filters_ok,auto_trade,executed,reason)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     """, (
         now_iso(), r.get("candle_ts"), r["instrument"], r["signal"], conf.get("variant"),
         r.get("score"), conf.get("probability"), conf.get("source"), conf.get("samples"),
         conf.get("required_confidence"), conf.get("recent_win_rate"), conf.get("performance_penalty"),
-        int(not r.get("blocked", True)), int(AUTO), int(executed), reason
+        int(hard_ok),int(safety_ok),int(quality_ok),int(AUTO),int(executed),reason
     ))
     c.commit(); c.close()
 
@@ -6238,14 +6307,18 @@ def build_ensemble_shadow_signals(r: Dict[str,Any], conf: Dict[str,Any], mlp: Op
         "metadata":{"setup_variant":setup_variant(r),"buy_score":r.get("buy_score"),"sell_score":r.get("sell_score")}
     }]
     # ML is explicitly a success-probability calibrator for the technical setup.
+    ml_model_exists=Path(MODEL_PATH).exists()
+    ml_lifecycle="READY" if mlp is not None else ("WAITING_FOR_EVIDENCE" if not ml_model_exists else "PREDICTION_UNAVAILABLE")
     signals.append({
         "strategy_id":"ML_SUCCESS_CALIBRATOR","strategy_version":f"ml@{VERSION_TAG}","symbol":symbol,"timestamp":ts,
         "direction":"ABSTAIN","confidence":float(mlp) if mlp is not None else .5,"expected_edge":None,
         "market_regime":reg.get("market_regime"),"time_horizon":"INTRADAY","signal_strength":float(mlp) if mlp is not None else 0.0,
-        "risk_characteristics":{},"data_quality":dq,"family":"TECHNICAL_CALIBRATION",
+        "risk_characteristics":{},"data_quality":dq if mlp is not None else 0.0,"family":"TECHNICAL_CALIBRATION",
         "input_dependencies":["TECHNICAL_FEATURE_VECTOR","RESOLVED_LABELS"],"role":"CALIBRATOR",
-        "ttl_seconds":ENSEMBLE_SIGNAL_TTL_SECONDS,"status":"ONLINE" if mlp is not None else "OFFLINE",
-        "metadata":{"meaning":"probability current setup resolves positively; not a direction model"}
+        "ttl_seconds":ENSEMBLE_SIGNAL_TTL_SECONDS,
+        "status":"ONLINE" if (mlp is not None or not ml_model_exists) else "OFFLINE",
+        "metadata":{"meaning":"probability current setup resolves positively; not a direction model",
+                    "lifecycle_state":ml_lifecycle,"model_exists":ml_model_exists}
     })
     bias=str(r.get("news_bias") or "NEUTRAL").upper()
     news_dir="LONG" if bias=="BULLISH" else "SHORT" if bias=="BEARISH" else "ABSTAIN"
@@ -7239,8 +7312,11 @@ def learning_stats() -> Dict[str, Any]:
     return {
         "samples_total": total, "resolved_labeled": resolved, "pending_or_unlabeled": total - resolved,
         "pending": pending, "ambiguous": ambiguous, "timeouts": timeouts,
-        "db_path": DB, "persistent_db_recommended": DB_PERSISTENT,
-        "db_persistence": {"persistent":DB_PERSISTENT,"base":_PERSISTENT_BASE,"railway_volume_mount":os.getenv("RAILWAY_VOLUME_MOUNT_PATH")},
+        "db_path": DB,
+        # "recommended" means a recommendation is outstanding, not that persistence is already configured.
+        "persistent_db_recommended": not DB_PERSISTENT,
+        "persistent_db_configured": DB_PERSISTENT,
+        "db_persistence": storage_status(),
         "win_rate_all": (wins / resolved) if resolved else None,
         "executed_resolved": executed_resolved, "win_rate_executed": (executed_wins / executed_resolved) if executed_resolved else None,
         "blocked_resolved": blocked_resolved, "counterfactual_win_rate_blocked": (blocked_wins / blocked_resolved) if blocked_resolved else None,
@@ -7461,11 +7537,18 @@ async def observability_broker_snapshot(client: httpx.AsyncClient) -> Dict[str,A
               "open_risk":open_risk,"remaining_risk_budget":max(0.0,float(managed_value("risk.max_portfolio_fraction",RISK_MAX_PORTFOLIO_FRACTION))-open_risk),
               "broker_instruments":broker_instruments,"internal_instruments":internal,"account":a}
         observability_manager.record_capital(snap,"OANDA_PRACTICE")
+        state.setdefault("observability",{})["last_broker_snapshot"]={
+            "ts":now_iso(),"ok":True,"latency_ms":latency,"nav":nav,"balance":balance,
+            "margin_usage":margin_usage,"open_positions":len(broker_instruments),
+            "open_risk":open_risk,"reconciliation":snap.get("reconciliation")
+        }
+        state["observability"]["last_refresh"]=now_iso()
         _obs_module("Broker Connection","OK",latency,last_operation="account summary/open positions",
                     details={"nav":nav,"margin_usage":margin_usage,"open_positions":len(broker_instruments),"broker_instruments":broker_instruments})
         observability_manager.recover("BROKER_DISCONNECTED","Broker connection recovered",{"latency_ms":latency})
         rec=observability_reconciliation_status(internal,broker_instruments)
         snap["reconciliation"]=rec
+        state.setdefault("observability",{}).setdefault("last_broker_snapshot",{})["reconciliation"]=rec
         if rec["status"]!="CONSISTENT":
             observability_manager.alert("POSITION_STATE_MISMATCH","HIGH","Execution Engine","STATE_RECONCILIATION_REQUIRED",
                 "Broker positions differ from internal managed positions",details=rec)
@@ -7493,6 +7576,8 @@ async def observability_broker_snapshot(client: httpx.AsyncClient) -> Dict[str,A
         _obs_module("Broker Connection","ERROR",latency,errors=[str(e)])
         observability_manager.alert("BROKER_DISCONNECTED","CRITICAL","Broker Connection","BROKER_DISCONNECTED",
                                     "Broker connection/read failed",details={"error":str(e),"latency_ms":latency})
+        state.setdefault("observability",{})["last_broker_snapshot"]={"ts":now_iso(),"ok":False,"latency_ms":latency,"error":str(e)}
+        state["observability"]["last_refresh"]=now_iso()
         return {"ok":False,"latency_ms":latency,"error":str(e),"broker_instruments":[]}
 
 
@@ -7615,6 +7700,18 @@ async def observability_startup_health_check() -> Dict[str,Any]:
         checks["database"]={"ok":True,"latency_ms":lat};_obs_module("Database","OK",lat,last_operation="startup SELECT 1")
     except Exception as e:
         checks["database"]={"ok":False,"error":str(e)};_obs_module("Database","ERROR",errors=[str(e)])
+    storage=storage_status()
+    storage_ok=bool(storage["persistent"] or not PERSISTENCE_REQUIRED)
+    checks["storage"]={"ok":storage_ok,**storage}
+    _obs_module("Persistent Storage","OK" if storage["persistent"] else "DEGRADED",
+                warnings=[] if storage["persistent"] else [storage.get("action") or "persistent storage not configured"],
+                last_operation="storage configuration validated",details=storage)
+    if not storage["persistent"]:
+        observability_manager.alert("PERSISTENT_STORAGE_NOT_CONFIGURED",
+            "HIGH" if PERSISTENCE_REQUIRED else "WARNING","Database","PERSISTENT_STORAGE_NOT_CONFIGURED",
+            "Learning/model storage is ephemeral and will not survive a Railway redeploy.",details=storage)
+    else:
+        observability_manager.recover("PERSISTENT_STORAGE_NOT_CONFIGURED","Persistent learning/model storage is configured",storage)
     async with httpx.AsyncClient() as client:
         broker=await observability_broker_snapshot(client);checks["broker"]={"ok":bool(broker.get("ok")),"latency_ms":broker.get("latency_ms")}
         # Market data on first configured instrument.
@@ -7649,7 +7746,8 @@ async def observability_startup_health_check() -> Dict[str,Any]:
         d=deployment_manager.dashboard();checks["deployments_loaded"]={"ok":True,"deployments":len(d.get("deployments",[]))};_obs_module("Deployment Manager","OK",last_operation="deployment states loaded")
     except Exception as e:
         checks["deployments_loaded"]={"ok":False,"error":str(e)};_obs_module("Deployment Manager","ERROR",errors=[str(e)])
-    critical_keys=("database","broker","market_data","positions_reconciled","risk_engine","strategies_loaded","deployments_loaded")
+    critical_keys=["database","broker","market_data","positions_reconciled","risk_engine","strategies_loaded","deployments_loaded"]
+    if PERSISTENCE_REQUIRED: critical_keys.append("storage")
     ready=all(bool(checks.get(k,{}).get("ok")) for k in critical_keys)
     status="SYSTEM_READY" if ready else "STARTUP_HEALTH_FAILED"
     state["system_ready"]=ready;state["startup_health"]={"status":status,"checks":checks,"reconciliation":reconciliation,"ts":now_iso()}
@@ -9610,7 +9708,20 @@ async def market_regime_api(instrument: Optional[str] = None, limit: int = 100):
 
 @app.get("/api/status")
 async def status():
-    return {**state, "practice_only": True, "operation_count_limit": None, "auto_trade": AUTO,
+    dataset=learning_stats()
+    training=dict(state.get("learning") or {})
+    # Older code used a generic "samples" field for labeled training rows while
+    # /api/learning used samples_total for all research rows. Expose unambiguous names.
+    training.pop("samples",None)
+    training.update({
+        "training_labeled_samples":dataset.get("resolved_labeled",0),
+        "research_samples_total":dataset.get("samples_total",0),
+        "pending_samples":dataset.get("pending",0),
+        "model_ready":dataset.get("model_ready",False),
+        "retrain_policy":dataset.get("retrain_policy"),
+    })
+    return {**state,"version":VERSION_TAG,"learning":training,"storage":storage_status(),
+            "practice_only": OANDA.endswith("fxpractice.oanda.com"), "operation_count_limit": None, "auto_trade": AUTO,
             "instruments": INSTRUMENTS, "trade_units": UNITS, "quality_threshold": THRESH,
             "bootstrap_score_threshold": BOOTSTRAP_SCORE_THRESHOLD,
             "execution_min_confidence": EXECUTION_MIN_CONFIDENCE, "confidence_min_samples": CONFIDENCE_MIN_SAMPLES,
@@ -9621,6 +9732,11 @@ async def status():
             "smart_execution":{"enabled":SMART_EXECUTION_ENABLED,"mode":"SHADOW","policy_authority":False},
             "capital_allocation":{"enabled":CAPITAL_ALLOCATION_ENABLED,"mode":"SHADOW","risk_limit_authority":False,"order_authority":False},
             "scanner": scanner_health_snapshot()}
+
+
+@app.get("/api/storage")
+async def storage_api():
+    return storage_status()
 
 
 @app.get("/api/signals")
@@ -10374,9 +10490,9 @@ async def discovery():
 
 @app.get("/", response_class=HTMLResponse)
 async def home():
-    return """<!doctype html><html lang='es'><meta name='viewport' content='width=device-width'><title>Market Alert V1.7</title>
+    return """<!doctype html><html lang='es'><meta name='viewport' content='width=device-width'><title>Market Alert V3.27</title>
 <style>body{font-family:system-ui;background:#0b1020;color:#eef2ff;max-width:1050px;margin:auto;padding:24px}.c{background:#151c32;border:1px solid #2c3656;border-radius:16px;padding:18px;margin:12px 0}pre{white-space:pre-wrap;word-break:break-word;background:#080c17;padding:14px;border-radius:12px}.tag{display:inline-block;padding:5px 9px;border-radius:999px;background:#25304f;margin-right:6px}</style>
-<h1>Market Alert V3.25 · Intelligent Ensemble Shadow</h1><div class=c><span class=tag>OANDA PRACTICE ONLY</span><span class=tag>24/7</span><span class=tag>Sin límite diario</span><span class=tag>Confianza calibrada</span>
+<h1>Market Alert V3.27 · Integrated Shadow Runtime</h1><div class=c><span class=tag>OANDA PRACTICE ONLY</span><span class=tag>24/7</span><span class=tag>Sin límite diario</span><span class=tag>Confianza calibrada</span>
 <p><b>Quality Score ≠ probabilidad.</b> La confianza dinámica se calibra con resultados reales. Con poca muestra se limita deliberadamente y el 90% requiere evidencia sustancial.</p></div>
 <div class=c><h2>Estado</h2><pre id=s>Cargando…</pre></div><div class=c><h2>Aprendizaje</h2><pre id=l>Cargando…</pre></div><div class=c><h2>Última decisión</h2><pre id=d>Cargando…</pre></div><div class=c><h2>Últimas señales</h2><pre id=h>Cargando…</pre></div>
 <script>async function u(){s.textContent=JSON.stringify(await fetch('/api/status').then(r=>r.json()),null,2);l.textContent=JSON.stringify(await fetch('/api/learning').then(r=>r.json()),null,2);d.textContent=JSON.stringify(await fetch('/api/decisions?limit=5').then(r=>r.json()),null,2);h.textContent=JSON.stringify(await fetch('/api/signals?limit=15').then(r=>r.json()),null,2)}u();setInterval(u,15000)</script></html>"""

@@ -75,3 +75,15 @@ No hard risk limits were increased. Smart Execution, Capital Allocation, Ensembl
   time-series logistic-regression pipeline can actually fit/predict.
 - This fixes the runtime progression from `np is not defined` to
   `TimeSeriesSplit is not defined` and prevents the next missing-symbol failure.
+
+
+## V3.27 integrated runtime coherence and persistence review
+- Runtime/UI version normalized to V3.27.
+- Storage semantics corrected: `persistent_db_recommended` now means an outstanding recommendation; `persistent_db_configured` reports actual state.
+- Added explicit Railway storage diagnostics and `/api/storage`. Practice remains usable on ephemeral storage; production can fail closed with `PERSISTENCE_REQUIRED=true`.
+- Added distinct `safety_filters_ok` and `quality_filters_ok`; legacy `hard_filters_ok` now represents both deterministic pre-confidence gates, avoiding `hard_filters_ok=1` beside an M1 quality veto.
+- `/api/status` now exposes unambiguous `training_labeled_samples`, `research_samples_total`, and `pending_samples`.
+- ML calibrator without a trained model is `WAITING_FOR_EVIDENCE`/abstaining rather than falsely `OFFLINE`; real prediction failure remains offline.
+- Ensemble agreement is no longer reported as 100% when only one directional model participates; consensus is explicitly non-evaluable until at least two directional models vote.
+- Observability now surfaces the latest broker snapshot and refresh timestamp in runtime state.
+- Persistence cannot be manufactured by code: a Railway Volume must actually be attached for data to survive redeploys.

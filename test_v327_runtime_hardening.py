@@ -158,3 +158,92 @@ def test_timeseries_pipeline_can_fit_small_binary_dataset():
     prob = model.predict_proba(X[te])[:, 1]
     assert len(prob) == len(te)
     assert all(0.0 <= float(p) <= 1.0 for p in prob)
+
+
+
+def test_runtime_version_and_dashboard_are_v327():
+    assert server.VERSION_TAG == "3.27"
+    src=open(server.__file__,encoding="utf-8").read()
+    assert "Market Alert V3.27 · Integrated Shadow Runtime" in src
+
+
+def test_storage_status_never_calls_ephemeral_storage_persistent():
+    st=server.storage_status()
+    assert st["persistent"] == bool(server.DB_PERSISTENT and server.MODEL_PERSISTENT)
+    assert st["action_required"] is (not st["persistent"])
+    if not st["persistent"]:
+        assert st["status"] in ("EPHEMERAL","ACTION_REQUIRED_RAILWAY_VOLUME")
+        assert st["action"]
+
+
+def test_learning_persistence_recommendation_semantics():
+    stats=server.learning_stats()
+    assert stats["persistent_db_recommended"] is (not stats["persistent_db_configured"])
+    assert stats["db_persistence"]["persistent"] == stats["persistent_db_configured"]
+
+
+def test_ml_without_model_is_waiting_not_offline(monkeypatch, tmp_path):
+    monkeypatch.setattr(server,"MODEL_PATH",str(tmp_path/"not-trained.joblib"))
+    r={
+        "instrument":"EUR_USD","candle_ts":datetime.now(timezone.utc).isoformat(),"market_data_stale":False,
+        "signal":"BUY","technical":60,"direction_edge":30,"direction_state":"TREND","rr":2.0,
+        "entry":1.1,"stop":1.09,"target":1.12,"managed_target":1.12,"buy_score":60,"sell_score":10,
+        "market_regime":{"market_regime":"RANGE"},"news_bias":"NEUTRAL","alignment":"N/A",
+        "news_positive_hits":0,"news_negative_hits":0,"news_articles":[],"weekend_research":{},
+        "external_research_collection":{"symbols":[]},"features":{},"filters":{}
+    }
+    conf={"probability":0.6}
+    signals=server.build_ensemble_shadow_signals(r,conf,None)
+    ml=next(x for x in signals if x["strategy_id"]=="ML_SUCCESS_CALIBRATOR")
+    assert ml["status"]=="ONLINE"
+    assert ml["metadata"]["lifecycle_state"]=="WAITING_FOR_EVIDENCE"
+    assert ml["signal_strength"]==0.0
+
+
+def test_single_directional_model_does_not_report_perfect_consensus(tmp_path):
+    db=str(tmp_path/"ensemble-consensus.db")
+    e=EnsembleEngine(db_path=db,version="3.27",mode="SHADOW",min_active_directional=2)
+    e.ensure_schema()
+    ts=datetime.now(timezone.utc).isoformat()
+    sig={
+        "strategy_id":"TECHNICAL_CORE","strategy_version":"technical@3.27","symbol":"EUR_USD","timestamp":ts,
+        "direction":"LONG","confidence":.6,"expected_edge":2.0,"market_regime":"RANGE","time_horizon":"INTRADAY",
+        "signal_strength":.8,"risk_characteristics":{},"data_quality":1.0,"family":"TREND_STRUCTURE",
+        "input_dependencies":["PRICE"],"role":"DIRECTIONAL","ttl_seconds":300,"status":"ONLINE"
+    }
+    out=e.evaluate([sig],regime="RANGE")
+    assert out["ensemble_direction"]=="ABSTAIN"
+    assert out["consensus_evaluable"] is False
+    assert out["directional_model_count"]==1
+    assert out["agreement_score"]==0.0
+    assert out["disagreement_score"]==0.0
+
+
+def test_decision_hard_filters_include_quality_gate(monkeypatch,tmp_path):
+    old_db=server.DB
+    try:
+        monkeypatch.setattr(server,"DB",str(tmp_path/"decision.db"))
+        # Force a quality veto while safety is valid.
+        monkeypatch.setattr(server,"quality_entry_gate",lambda r,conf:{"ok":False,"reason":"missing M1"})
+        r={"instrument":"EUR_USD","candle_ts":"2026-08-17T12:00:00+00:00","signal":"BUY","score":50,"blocked":False}
+        conf={"variant":"TEST","probability":.7,"source":"TEST","samples":10,"required_confidence":.65,
+              "recent_win_rate":None,"performance_penalty":0}
+        server.save_decision(r,conf,0,"Quality veto: missing M1")
+        c=server.conn();row=c.execute("SELECT * FROM decision_log ORDER BY id DESC LIMIT 1").fetchone();c.close()
+        assert row["safety_filters_ok"]==1
+        assert row["quality_filters_ok"]==0
+        assert row["hard_filters_ok"]==0
+    finally:
+        monkeypatch.setattr(server,"DB",old_db)
+
+
+def test_status_learning_uses_unambiguous_sample_names(monkeypatch):
+    async def run():
+        out=await server.status()
+        learn=out["learning"]
+        assert "samples" not in learn
+        assert "training_labeled_samples" in learn
+        assert "research_samples_total" in learn
+        assert "pending_samples" in learn
+        assert out["version"]=="3.27"
+    asyncio.run(run())

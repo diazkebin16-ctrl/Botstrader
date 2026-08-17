@@ -58,7 +58,7 @@ class EnsembleEngine:
     SHADOW by default. It has no order authority and no risk-increase authority.
     Correlated models and families are explicitly discounted before agreement is computed.
     """
-    def __init__(self,db_path:str,version:str="3.25",mode:str="SHADOW",max_model_weight:float=.40,
+    def __init__(self,db_path:str,version:str="3.27",mode:str="SHADOW",max_model_weight:float=.40,
                  max_family_weight:float=.55,min_sample_size:int=30,correlation_threshold:float=.75,
                  weight_change_limit:float=.10,weight_cooldown_hours:int=24,
                  min_observation_window_hours:int=24,min_active_directional:int=2,
@@ -377,6 +377,8 @@ class EnsembleEngine:
         factors=[]
         for s in signals:
             if s.role!="CALIBRATOR" or s.status!="ONLINE":continue
+            if s.signal_strength<=0 or str((s.metadata or {}).get("lifecycle_state") or "READY")!="READY":
+                continue
             # calibrator cannot create direction; it only scales confidence toward neutral.
             f=clamp(.5+s.confidence-.5,.5,1.25)*s.data_quality
             factors.append({"model":s.strategy_id,"factor":f,"confidence":s.confidence})
@@ -424,8 +426,9 @@ class EnsembleEngine:
         capinfo["weight_stability"]=stability_info
         sign_sum=sum(weights.get(s.strategy_id,0)*dir_sign(s.direction)*s.signal_strength for s in active)
         evidence_mass=sum(weights.get(s.strategy_id,0)*s.signal_strength for s in active)
-        agreement=clamp(abs(sign_sum)/max(evidence_mass,1e-12),0,1) if active else 0
-        disagreement=1-agreement
+        consensus_evaluable=len(active)>=2
+        agreement=clamp(abs(sign_sum)/max(evidence_mass,1e-12),0,1) if consensus_evaluable else 0.0
+        disagreement=(1-agreement) if consensus_evaluable else 0.0
         weighted_conf=sum(weights.get(s.strategy_id,0)*s.confidence for s in active)
         dq=(sum(weights.get(s.strategy_id,0)*s.data_quality for s in active)/max(sum(weights.values()),1e-12)) if active else 0
         cal_factor,calibrators=self._calibrator_factor(fresh)
@@ -463,6 +466,7 @@ class EnsembleEngine:
         record={"ensemble_decision_id":eid,"ensemble_cycle_id":cycle,"symbol":std[0].symbol if std else "UNKNOWN",
           "ts":now_iso(),"mode":self.mode,"method":method,"ensemble_direction":direction,"ensemble_confidence":conf,
           "agreement_score":agreement,"disagreement_score":disagreement,"diversity_score":div,
+          "consensus_evaluable":consensus_evaluable,"directional_model_count":len(active),
           "weighted_expected_edge":weighted_edge,"expected_execution_cost":execution_cost,"expected_net_edge":net_edge,
           "market_regime":regime,"data_quality":dq,"participating_models":list(dict.fromkeys(s.strategy_id for s in active)),
           "abstaining_models":list(dict.fromkeys(abstain+stale)),"offline_models":list(dict.fromkeys(offline)),"model_contributions":contributions,

@@ -35,7 +35,7 @@ class CapitalAllocationEngine:
     turns unused budget into forced exposure. All outputs are recommendations capped
     by an externally supplied authorized_total_risk.
     """
-    def __init__(self,db_path:str,version:str="3.26",mode:str="SHADOW",max_strategy_allocation=.25,
+    def __init__(self,db_path:str,version:str="3.27",mode:str="SHADOW",max_strategy_allocation=.25,
                  max_family_risk=.40,max_symbol_risk=.25,max_asset_risk=.40,max_directional_risk=.65,
                  max_cluster_risk=.35,min_sample_size=30,min_observation_hours=24,
                  max_change_per_cycle=.05,change_cooldown_hours=24,rebalance_threshold=.02,
