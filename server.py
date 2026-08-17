@@ -7,6 +7,7 @@ import math
 import hashlib
 import time
 import statistics
+import numpy as np
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -3172,15 +3173,28 @@ def _evaluate_one_strategy_health(variant: str) -> Dict[str, Any]:
     drop=(baseline_wr-recent_wr) if baseline_wr is not None and recent_wr is not None else None
     status='LEARNING'; reason='not_enough_health_evidence'
     if recent_n>=STRATEGY_RECENT_WINDOW and baseline_n>=STRATEGY_RECENT_WINDOW:
-        status='HEALTHY'; reason='recent performance within historical range'
-        if drop is not None and drop>=STRATEGY_WATCH_DROP:
-            status='WATCH'; reason=f'recent win rate down {drop:.3f} vs baseline'
-        if loss_streak>=STRATEGY_MAX_LOSS_STREAK_WATCH and status=='HEALTHY':
-            status='WATCH'; reason=f'loss streak {loss_streak}'
-        if (evidence_mode=='EXECUTED' and drop is not None and drop>=STRATEGY_DEGRADED_DROP
-            and recent_wr is not None and recent_wr<=STRATEGY_DEGRADED_MAX_WR):
-            status='PAUSED' if STRATEGY_AUTO_PAUSE else 'DEGRADED'
-            reason=f'executed performance degraded: recent {recent_wr:.3f}, baseline {baseline_wr:.3f}, drop {drop:.3f}'
+        if evidence_mode=='EXECUTED':
+            status='HEALTHY'; reason='recent executed performance within historical range'
+            if drop is not None and drop>=STRATEGY_WATCH_DROP:
+                status='WATCH'; reason=f'executed recent win rate down {drop:.3f} vs baseline'
+            if loss_streak>=STRATEGY_MAX_LOSS_STREAK_WATCH and status=='HEALTHY':
+                status='WATCH'; reason=f'executed loss streak {loss_streak}'
+            if (drop is not None and drop>=STRATEGY_DEGRADED_DROP
+                and recent_wr is not None and recent_wr<=STRATEGY_DEGRADED_MAX_WR):
+                status='PAUSED' if STRATEGY_AUTO_PAUSE else 'DEGRADED'
+                reason=f'executed performance degraded: recent {recent_wr:.3f}, baseline {baseline_wr:.3f}, drop {drop:.3f}'
+        else:
+            # Canonical/counterfactual labels are useful research evidence but
+            # cannot represent actual trading health when executed_resolved=0.
+            # Keep the metrics visible without allowing them to trigger
+            # operational WATCH/PAUSED or downstream risk reductions.
+            status='LEARNING'
+            if drop is not None and drop>=STRATEGY_WATCH_DROP:
+                reason=f'counterfactual degradation observed ({drop:.3f}); awaiting executed evidence'
+            elif loss_streak>=STRATEGY_MAX_LOSS_STREAK_WATCH:
+                reason=f'counterfactual loss streak {loss_streak}; awaiting executed evidence'
+            else:
+                reason='counterfactual monitor only; awaiting executed evidence'
     paused_ts=prev.get('paused_ts') if prev else None; pause_baseline=prev.get('pause_baseline_win_rate') if prev else None
     recovery_n=0; recovery_wr=None
     if status=='PAUSED' and old_status not in ('PAUSED','RECOVERING'):
@@ -7919,7 +7933,14 @@ async def observability_loop_monitor():
         except Exception:pass
 
 
+def _worker_heartbeat() -> None:
+    # Lightweight liveness signal for the watchdog; it does not imply that the
+    # current scan completed successfully.
+    state["worker_last_heartbeat"] = now_iso()
+
+
 async def scan(client: httpx.AsyncClient, inst: str) -> Dict[str, Any]:
+    _worker_heartbeat()
     obs_scan_started=time.perf_counter()
     obs_trace_id=observability_manager.new_trace(inst,context={"instrument":inst,"cycle":state.get("cycles")}) if OBSERVABILITY_ENABLED else None
     obs_market_started=time.perf_counter()
@@ -7929,6 +7950,7 @@ async def scan(client: httpx.AsyncClient, inst: str) -> Dict[str, Any]:
         candles(client, inst, "M5", 130),
         candles(client, inst, "M1", max(220, OUTCOME_HORIZON_MIN + 30))
     )
+    _worker_heartbeat()
     obs_market_ms=(time.perf_counter()-obs_market_started)*1000
     obs_market_health=observability_market_data_update(inst,m1,obs_market_ms) if OBSERVABILITY_ENABLED else {"stale":False,"age_seconds":None}
     if RECOVERY_MANAGER_ENABLED and m1:
@@ -8023,8 +8045,10 @@ async def scan(client: httpx.AsyncClient, inst: str) -> Dict[str, Any]:
 
     # Research brain runs independently of order execution.
     r["external_research_collection"] = await collect_cross_asset_research(client, inst, r.get("candle_ts"))
+    _worker_heartbeat()
 
     r = await news(client, r) if r["signal"] != "WAIT" and r["technical"] >= 50 else {**r, "alignment": "N/A"}
+    _worker_heartbeat()
     if r.get("news_articles") is not None:
         record_news_research(r)
     target_plan=desired_target_for_trade(r) if r["signal"]!="WAIT" else {"target":r.get("target"),"runner":False,"trend_score":0.0}
@@ -8450,12 +8474,20 @@ def _parse_iso(ts: Optional[str]) -> Optional[datetime]:
 
 def scanner_health_snapshot() -> Dict[str, Any]:
     now = datetime.now(timezone.utc)
-    last = _parse_iso(state.get("last_scan"))
-    age = (now - last).total_seconds() if last else None
+    # Watchdog liveness must follow the most recent worker heartbeat. A scan may
+    # legitimately take longer than one minute because it performs broker,
+    # research, reconciliation and shadow-learning work. Using only last_scan
+    # can falsely classify a busy-but-healthy worker as dead.
+    heartbeat = _parse_iso(state.get("worker_last_heartbeat"))
+    last_scan = _parse_iso(state.get("last_scan"))
+    liveness_ts = heartbeat or last_scan
+    age = (now - liveness_ts).total_seconds() if liveness_ts else None
+    scan_age = (now - last_scan).total_seconds() if last_scan else None
     stale = age is None or age > WATCHDOG_STALE_SECONDS
     return {
         "worker_running": bool(state.get("worker_running")),
-        "last_scan_age_seconds": age,
+        "last_scan_age_seconds": scan_age,
+        "last_heartbeat_age_seconds": age,
         "stale": stale,
         "watchdog_enabled": WATCHDOG_ENABLED,
         "watchdog_stale_seconds": WATCHDOG_STALE_SECONDS,

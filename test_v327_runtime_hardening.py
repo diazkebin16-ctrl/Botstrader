@@ -76,3 +76,48 @@ def test_recoverable_path_blocks_market_closed_before_preflight(monkeypatch):
     out=asyncio.run(server.execute_recoverable(None,r,'trace',1,1))
     assert out['skipped']=='MARKET_CLOSED'
     assert called['preflight'] is False
+
+
+def test_numpy_is_available_for_shadow_training():
+    assert hasattr(server, "np")
+    arr = server.np.asarray([0, 1, 1])
+    assert int(arr.sum()) == 2
+
+
+def test_scanner_health_uses_heartbeat_for_liveness(monkeypatch):
+    from datetime import datetime, timezone, timedelta
+    now = datetime.now(timezone.utc)
+    monkeypatch.setitem(server.state, "last_scan", (now - timedelta(seconds=server.WATCHDOG_STALE_SECONDS + 30)).isoformat())
+    monkeypatch.setitem(server.state, "worker_last_heartbeat", now.isoformat())
+    snap = server.scanner_health_snapshot()
+    assert snap["stale"] is False
+    assert snap["last_scan_age_seconds"] > server.WATCHDOG_STALE_SECONDS
+    assert snap["last_heartbeat_age_seconds"] < 5
+
+
+def test_counterfactual_health_cannot_become_operational_watch(monkeypatch):
+    rows = []
+    # Strong historical counterfactual baseline followed by a bad recent block.
+    labels = [1] * 100 + [0] * 30
+    for i, label in enumerate(labels):
+        rows.append({"label": label, "executed": 0, "blocked": 1, "ts": f"2026-01-01T00:{i%60:02d}:00+00:00",
+                     "candle_ts": "", "setup_variant": "CF_TEST"})
+    monkeypatch.setattr(server, "_strategy_rows",
+                        lambda variant, executed_only=False, since_ts=None: [] if executed_only else rows)
+
+    class DummyConn:
+        def execute(self, sql, params=()):
+            class Result:
+                def fetchone(self): return None
+            return Result()
+        def commit(self): pass
+        def close(self): pass
+
+    # Capture DB writes without requiring a real persistent row for this unit check.
+    monkeypatch.setattr(server, "conn", lambda: DummyConn())
+    monkeypatch.setattr(server, "strategy_health_snapshot", lambda variant: None)
+    monkeypatch.setattr(server, "_health_transition", lambda *a, **k: None)
+
+    out = server._evaluate_one_strategy_health("CF_TEST")
+    assert out["status"] == "LEARNING"
+    assert "counterfactual" in out["reason"]

@@ -50,3 +50,17 @@ No hard risk limits were increased. Smart Execution, Capital Allocation, Ensembl
 - Scan results now expose `market_closed`, `market_data_state`, and `market_data_fresh_for_trading`.
 - The normal decision pipeline also returns `MARKET_CLOSED: new orders blocked by hard execution gate`.
 - Added regression tests proving broker/preflight code is unreachable while the FX weekend market-closed state is active.
+
+
+## V3.27 learning / watchdog / strategy-health correction
+
+- Added the missing `numpy as np` import required by shadow-model training.
+- Watchdog liveness now follows `worker_last_heartbeat`, while `last_scan_age_seconds`
+  remains separately observable. Long but healthy scans no longer look dead merely
+  because a cycle exceeds the watchdog interval.
+- Added heartbeat checkpoints around market-data, external-research, and news phases.
+- Counterfactual/canonical outcomes remain visible as research evidence but can no
+  longer produce operational `WATCH`, `DEGRADED`, or `PAUSED` states unless there is
+  sufficient executed-trade evidence.
+- This prevents hypothetical losses from being treated as actual executed losses by
+  AI Strategy Director / Adaptive Risk.
