@@ -7280,6 +7280,7 @@ def resolve_pending(inst: str, m1: List[Dict[str, Any]]) -> int:
             c.execute("""UPDATE learning_samples SET status=?,label=?,resolved_ts=?,bars_to_resolution=?,mfe_r=?,mae_r=?,note=? WHERE id=?""",
                       (out["status"], out["label"], now_iso(), out["bars"], out["mfe_r"], out["mae_r"], out["note"], s["id"]))
             resolved += 1
+            c.commit()
             try:
                 attach_ai_director_outcome(int(s["signal_id"]), int(out["label"]))
             except Exception as e:
