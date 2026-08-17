@@ -87,3 +87,11 @@ No hard risk limits were increased. Smart Execution, Capital Allocation, Ensembl
 - Ensemble agreement is no longer reported as 100% when only one directional model participates; consensus is explicitly non-evaluable until at least two directional models vote.
 - Observability now surfaces the latest broker snapshot and refresh timestamp in runtime state.
 - Persistence cannot be manufactured by code: a Railway Volume must actually be attached for data to survive redeploys.
+
+
+## V3.27 Ensemble execution-cost semantics correction
+- `expected_net_edge` is now `null` unless an execution-cost estimate is actually available.
+- Added `execution_cost_available` and `net_edge_evaluable` telemetry.
+- Negative gross edge without a cost estimate now reports `NO_CLEAR_GROSS_EDGE`.
+- `NO_CLEAR_EDGE_AFTER_EXECUTION_COSTS` is emitted only when execution cost exists and makes net edge non-positive.
+- Positive gross edge with missing cost reports `EXECUTION_COST_UNAVAILABLE` instead of pretending a net edge was calculated.

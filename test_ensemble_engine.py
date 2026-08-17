@@ -208,3 +208,28 @@ if __name__=='__main__':
     tests=[v for k,v in sorted(globals().items()) if k.startswith('test_') and callable(v)]
     for t in tests:t()
     print(f'ensemble engine tests: OK ({len(tests)})')
+
+
+def test_missing_execution_cost_does_not_fake_net_edge_or_cost_reason():
+    e,p=engine(min_active_directional=1)
+    r=e.evaluate([sig('A','LONG',edge=-2)],regime='RANGE',execution_cost=None)
+    assert r['weighted_expected_edge'] < 0
+    assert r['expected_execution_cost'] is None
+    assert r['execution_cost_available'] is False
+    assert r['expected_net_edge'] is None
+    assert r['net_edge_evaluable'] is False
+    assert 'NO_CLEAR_GROSS_EDGE' in r['reasoning_summary']
+    assert 'NO_CLEAR_EDGE_AFTER_EXECUTION_COSTS' not in r['reasoning_summary']
+    os.remove(p)
+
+
+def test_positive_gross_edge_without_cost_reports_cost_unavailable():
+    e,p=engine(min_active_directional=1)
+    r=e.evaluate([sig('A','LONG',edge=2)],regime='RANGE',execution_cost=None)
+    assert r['weighted_expected_edge'] > 0
+    assert r['expected_net_edge'] is None
+    assert r['execution_cost_available'] is False
+    assert r['net_edge_evaluable'] is False
+    assert 'EXECUTION_COST_UNAVAILABLE' in r['reasoning_summary']
+    assert 'NO_CLEAR_EDGE_AFTER_EXECUTION_COSTS' not in r['reasoning_summary']
+    os.remove(p)

@@ -451,9 +451,28 @@ class EnsembleEngine:
             if s.expected_edge is None:continue
             w=weights.get(s.strategy_id,0);gross+=w*float(s.expected_edge)*(1 if s.direction==direction else -1);edge_mass+=w
         weighted_edge=(gross/max(edge_mass,1e-12)) if edge_mass else None
-        net_edge=(weighted_edge-float(execution_cost)) if weighted_edge is not None and execution_cost is not None else weighted_edge
-        if net_edge is not None and net_edge<=0:
-            reasons.append("NO_CLEAR_EDGE_AFTER_EXECUTION_COSTS");direction="ABSTAIN";conf=min(conf,.30)
+
+        # Net edge is only a real net-edge estimate when an execution-cost
+        # estimate actually exists. Never alias gross edge into expected_net_edge,
+        # because that makes telemetry claim that costs were incorporated when
+        # they were not.
+        execution_cost_available = execution_cost is not None
+        net_edge = (
+            weighted_edge - float(execution_cost)
+            if weighted_edge is not None and execution_cost_available
+            else None
+        )
+
+        if weighted_edge is not None and weighted_edge <= 0:
+            reasons.append("NO_CLEAR_GROSS_EDGE")
+            direction="ABSTAIN";conf=min(conf,.30)
+        elif net_edge is not None and net_edge <= 0:
+            reasons.append("NO_CLEAR_EDGE_AFTER_EXECUTION_COSTS")
+            direction="ABSTAIN";conf=min(conf,.30)
+        elif weighted_edge is not None and not execution_cost_available:
+            # Missing execution-cost evidence is not an execution failure.
+            # In Shadow mode we expose that the cost-adjusted edge is unknown.
+            reasons.append("EXECUTION_COST_UNAVAILABLE")
         contributions=[]
         for s in active:
             contributions.append({"strategy_id":s.strategy_id,"family":s.family,"direction":s.direction,
@@ -467,7 +486,11 @@ class EnsembleEngine:
           "ts":now_iso(),"mode":self.mode,"method":method,"ensemble_direction":direction,"ensemble_confidence":conf,
           "agreement_score":agreement,"disagreement_score":disagreement,"diversity_score":div,
           "consensus_evaluable":consensus_evaluable,"directional_model_count":len(active),
-          "weighted_expected_edge":weighted_edge,"expected_execution_cost":execution_cost,"expected_net_edge":net_edge,
+          "weighted_expected_edge":weighted_edge,
+          "expected_execution_cost":execution_cost,
+          "execution_cost_available":execution_cost_available,
+          "expected_net_edge":net_edge,
+          "net_edge_evaluable":bool(weighted_edge is not None and execution_cost_available),
           "market_regime":regime,"data_quality":dq,"participating_models":list(dict.fromkeys(s.strategy_id for s in active)),
           "abstaining_models":list(dict.fromkeys(abstain+stale)),"offline_models":list(dict.fromkeys(offline)),"model_contributions":contributions,
           "correlation":corr,"families":families,"reasoning_summary":list(dict.fromkeys(reasons)),"ensemble_weight_version":wversion,
