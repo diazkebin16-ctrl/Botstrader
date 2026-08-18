@@ -7281,14 +7281,15 @@ def resolve_pending(inst: str, m1: List[Dict[str, Any]]) -> int:
                       (out["status"], out["label"], now_iso(), out["bars"], out["mfe_r"], out["mae_r"], out["note"], s["id"]))
             resolved += 1
             c.commit()
-            try:
-                attach_ai_director_outcome(int(s["signal_id"]), int(out["label"]))
-            except Exception as e:
-                log.warning("AI_DIRECTOR outcome link failed signal_id=%s err=%s", s["signal_id"], e)
-            try:
-                resolve_ensemble_actual_outcome(int(s["signal_id"]), int(out["label"]))
-            except Exception as e:
-                log.warning("ENSEMBLE outcome link failed signal_id=%s err=%s", s["signal_id"], e)
+            if out["label"] in (0, 1):
+                try:
+                    attach_ai_director_outcome(int(s["signal_id"]), int(out["label"]))
+                except Exception as e:
+                    log.warning("AI_DIRECTOR outcome link failed signal_id=%s err=%s", s["signal_id"], e)
+                try:
+                    resolve_ensemble_actual_outcome(int(s["signal_id"]), int(out["label"]))
+                except Exception as e:
+                    log.warning("ENSEMBLE outcome link failed signal_id=%s err=%s", s["signal_id"], e)
     c.commit(); c.close()
     return resolved
 
