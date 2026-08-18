@@ -5681,8 +5681,19 @@ def load_shadow_probability(features: Dict[str, Any]) -> Optional[float]:
         return None
     try:
         import joblib
-        model = joblib.load(MODEL_PATH)
-        return float(model.predict_proba([feature_vector(features)])[0][1])
+        artifact = joblib.load(MODEL_PATH)
+        if isinstance(artifact, dict):
+            model = artifact.get("model")
+            feature_names = artifact.get("features") or FEATURE_COLUMNS
+        else:
+            model = artifact
+            feature_names = FEATURE_COLUMNS
+
+        if model is None or not hasattr(model, "predict_proba"):
+            raise TypeError("shadow model artifact does not contain a predict_proba-capable model")
+
+        vector = [features.get(name, 0.0) for name in feature_names]
+        return float(model.predict_proba([vector])[0][1])
     except Exception as e:
         log.warning("shadow model prediction failed: %s", e)
         return None
