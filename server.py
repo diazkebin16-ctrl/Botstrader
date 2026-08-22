@@ -26,6 +26,9 @@ from production_readiness import ProductionReadinessGate
 from smart_execution import SmartExecutionEngine
 from ensemble_engine import EnsembleEngine
 from capital_allocation import CapitalAllocationEngine
+from research_evidence import (resolve_outcome as research_resolve_outcome, collapse_market_episodes,
+                               annotate_market_episodes, split_episode_holdout)
+from session_regime import session_regime as detect_session_regime
 from observability import (
     ObservabilityManager, DEPENDENCY_CRITICAL, DEPENDENCY_IMPORTANT, DEPENDENCY_NON_CRITICAL,
     stale_status as observability_stale_status, reconciliation_status as observability_reconciliation_status,
@@ -144,6 +147,8 @@ ML_SHADOW = os.getenv("ML_SHADOW", "true").lower() == "true"
 ML_MIN_SAMPLES = max(50, int(os.getenv("ML_MIN_SAMPLES", "100")))
 ML_RETRAIN_HOURS = max(1, int(os.getenv("ML_RETRAIN_HOURS", "24")))
 OUTCOME_HORIZON_MIN = max(30, int(os.getenv("OUTCOME_HORIZON_MIN", "180")))
+RESEARCH_ROUND_TRIP_COST_PIPS = max(0.0, float(os.getenv("RESEARCH_ROUND_TRIP_COST_PIPS", "1.0")))
+RESEARCH_EPISODE_GAP_MINUTES = max(1, int(os.getenv("RESEARCH_EPISODE_GAP_MINUTES", "15")))
 ADAPTIVE_CONFIDENCE = os.getenv("ADAPTIVE_CONFIDENCE", "true").lower() == "true"
 CONFIDENCE_MIN_SAMPLES = max(20, int(os.getenv("CONFIDENCE_MIN_SAMPLES", "60")))
 CONFIDENCE_LOCAL_MIN = max(10, int(os.getenv("CONFIDENCE_LOCAL_MIN", "25")))
@@ -173,9 +178,9 @@ TREND_RUNNER_MIN_SCORE = max(0.0, float(os.getenv("TREND_RUNNER_MIN_SCORE", "0.6
 TREND_RUNNER_TP_R = max(2.0, float(os.getenv("TREND_RUNNER_TP_R", "3.0")))
 TREND_RUNNER_TRAIL_START_R = max(1.5, float(os.getenv("TREND_RUNNER_TRAIL_START_R", "1.75")))
 TREND_RUNNER_TRAIL_DISTANCE_R = max(0.40, float(os.getenv("TREND_RUNNER_TRAIL_DISTANCE_R", "0.90")))
-VERSION_TAG = "3.27"
+VERSION_TAG = "3.34.1"
 ENTRY_TIMING_ENABLED = os.getenv("ENTRY_TIMING_ENABLED", "true").lower() == "true"
-MAX_ENTRY_EXTENSION_ATR = max(0.5, float(os.getenv("MAX_ENTRY_EXTENSION_ATR", "1.20")))
+MAX_ENTRY_EXTENSION_ATR = max(0.5, float(os.getenv("MAX_ENTRY_EXTENSION_ATR", "1.50")))
 MIN_ROOM_TO_BARRIER_R = max(1.0, float(os.getenv("MIN_ROOM_TO_BARRIER_R", "1.50")))
 REENTRY_REQUIRE_NEW_CANDLE = os.getenv("REENTRY_REQUIRE_NEW_CANDLE", "true").lower() == "true"
 REENTRY_REQUIRE_STRUCTURE_CHANGE = os.getenv("REENTRY_REQUIRE_STRUCTURE_CHANGE", "true").lower() == "true"
@@ -191,7 +196,7 @@ DIRECTION_MIN_SCORE = max(0.0, min(100.0, float(os.getenv("DIRECTION_MIN_SCORE",
 DIRECTION_MIN_EDGE = max(0.0, min(50.0, float(os.getenv("DIRECTION_MIN_EDGE", "6"))))
 COUNTERTREND_EXECUTION_MIN_SCORE = max(0.0, min(100.0, float(os.getenv("COUNTERTREND_EXECUTION_MIN_SCORE", "82"))))
 MIN_TAKE_PROFIT_PIPS = max(0.1, float(os.getenv("MIN_TAKE_PROFIT_PIPS", "7.0")))
-MIN_STOP_PIPS = max(0.1, float(os.getenv("MIN_STOP_PIPS", "3.0")))
+MIN_STOP_PIPS = max(0.1, float(os.getenv("MIN_STOP_PIPS", "9.0")))
 STOP_ATR_M1_MULT = max(0.1, float(os.getenv("STOP_ATR_M1_MULT", "1.50")))
 STOP_ATR_M5_MULT = max(0.1, float(os.getenv("STOP_ATR_M5_MULT", "0.40")))
 M1_CONFIRMATION_REQUIRED = os.getenv("M1_CONFIRMATION_REQUIRED", "true").lower() == "true"
@@ -446,7 +451,7 @@ logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(
 for _handler in logging.getLogger().handlers:
     _handler.addFilter(RedactingFilter())
 log = logging.getLogger("market-alert")
-app = FastAPI(title="Market Alert V3.27 — Integrated Shadow Runtime")
+app = FastAPI(title="Market Alert V3.34.1 — Historical Replay Research Runtime")
 state: Dict[str, Any] = {
     "started": datetime.now(timezone.utc).isoformat(),
     "last_scan": None,
@@ -1243,6 +1248,9 @@ def conn() -> sqlite3.Connection:
         "mfe_r": "REAL",
         "mae_r": "REAL",
         "note": "TEXT",
+        "outcome_cost_r": "REAL",
+        "effective_target": "REAL",
+        "effective_stop": "REAL",
     }
     for name, ddl in sample_migrations.items():
         if name not in sample_cols:
@@ -1741,6 +1749,15 @@ def conn() -> sqlite3.Connection:
             bars_to_resolution INTEGER, mfe_r REAL, mae_r REAL, note TEXT, UNIQUE(signal_id, variant),
             FOREIGN KEY(signal_id) REFERENCES signals(id))
     """)
+    shadow_cols = {row[1] for row in c.execute("PRAGMA table_info(shadow_trials)").fetchall()}
+    for name, ddl in {
+        "outcome_cost_r":"REAL",
+        "effective_target":"REAL",
+        "effective_stop":"REAL",
+    }.items():
+        if name not in shadow_cols:
+            c.execute(f"ALTER TABLE shadow_trials ADD COLUMN {name} {ddl}")
+
     c.execute("""
         CREATE TABLE IF NOT EXISTS filter_hypotheses(
             filter_key TEXT PRIMARY KEY, description TEXT NOT NULL, stage TEXT NOT NULL, total_samples INTEGER NOT NULL,
@@ -2226,7 +2243,7 @@ def _direction_hypothesis(h1, m15, m5, m1, inst: str, sig: str) -> Dict[str, Any
                          [x["c"] for x in m5], [x["c"] for x in m1])
     h20,h50 = ema(c60,20),ema(c60,50)
     e20,e50,e5,e9,e1 = ema(c15,20),ema(c15,50),ema(c5,20),ema(c1,9),ema(c1,20)
-    a60,a15,a1 = atr(h1),atr(m15),atr(m1)
+    a60,a15,a5,a1 = atr(h1),atr(m15),atr(m5),atr(m1)
 
     hgap=(h20[-1]-h50[-1])/max(a60,1e-9)
     hslope=(h20[-1]-h20[-5])/max(a60,1e-9)
@@ -2249,9 +2266,16 @@ def _direction_hypothesis(h1, m15, m5, m1, inst: str, sig: str) -> Dict[str, Any
 
     last=m1[-1]
     ph,pl,mm=swing(m1[:-1],"h",7),swing(m1[:-1],"l",7),mom(m1,4)
-    cb=e9[-1]>e1[-1] and mm>0 and last["c"]>last["o"]
-    cs=e9[-1]<e1[-1] and mm<0 and last["c"]<last["o"]
+    cb=last["c"]>e9[-1] and mm>0 and last["c"]>last["o"]
+    cs=last["c"]<e9[-1] and mm<0 and last["c"]<last["o"]
     confirm=(cb and (last["c"]>ph or mm>.00012)) if sig=="BUY" else (cs and (last["c"]<pl or mm<-.00012))
+
+    # Research-only alternative M1 confirmation:
+    # strong momentum may substitute for candle color.
+    shadow_cb=last["c"]>e9[-1] and mm>0 and (last["c"]>last["o"] or mm>.00012)
+    shadow_cs=last["c"]<e9[-1] and mm<0 and (last["c"]<last["o"] or mm<-.00012)
+    m1_shadow_confirm=(shadow_cb and (last["c"]>ph or mm>.00012)) if sig=="BUY" else (shadow_cs and (last["c"]<pl or mm<-.00012))
+
     m1_momentum = sign*mm > 0
 
     ext=abs(last["c"]-e1[-1])/max(a1,1e-9)
@@ -2260,7 +2284,6 @@ def _direction_hypothesis(h1, m15, m5, m1, inst: str, sig: str) -> Dict[str, Any
     entry=last["c"]
 
     ss=swing(m1,"l" if sig=="BUY" else "h",12)
-    a5=atr(m5)
     pip=pip_size(inst)
     volatility_risk=max(a1*STOP_ATR_M1_MULT, a5*STOP_ATR_M5_MULT, MIN_STOP_PIPS*pip)
     structure_risk=abs(entry-ss) if math.isfinite(float(ss)) else 0.0
@@ -2279,7 +2302,7 @@ def _direction_hypothesis(h1, m15, m5, m1, inst: str, sig: str) -> Dict[str, Any
 
     st=swing(m5[:-2],"h" if sig=="BUY" else "l",28)
     structural_reward=(st-entry) if sig=="BUY" else (entry-st)
-    rr_raw=structural_reward/risk if structural_reward>0 else MIN_RR
+    rr_raw=structural_reward/risk if structural_reward>0 else 0.0
     rr=MIN_RR
     min_tp_distance=max(risk*MIN_RR, MIN_TAKE_PROFIT_PIPS*pip)
     target=entry+min_tp_distance if sig=="BUY" else entry-min_tp_distance
@@ -2288,16 +2311,28 @@ def _direction_hypothesis(h1, m15, m5, m1, inst: str, sig: str) -> Dict[str, Any
         buffer=risk*STRUCTURAL_BARRIER_BUFFER_R
         cap=barrier-buffer if sig=="BUY" else barrier+buffer
         barrier_allows_target=(target<=cap) if sig=="BUY" else (target>=cap)
-        rr_raw=min(rr_raw,max(0.0,room_r if room_r is not None else rr_raw))
+        if active and barrier_class=="STRONG" and not bool(active.get("broken")) and room_r is not None:
+            rr_raw=min(rr_raw,max(0.0,room_r))
     actual_rr=abs(target-entry)/max(risk,1e-12)
     tp_pips=pips_between(entry,target,inst)
 
     sess=session_info(last["t"])
+    intraday=detect_session_regime(m5,a5)
+    session_support=intraday.get("direction")==sig
+    session_opposes=intraday.get("direction") in ("BUY","SELL") and intraday.get("direction")!=sig
+    session_strength=float(intraday.get("strength") or 0.0)
 
-    # Independent directional score. H1/M15 matter, but M5/M1 can build a reversal hypothesis.
+    # Direction hierarchy for an intraday strategy:
+    # H1 is slow context, while current-session regime and M15/M5 carry more weight.
     dscore=0.0
-    dscore += 16 if h1_support else (-10 if h1_opposes else 3)
-    dscore += 20 if m15_support else (-12 if m15_opposes else 4)
+    dscore += 8 if h1_support else (-5 if h1_opposes else 2)
+    dscore += 14 if m15_support else (-9 if m15_opposes else 3)
+    if session_support:
+        dscore += 12 + 12*session_strength
+    elif session_opposes:
+        dscore -= 8 + 10*session_strength
+    else:
+        dscore += 2
     dscore += 18 if m5_structure else (7 if m5_momentum else 0)
     dscore += 16 if confirm else (6 if m1_momentum else 0)
     dscore += 8 if second else 4 if pc>=1 and pr else 0
@@ -2309,8 +2344,8 @@ def _direction_hypothesis(h1, m15, m5, m1, inst: str, sig: str) -> Dict[str, Any
     dscore += min(6, 2*len(ctx.get("broken_levels",[])))
     dscore=clamp(dscore,0,100)
 
-    countertrend = (h1_opposes and m15_opposes)
-    transition = (h1_opposes or m15_opposes) and (m5_structure or confirm)
+    countertrend = session_opposes and m15_opposes
+    transition = (session_opposes or m15_opposes or h1_opposes) and (m5_structure or confirm)
 
     checks={
         "h1_context": h1_support,
@@ -2350,7 +2385,7 @@ def _direction_hypothesis(h1, m15, m5, m1, inst: str, sig: str) -> Dict[str, Any
             "m15_gap_atr":float(gap),"m15_slope_atr":float(slope),
             "m5_momentum":float(m5m),"m1_momentum":float(mm),
             "extension_atr":float(ext),"volatility_ratio":float(vol),
-            "second_pullback":second,"m1_confirm":confirm,"session":sess,
+            "second_pullback":second,"m1_confirm":confirm,"m1_shadow_confirm":m1_shadow_confirm,"session":sess,
         }
     }
 
@@ -2621,6 +2656,7 @@ def analyze(h1, m15, m5, m1, inst) -> Dict[str, Any]:
         "m5_momentum":mt["m5_momentum"],"pullbacks":int(chosen["pullbacks"]),
         "second_pullback":1 if mt["second_pullback"] else 0,
         "m1_momentum":mt["m1_momentum"],"m1_confirm":1 if mt["m1_confirm"] else 0,
+        "m1_shadow_confirm":1 if mt.get("m1_shadow_confirm") else 0,
         "extension_atr":mt["extension_atr"],"volatility_ratio":mt["volatility_ratio"],
         "rr_raw":float(chosen["rr_raw"]),
         "room_to_barrier_r":float(chosen["room_to_barrier_r"]) if chosen["room_to_barrier_r"] is not None else None,
@@ -2632,6 +2668,10 @@ def analyze(h1, m15, m5, m1, inst) -> Dict[str, Any]:
         "buy_score":buy_score,"sell_score":sell_score,"direction_edge":edge,
         "h1_gap_atr":mt["h1_gap_atr"],"h1_slope_atr":mt["h1_slope_atr"],
         "transition_state":1 if chosen["transition"] else 0,
+        "session_direction":mt.get("session_regime",{}).get("direction","NEUTRAL"),
+        "session_strength":float(mt.get("session_regime",{}).get("strength",0) or 0),
+        "session_displacement_atr":float(mt.get("session_regime",{}).get("displacement_atr",0) or 0),
+        "session_momentum_atr":float(mt.get("session_regime",{}).get("momentum_atr",0) or 0),
     }
 
     safety=dict(chosen["safety_checks"])
@@ -6597,7 +6637,8 @@ AUTONOMOUS_NUMERIC_FEATURES = (
     "technical_score","final_score","m15_gap_atr","m15_slope_atr","m5_momentum",
     "pullbacks","m1_momentum","extension_atr","volatility_ratio","rr_raw",
     "room_to_barrier_r","barrier_score","broken_barriers","hour_ny","buy_score",
-    "sell_score","direction_edge","h1_gap_atr","h1_slope_atr","transition_state"
+    "sell_score","direction_edge","h1_gap_atr","h1_slope_atr","transition_state",
+    "session_strength","session_displacement_atr","session_momentum_atr"
 )
 
 def _auto_quantile(values, q):
@@ -6619,20 +6660,32 @@ def _auto_dataset():
     canonical=c.execute("""SELECT ls.label,s.candle_ts,s.instrument,s.signal,s.features_json,
                                   'CANONICAL' source,NULL variant
                            FROM learning_samples ls JOIN signals s ON s.id=ls.signal_id
-                           WHERE ls.label IN (0,1) ORDER BY s.id""").fetchall()
+                           WHERE ls.label IN (0,1)""").fetchall()
     shadow=c.execute("""SELECT st.label,s.candle_ts,s.instrument,s.signal,s.features_json,
                                'SHADOW' source,st.variant variant
                         FROM shadow_trials st JOIN signals s ON s.id=st.signal_id
-                        WHERE st.label IN (0,1) ORDER BY st.id""").fetchall()
+                        WHERE st.label IN (0,1)""").fetchall()
     c.close()
-    out=[]
+    raw=[]
     for row in list(canonical)+list(shadow):
         try:f=json.loads(row["features_json"] or "{}")
         except Exception:f={}
-        out.append({"label":int(row["label"]),"features":f,"signal":row["signal"],
+        raw.append({"label":int(row["label"]),"features":f,"signal":row["signal"],
                     "instrument":row["instrument"],"candle_ts":row["candle_ts"],
                     "source":row["source"],"variant":row["variant"],
                     "weight":1.0 if row["source"]=="CANONICAL" else AUTONOMOUS_SHADOW_WEIGHT})
+
+    # Assign episodes across the canonical+shadow union first. Then retain one
+    # canonical observation and one observation per shadow variant per episode.
+    # This preserves counterfactual comparisons without giving a long trend dozens
+    # of independent votes.
+    annotated=annotate_market_episodes(raw,gap_minutes=RESEARCH_EPISODE_GAP_MINUTES)
+    out=[];seen=set()
+    for row in annotated:
+        identity=(row["episode_id"],row["source"],row.get("variant") if row["source"]=="SHADOW" else None)
+        if identity in seen:continue
+        seen.add(identity);out.append(row)
+    out.sort(key=lambda r:(r.get("candle_ts") or "",r["episode_id"],r["source"],str(r.get("variant") or "")))
     return out
 
 def _auto_feature_names(rows):
@@ -6724,9 +6777,13 @@ def autonomous_discovery_refresh():
     if len(rows)<AUTONOMOUS_DISCOVERY_MIN_ROWS:
         return {"enabled":True,"rows":len(rows),"reason":"not_enough_rows"}
 
-    split=max(30,int(len(rows)*(1-AUTONOMOUS_DISCOVERY_HOLDOUT)))
-    discovery,validation=rows[:split],rows[split:]
-    if len(validation)<30:return {"enabled":True,"rows":len(rows),"reason":"not_enough_holdout"}
+    discovery,validation=split_episode_holdout(rows,AUTONOMOUS_DISCOVERY_HOLDOUT,min_holdout_episodes=1)
+    discovery_episodes=len({r["episode_id"] for r in discovery})
+    validation_episodes=len({r["episode_id"] for r in validation})
+    if len(validation)<30 or validation_episodes<2:
+        return {"enabled":True,"rows":len(rows),"episodes":len({r["episode_id"] for r in rows}),
+                "reason":"not_enough_holdout","validation_rows":len(validation),
+                "validation_episodes":validation_episodes}
 
     names=_auto_feature_names(discovery)
     singles=[]
@@ -6805,7 +6862,9 @@ def autonomous_discovery_refresh():
                                    "holdout":AUTONOMOUS_DISCOVERY_HOLDOUT},separators=(",",":"))))
     c.commit();c.close()
     meta=refresh_research_family_stats()
-    return {"enabled":True,"rows":len(rows),"discovery_rows":len(discovery),"validation_rows":len(validation),
+    return {"enabled":True,"rows":len(rows),"episodes":len({r["episode_id"] for r in rows}),
+            "discovery_rows":len(discovery),"validation_rows":len(validation),
+            "discovery_episodes":discovery_episodes,"validation_episodes":validation_episodes,
             "features_considered":names,"rules_generated":len(singles)+len(pairs),"rules_saved":saved,
             **{k.lower():v for k,v in counts.items()},"meta_learning":meta}
 
@@ -7178,16 +7237,59 @@ def create_shadow_trials(signal_id: int, r: Dict[str, Any]) -> int:
         before=c.total_changes
         c.execute("""INSERT OR IGNORE INTO shadow_trials(signal_id,created_ts,candle_ts,instrument,direction,variant,entry,stop,target,risk,status) VALUES(?,?,?,?,?,?,?,?,?,?, 'PENDING')""",(signal_id,now_iso(),r.get("candle_ts"),r["instrument"],direction,name,entry,float(st),float(tp),abs(entry-float(st))))
         made += int(c.total_changes>before)
+    # Supplemental research-only trend-continuation trial.
+    # This does NOT change execution, safety checks, minimum_rr, or live orders.
+    f=r.get("features") or {}
+    flt=r.get("filters") or {}
+
+    try:
+        shadow_rr=float(f.get("rr_raw",0) or 0)
+        shadow_room=float(f.get("room_to_barrier_r",0) or 0)
+        shadow_ext=float(f.get("extension_atr",999) or 999)
+        shadow_vol=float(f.get("volatility_ratio",0) or 0)
+    except (TypeError,ValueError):
+        shadow_rr=0.0
+        shadow_room=0.0
+        shadow_ext=999.0
+        shadow_vol=0.0
+
+    trend_continuation_shadow=(
+        1.20 <= shadow_rr < 1.50
+        and shadow_room >= 1.75
+        and str(f.get("barrier_class") or r.get("barrier_class") or "NONE") != "STRONG"
+        and bool(flt.get("h1_context"))
+        and bool(flt.get("m15_context"))
+        and bool(flt.get("m5_structure"))
+        and bool(f.get("m1_shadow_confirm"))
+        and shadow_ext <= 0.90
+        and 0.65 <= shadow_vol <= 2.0
+    )
+
+    if trend_continuation_shadow:
+        before=c.total_changes
+        c.execute(
+            """INSERT OR IGNORE INTO shadow_trials(
+                   signal_id,created_ts,candle_ts,instrument,direction,
+                   variant,entry,stop,target,risk,status
+               ) VALUES(?,?,?,?,?,?,?,?,?,?, 'PENDING')""",
+            (
+                signal_id,now_iso(),r.get("candle_ts"),r["instrument"],
+                direction,"TREND_CONTINUATION_SHADOW",
+                entry,stop,target,risk
+            )
+        )
+        made += int(c.total_changes>before)
+
     c.commit();c.close();return made
 
 def resolve_shadow_trials(inst: str,m1: List[Dict[str,Any]])->int:
     if not RESEARCH_LAB_ENABLED:return 0
     c=conn();rows=c.execute("SELECT * FROM shadow_trials WHERE status='PENDING' AND instrument=? ORDER BY id",(inst,)).fetchall();n=0
     for row in rows:
-        fake={"candle_ts":row["candle_ts"],"created_ts":row["created_ts"],"direction":row["direction"],"entry":row["entry"],"stop":row["stop"],"target":row["target"]}
+        fake={"candle_ts":row["candle_ts"],"created_ts":row["created_ts"],"instrument":row["instrument"],"direction":row["direction"],"entry":row["entry"],"stop":row["stop"],"target":row["target"]}
         out=resolve_one(fake,m1)
         if out:
-            c.execute("UPDATE shadow_trials SET status=?,label=?,resolved_ts=?,bars_to_resolution=?,mfe_r=?,mae_r=?,note=? WHERE id=?",(out["status"],out["label"],now_iso(),out["bars"],out["mfe_r"],out["mae_r"],out["note"],row["id"]));n+=1
+            c.execute("UPDATE shadow_trials SET status=?,label=?,resolved_ts=?,bars_to_resolution=?,mfe_r=?,mae_r=?,note=?,outcome_cost_r=?,effective_target=?,effective_stop=? WHERE id=?",(out["status"],out["label"],now_iso(),out["bars"],out["mfe_r"],out["mae_r"],out["note"],out.get("cost_r"),out.get("effective_target"),out.get("effective_stop"),row["id"]));n+=1
     c.commit();c.close();return n
 
 def experimental_filter_candidates(r: Dict[str,Any])->Dict[str,Dict[str,Any]]:
@@ -7196,11 +7298,23 @@ def experimental_filter_candidates(r: Dict[str,Any])->Dict[str,Dict[str,Any]]:
     return {"ext_le_0_8":{"pass":ext<=.8,"description":"Extensión <= 0.8 ATR"},"ext_le_1_0":{"pass":ext<=1.0,"description":"Extensión <= 1.0 ATR"},"vol_normal":{"pass":.75<=vol<=1.35,"description":"Volatilidad 0.75–1.35"},"trend_abs_ge_0_30":{"pass":slope>=.30,"description":"Pendiente M15 >= 0.30 ATR"},"momentum_aligned":{"pass":aligned,"description":"Momentum M5 y M1 alineado"},"confirmations_ge_3":{"pass":confs>=3,"description":"Al menos 3 confirmaciones"},"barrier_score_lt_0_75":{"pass":bar<.75,"description":"Barrera estructural < 0.75"},"direction_edge_ge_15":{"pass":edge>=15,"description":"Ventaja BUY/SELL >= 15"}}
 
 def refresh_filter_hypotheses()->Dict[str,Any]:
-    c=conn();rows=c.execute("SELECT ls.label,s.signal,s.features_json,s.filters_json FROM learning_samples ls JOIN signals s ON s.id=ls.signal_id WHERE ls.label IN (0,1) ORDER BY ls.id").fetchall()
-    if not rows:c.close();return {"samples":0,"experimental":0,"evaluating":0,"validated":0,"rejected":0}
+    c=conn()
+    terminal=c.execute("""SELECT ls.label,ls.status,s.id signal_id,s.candle_ts,s.instrument,s.signal,
+                                 s.features_json,s.filters_json
+                          FROM learning_samples ls JOIN signals s ON s.id=ls.signal_id
+                          WHERE ls.status IN ('WIN','LOSS','TIMEOUT','AMBIGUOUS')
+                          ORDER BY s.candle_ts,s.id""").fetchall()
+    episodes=collapse_market_episodes(terminal,gap_minutes=RESEARCH_EPISODE_GAP_MINUTES)
+    rows=[x for x in episodes if x.get("label") in (0,1)]
+    unresolved=sum(1 for x in episodes if x.get("label") not in (0,1))
+    if not rows:
+        c.close()
+        return {"samples":0,"terminal_episodes":len(episodes),"unresolved_episodes":unresolved,
+                "experimental":0,"evaluating":0,"validated":0,"rejected":0}
     stats={}
     for row in rows:
-        rr={"signal":row["signal"],"features":json.loads(row["features_json"] or "{}"),"filters":json.loads(row["filters_json"] or "{}")}
+        rr={"signal":row["signal"],"features":json.loads(row["features_json"] or "{}"),
+            "filters":json.loads(row["filters_json"] or "{}")}
         for key,h in experimental_filter_candidates(rr).items():
             x=stats.setdefault(key,{"description":h["description"],"pn":0,"pw":0,"fn":0,"fw":0})
             if h["pass"]:x["pn"]+=1;x["pw"]+=int(row["label"])
@@ -7215,40 +7329,33 @@ def refresh_filter_hypotheses()->Dict[str,Any]:
         else:stage="EVALUATING"
         counts[stage]+=1;rec="CANDIDATE_FOR_FUTURE_VERSION" if stage=="VALIDATED" else "DO_NOT_USE" if stage=="REJECTED" else "KEEP_TESTING"
         c.execute("""INSERT INTO filter_hypotheses(filter_key,description,stage,total_samples,pass_samples,pass_wins,pass_win_rate,fail_samples,fail_wins,fail_win_rate,edge,coverage,recommendation,updated_ts) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(filter_key) DO UPDATE SET description=excluded.description,stage=excluded.stage,total_samples=excluded.total_samples,pass_samples=excluded.pass_samples,pass_wins=excluded.pass_wins,pass_win_rate=excluded.pass_win_rate,fail_samples=excluded.fail_samples,fail_wins=excluded.fail_wins,fail_win_rate=excluded.fail_win_rate,edge=excluded.edge,coverage=excluded.coverage,recommendation=excluded.recommendation,updated_ts=excluded.updated_ts""",(key,x["description"],stage,total,x["pn"],x["pw"],pwr,x["fn"],x["fw"],fwr,edge,cov,rec,now_iso()))
-    c.commit();c.close();return {"samples":len(rows),"experimental":counts["EXPERIMENTAL"],"evaluating":counts["EVALUATING"],"validated":counts["VALIDATED"],"rejected":counts["REJECTED"]}
+    c.commit();c.close()
+    return {"samples":len(rows),"terminal_episodes":len(episodes),"unresolved_episodes":unresolved,
+            "experimental":counts["EXPERIMENTAL"],"evaluating":counts["EVALUATING"],
+            "validated":counts["VALIDATED"],"rejected":counts["REJECTED"]}
+
 
 def should_retrain_model()->Dict[str,Any]:
-    c=conn();labeled=c.execute("SELECT COUNT(*) n FROM learning_samples WHERE label IN (0,1)").fetchone()["n"];last=c.execute("SELECT samples FROM model_runs WHERE accepted=1 ORDER BY id DESC LIMIT 1").fetchone();c.close();last_n=int(last["samples"]) if last else 0;threshold=ML_MIN_SAMPLES if not last else last_n+MODEL_MIN_NEW_LABELS;return {"ready":labeled>=threshold,"labeled":labeled,"last_model_samples":last_n,"next_training_at":threshold}
+    c=conn()
+    rows=c.execute("""SELECT ls.label,s.candle_ts,s.instrument,s.signal
+                      FROM learning_samples ls JOIN signals s ON s.id=ls.signal_id
+                      WHERE ls.label IN (0,1) ORDER BY s.candle_ts,s.id""").fetchall()
+    last=c.execute("SELECT samples FROM model_runs WHERE accepted=1 ORDER BY id DESC LIMIT 1").fetchone();c.close()
+    labeled=len(collapse_market_episodes(rows,gap_minutes=RESEARCH_EPISODE_GAP_MINUTES))
+    last_n=int(last["samples"]) if last else 0
+    threshold=ML_MIN_SAMPLES if not last else last_n+MODEL_MIN_NEW_LABELS
+    return {"ready":labeled>=threshold,"labeled":labeled,"last_model_samples":last_n,"next_training_at":threshold,
+            "sample_unit":"market_episode","episode_gap_minutes":RESEARCH_EPISODE_GAP_MINUTES}
+
 
 def resolve_one(sample: sqlite3.Row, m1: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-    start = datetime.fromisoformat(sample["candle_ts"]) if sample["candle_ts"] else datetime.fromisoformat(sample["created_ts"])
-    bars = [x for x in m1 if x["t"] > start]
-    if not bars:
-        return None
-    direction, entry, stop, target = sample["direction"], float(sample["entry"]), float(sample["stop"]), float(sample["target"])
-    risk = abs(entry - stop)
-    if risk <= 0:
-        return {"status": "INVALID", "label": None, "bars": 0, "mfe_r": 0, "mae_r": 0, "note": "zero risk"}
-    mfe, mae = 0.0, 0.0
-    max_bars = OUTCOME_HORIZON_MIN
-    for idx, x in enumerate(bars[:max_bars], start=1):
-        if direction == "BUY":
-            mfe = max(mfe, (x["h"] - entry) / risk)
-            mae = min(mae, (x["l"] - entry) / risk)
-            hit_tp, hit_sl = x["h"] >= target, x["l"] <= stop
-        else:
-            mfe = max(mfe, (entry - x["l"]) / risk)
-            mae = min(mae, (entry - x["h"]) / risk)
-            hit_tp, hit_sl = x["l"] <= target, x["h"] >= stop
-        if hit_tp and hit_sl:
-            return {"status": "AMBIGUOUS", "label": None, "bars": idx, "mfe_r": mfe, "mae_r": mae, "note": "SL y TP tocados en la misma vela M1"}
-        if hit_tp:
-            return {"status": "WIN", "label": 1, "bars": idx, "mfe_r": mfe, "mae_r": mae, "note": None}
-        if hit_sl:
-            return {"status": "LOSS", "label": 0, "bars": idx, "mfe_r": mfe, "mae_r": mae, "note": None}
-    if len(bars) >= max_bars:
-        return {"status": "TIMEOUT", "label": None, "bars": max_bars, "mfe_r": mfe, "mae_r": mae, "note": f"No resolvió en {max_bars} min"}
-    return None
+    """Backward-compatible wrapper around the research outcome engine."""
+    payload=dict(sample) if not isinstance(sample, dict) else sample
+    return research_resolve_outcome(
+        payload, m1, horizon_bars=OUTCOME_HORIZON_MIN,
+        round_trip_cost_pips=RESEARCH_ROUND_TRIP_COST_PIPS,
+    )
+
 
 
 def resolve_ensemble_actual_outcome(signal_id: int, label: int) -> Dict[str,Any]:
@@ -7288,8 +7395,10 @@ def resolve_pending(inst: str, m1: List[Dict[str, Any]]) -> int:
     for s in rows:
         out = resolve_one(s, m1)
         if out:
-            c.execute("""UPDATE learning_samples SET status=?,label=?,resolved_ts=?,bars_to_resolution=?,mfe_r=?,mae_r=?,note=? WHERE id=?""",
-                      (out["status"], out["label"], now_iso(), out["bars"], out["mfe_r"], out["mae_r"], out["note"], s["id"]))
+            c.execute("""UPDATE learning_samples SET status=?,label=?,resolved_ts=?,bars_to_resolution=?,mfe_r=?,mae_r=?,note=?,
+                      outcome_cost_r=?,effective_target=?,effective_stop=? WHERE id=?""",
+                      (out["status"], out["label"], now_iso(), out["bars"], out["mfe_r"], out["mae_r"], out["note"],
+                       out.get("cost_r"),out.get("effective_target"),out.get("effective_stop"),s["id"]))
             resolved += 1
             c.commit()
             if out["label"] in (0, 1):
@@ -7321,8 +7430,16 @@ def learning_stats() -> Dict[str, Any]:
     shadow_total=c.execute("SELECT COUNT(*) n FROM shadow_trials").fetchone()["n"]
     shadow_resolved=c.execute("SELECT COUNT(*) n FROM shadow_trials WHERE label IN (0,1)").fetchone()["n"]
     shadow_pending=c.execute("SELECT COUNT(*) n FROM shadow_trials WHERE status='PENDING'").fetchone()["n"]
+    shadow_episode_rows=c.execute("""SELECT st.label,s.candle_ts,s.instrument,s.signal,st.variant
+                                     FROM shadow_trials st JOIN signals s ON s.id=st.signal_id""").fetchall()
+    canonical_episode_rows=c.execute("""SELECT ls.label,s.candle_ts,s.instrument,s.signal
+                                        FROM learning_samples ls JOIN signals s ON s.id=ls.signal_id
+                                        WHERE ls.label IN (0,1)""").fetchall()
     stages={x["stage"]:x["n"] for x in c.execute("SELECT stage,COUNT(*) n FROM filter_hypotheses GROUP BY stage").fetchall()}
     c.close()
+    shadow_eps_all=collapse_market_episodes(shadow_episode_rows,gap_minutes=RESEARCH_EPISODE_GAP_MINUTES)
+    shadow_eps_resolved=collapse_market_episodes([x for x in shadow_episode_rows if x["label"] in (0,1)],gap_minutes=RESEARCH_EPISODE_GAP_MINUTES)
+    canonical_eps=collapse_market_episodes(canonical_episode_rows,gap_minutes=RESEARCH_EPISODE_GAP_MINUTES)
     retrain_policy=should_retrain_model()
     return {
         "samples_total": total, "resolved_labeled": resolved, "pending_or_unlabeled": total - resolved,
@@ -7345,7 +7462,11 @@ def learning_stats() -> Dict[str, Any]:
         "adaptive_learning_changes_production_execution":False,
         "adaptive_confidence_gate_enabled":bool(ADAPTIVE_CONFIDENCE),
         "ml_role":"secondary_refinement","discovery_min_samples":DISCOVERY_MIN_SAMPLES,
-        "shadow_lab":{"enabled":RESEARCH_LAB_ENABLED,"trials_total":shadow_total,"resolved_labeled":shadow_resolved,"pending":shadow_pending},
+        "shadow_lab":{"enabled":RESEARCH_LAB_ENABLED,
+                      "trials_total":shadow_total,"trials_resolved_labeled":shadow_resolved,"pending":shadow_pending,
+                      "episodes_total":len(shadow_eps_all),"episodes_resolved_labeled":len(shadow_eps_resolved)},
+        "evidence_integrity":{"canonical_samples_raw":resolved,"canonical_episodes":len(canonical_eps),
+                              "shadow_trials_raw":shadow_total,"shadow_episodes":len(shadow_eps_all)},
         "filter_research":{"experimental":stages.get("EXPERIMENTAL",0),"evaluating":stages.get("EVALUATING",0),"validated":stages.get("VALIDATED",0),"rejected":stages.get("REJECTED",0),"automatic_live_activation":False},
         "external_research":{"enabled":EXTERNAL_RESEARCH_ENABLED,"symbols":EXTERNAL_RESEARCH_SYMBOLS,
                              "granularity":EXTERNAL_RESEARCH_GRANULARITY,"news_research":EXTERNAL_NEWS_RESEARCH,
@@ -7993,10 +8114,12 @@ def refresh_ensemble_observability() -> Dict[str,Any]:
 
 
 async def observability_loop_monitor():
-    obs_loop_interval=int(managed_value("observability.loop_interval_seconds",OBSERVABILITY_LOOP_INTERVAL_SECONDS)); expected=time.monotonic()+obs_loop_interval
+    obs_loop_interval=int(managed_value("observability.loop_interval_seconds",OBSERVABILITY_LOOP_INTERVAL_SECONDS))
     while True:
-        await asyncio.sleep(int(managed_value("observability.loop_interval_seconds",OBSERVABILITY_LOOP_INTERVAL_SECONDS)))
-        now=time.monotonic();lag=max(0.0,(now-expected)*1000);expected=now+int(managed_value("observability.loop_interval_seconds",OBSERVABILITY_LOOP_INTERVAL_SECONDS))
+        obs_loop_interval=int(managed_value("observability.loop_interval_seconds",OBSERVABILITY_LOOP_INTERVAL_SECONDS))
+        expected=time.monotonic()+obs_loop_interval
+        await asyncio.sleep(obs_loop_interval)
+        now=time.monotonic();lag=max(0.0,(now-expected)*1000)
         observability_manager.set_event_loop_lag(lag)
         if lag>=OBSERVABILITY_LOOP_LAG_CRITICAL_MS:
             observability_manager.alert("EVENT_LOOP_LAG","CRITICAL","System","EVENT_LOOP_LAG_HIGH",
@@ -8012,9 +8135,21 @@ async def observability_loop_monitor():
                 run_governance_cycle("periodic")
             if SMART_EXECUTION_ENABLED:
                 refresh_smart_execution_observability()
-                refresh_ensemble_observability()
+                await asyncio.to_thread(refresh_ensemble_observability)
             if PRODUCTION_READINESS_ENABLED:
                 pst=production_readiness_gate.state()
+                if pst.get("production_stage")=="CERTIFICATION":
+                    _obs_module(
+                        "Production Readiness Gate",
+                        "OK",
+                        last_operation="certification stage monitoring",
+                        details={
+                            "readiness_state":pst.get("readiness_state"),
+                            "production_stage":pst.get("production_stage"),
+                            "release_id":pst.get("release_id"),
+                            "certification_id":pst.get("certification_id"),
+                        },
+                    )
                 if pst.get("production_stage") in ("MINIMAL_LIVE","LIMITED_LIVE","CONTROLLED_LIVE","PRODUCTION_APPROVED","SUSPENDED"):
                     pctx=production_runtime_context()
                     pctx.update({
@@ -10507,7 +10642,7 @@ async def discovery():
 async def home():
     return """<!doctype html><html lang='es'><meta name='viewport' content='width=device-width'><title>Market Alert V3.27</title>
 <style>body{font-family:system-ui;background:#0b1020;color:#eef2ff;max-width:1050px;margin:auto;padding:24px}.c{background:#151c32;border:1px solid #2c3656;border-radius:16px;padding:18px;margin:12px 0}pre{white-space:pre-wrap;word-break:break-word;background:#080c17;padding:14px;border-radius:12px}.tag{display:inline-block;padding:5px 9px;border-radius:999px;background:#25304f;margin-right:6px}</style>
-<h1>Market Alert V3.27 · Integrated Shadow Runtime</h1><div class=c><span class=tag>OANDA PRACTICE ONLY</span><span class=tag>24/7</span><span class=tag>Sin límite diario</span><span class=tag>Confianza calibrada</span>
+<h1>Market Alert V3.34.1 · Historical Replay Research Runtime</h1><div class=c><span class=tag>OANDA PRACTICE ONLY</span><span class=tag>24/7</span><span class=tag>Sin límite diario</span><span class=tag>Confianza calibrada</span>
 <p><b>Quality Score ≠ probabilidad.</b> La confianza dinámica se calibra con resultados reales. Con poca muestra se limita deliberadamente y el 90% requiere evidencia sustancial.</p></div>
 <div class=c><h2>Estado</h2><pre id=s>Cargando…</pre></div><div class=c><h2>Aprendizaje</h2><pre id=l>Cargando…</pre></div><div class=c><h2>Última decisión</h2><pre id=d>Cargando…</pre></div><div class=c><h2>Últimas señales</h2><pre id=h>Cargando…</pre></div>
 <script>async function u(){s.textContent=JSON.stringify(await fetch('/api/status').then(r=>r.json()),null,2);l.textContent=JSON.stringify(await fetch('/api/learning').then(r=>r.json()),null,2);d.textContent=JSON.stringify(await fetch('/api/decisions?limit=5').then(r=>r.json()),null,2);h.textContent=JSON.stringify(await fetch('/api/signals?limit=15').then(r=>r.json()),null,2)}u();setInterval(u,15000)</script></html>"""

@@ -612,12 +612,12 @@ class EnsembleEngine:
         status="ENSEMBLE_DEGRADATION_DETECTED" if reasons else "INSUFFICIENT_DATA" if len(rv)<self.min_sample_size or len(hv)<self.min_sample_size else "NORMAL"
         return {"status":status,"reasons":reasons,"recent":rm,"historical":hm,"causal_claim":False}
 
-    def value_added(self,days:int=30)->Dict[str,Any]:
+    def value_added(self,days:int=30,performance:Optional[Dict[str,Any]]=None)->Dict[str,Any]:
         since=(datetime.now(timezone.utc)-timedelta(days=days)).isoformat();c=self.conn()
         comps=[dict(x) for x in c.execute("SELECT * FROM ensemble_shadow_comparisons WHERE ts>=?",(since,)).fetchall()]
         c.close();real=[finite(x.get("actual_result")) for x in comps];real=[x for x in real if x is not None]
         hyp=[finite(x.get("hypothetical_result")) for x in comps];hyp=[x for x in hyp if x is not None]
-        perf=self.performance_metrics(days);models=perf.get("model_reliability") or {}
+        perf=performance if performance is not None else self.performance_metrics(days);models=perf.get("model_reliability") or {}
         individual=[(m,finite(v.get("expectancy"))) for m,v in models.items() if finite(v.get("expectancy")) is not None]
         best=max(individual,key=lambda x:x[1]) if individual else None
         avg=statistics.mean(x[1] for x in individual) if individual else None
@@ -661,6 +661,7 @@ class EnsembleEngine:
     def dashboard(self)->Dict[str,Any]:
         c=self.conn();last=c.execute("SELECT * FROM ensemble_outputs ORDER BY ts DESC LIMIT 1").fetchone();alerts=[dict(x) for x in c.execute("SELECT * FROM ensemble_alerts ORDER BY id DESC LIMIT 20").fetchall()];c.close()
         if not last:return {"enabled":True,"mode":self.mode,"status":"NO_DATA","signal_authority":False,"risk_increase_authority":False}
+        performance=self.performance_metrics()
         return {"enabled":True,"mode":self.mode,"signal_authority":False,"risk_increase_authority":False,
           "ensemble_status":"ABSTAIN" if last["ensemble_direction"]=="ABSTAIN" else "SHADOW_OPINION",
           "ensemble_direction":last["ensemble_direction"],"ensemble_confidence":last["ensemble_confidence"],
@@ -668,5 +669,5 @@ class EnsembleEngine:
           "diversity_score":last["diversity_score"],"expected_net_edge":last["expected_net_edge"],
           "current_weights":json.loads((self.conn().execute("SELECT weights_json FROM ensemble_weight_versions ORDER BY created_at DESC LIMIT 1").fetchone() or {"weights_json":"{}"})["weights_json"]),
           "active_models":json.loads(last["participating_models_json"]),"abstaining_models":json.loads(last["abstaining_models_json"]),
-          "recent_alerts":alerts,"value_added":self.value_added(),"performance":self.performance_metrics(),"degradation":self.degradation(),
+          "recent_alerts":alerts,"value_added":self.value_added(performance=performance),"performance":performance,"degradation":self.degradation(),
           "activation_path":["SHADOW","VALIDATION","PAPER","CANARY","LIMITED_ENSEMBLE","PRODUCTION_ENSEMBLE"]}
