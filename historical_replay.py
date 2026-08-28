@@ -1,4 +1,4 @@
-"""Independent candle replay for Botstrader research (v3.34.1).
+"""Independent candle replay for Botstrader research (v3.35).
 
 The module is intentionally isolated from live execution. It reconstructs each
 strategy decision from candles that were fully closed at the decision time, then
@@ -20,7 +20,9 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 import math
 
-from research_evidence import collapse_market_episodes, economic_realized_r, resolve_outcome
+from research_evidence import collapse_market_episodes
+from historical_execution import HistoricalExecutionConfig, resolve_executed_outcome
+from replay_validation import ReplayValidationConfig, chronological_holdout, walk_forward_splits
 
 
 BAR_SECONDS = {"M1": 60, "M5": 300, "M15": 900, "H1": 3600}
@@ -40,6 +42,8 @@ def normalize_candles(rows: Iterable[Mapping[str, Any]]) -> List[Dict[str, Any]]
     for r in rows:
         x=dict(r); x["t"]=_dt(x["t"])
         for k in ("o","h","l","c"):x[k]=float(x[k])
+        for k in ("bid_o","bid_h","bid_l","bid_c","ask_o","ask_h","ask_l","ask_c"):
+            if k in x and x[k] is not None:x[k]=float(x[k])
         x["v"]=int(x.get("v",0) or 0)
         out.append(x)
     out.sort(key=lambda x:x["t"])
@@ -83,8 +87,10 @@ class ReplayConfig:
     m5_history: int = 130
     m1_history: int = 220
     horizon_bars: int = 180
-    round_trip_cost_pips: float = 1.0
     episode_gap_minutes: int = 15
+    save_m1_rejection_shadow: bool = False
+    execution: HistoricalExecutionConfig = HistoricalExecutionConfig()
+    validation: ReplayValidationConfig = ReplayValidationConfig()
 
 
 def _opposes(metrics: Mapping[str, Any], sig: str) -> Tuple[bool,bool]:
@@ -219,7 +225,7 @@ def replay_snapshot(server: Any, h1,m15,m5,m1,inst: str,variant: ReplayVariant, 
 
 
 def _metrics(rows: Sequence[Mapping[str,Any]]) -> Dict[str,Any]:
-    statuses={k:0 for k in ("WIN","LOSS","TIMEOUT","AMBIGUOUS","INVALID","PENDING")}
+    statuses={k:0 for k in ("WIN","LOSS","TIMEOUT","AMBIGUOUS","INVALID","PENDING","DATA_INSUFFICIENT","DATA_INTEGRITY_ERROR","ENTRY_INVALIDATED")}
     vals=[]
     for r in rows:
         st=str(r.get("outcome_status") or "PENDING");statuses[st]=statuses.get(st,0)+1
@@ -238,6 +244,7 @@ def replay_history(server: Any, candles_by_tf: Mapping[str,Sequence[Mapping[str,
                    start: datetime, end: datetime, variants: Sequence[ReplayVariant], config: ReplayConfig=ReplayConfig()) -> Dict[str,Any]:
     store=CandleStore(candles_by_tf); start=_dt(start);end=_dt(end)
     raw={v.name:[] for v in variants}; rejection={v.name:{} for v in variants}
+    m1_rejected={v.name:[] for v in variants}
     m1_all=store.data["M1"]
     for bar in m1_all:
         ts=bar["t"]
@@ -253,6 +260,8 @@ def replay_history(server: Any, candles_by_tf: Mapping[str,Sequence[Mapping[str,
             row=replay_snapshot(server,h1,m15,m5,m1,inst,v,hypotheses=hypotheses)
             if not row["actionable"]:
                 d=rejection[v.name];d[row["decision_reason"]]=d.get(row["decision_reason"],0)+1
+                if config.save_m1_rejection_shadow and row["decision_reason"]=="QUALITY:M1_CONFIRMATION" and row.get("signal") in ("BUY","SELL"):
+                    m1_rejected[v.name].append(row)
             raw[v.name].append(row)
     reports={}
     for v in variants:
@@ -260,18 +269,81 @@ def replay_history(server: Any, candles_by_tf: Mapping[str,Sequence[Mapping[str,
         episodes=collapse_market_episodes(actionable,gap_minutes=config.episode_gap_minutes,
                                          timestamp_key="candle_ts",instrument_key="instrument",direction_key="signal")
         resolved=[]
+        m1_shadow_resolved=[]
+        if config.save_m1_rejection_shadow:
+            m1_shadow_episodes=collapse_market_episodes(
+                m1_rejected[v.name],
+                gap_minutes=config.episode_gap_minutes,
+                timestamp_key="candle_ts",
+                instrument_key="instrument",
+                direction_key="signal"
+            )
+            for r in m1_shadow_episodes:
+                payload={"candle_ts":r["candle_ts"],"direction":r["signal"],"entry":r["entry"],"stop":r["stop"],"target":r["target"],"instrument":inst}
+                future=store.future_m1_after(_dt(r["candle_ts"]), config.horizon_bars + max(0, int(config.execution.latency_bars)) + 1)
+                out=resolve_executed_outcome(payload,future,horizon_bars=config.horizon_bars,config=config.execution)
+                z=dict(r)
+                if out:
+                    z.update({
+                        "outcome_status":out["status"],
+                        "label":out.get("label"),
+                        "mfe_r":out.get("mfe_r"),
+                        "mae_r":out.get("mae_r"),
+                        "entry_ts":out.get("entry_ts"),
+                        "exit_ts":out.get("exit_ts"),
+                        "entry_fill":out.get("entry_fill"),
+                        "exit_fill":out.get("exit_fill"),
+                        "entry_spread_pips":out.get("entry_spread_pips"),
+                        "entry_slippage_pips":out.get("entry_slippage_pips"),
+                        "exit_slippage_pips":out.get("exit_slippage_pips"),
+                        "execution_note":out.get("note"),
+                        "realized_r":out.get("realized_r")
+                    })
+                else:
+                    z.update({"outcome_status":"PENDING","realized_r":None})
+                m1_shadow_resolved.append(z)
+
         for r in episodes:
             payload={"candle_ts":r["candle_ts"],"direction":r["signal"],"entry":r["entry"],"stop":r["stop"],"target":r["target"],"instrument":inst}
-            out=resolve_outcome(payload,store.data["M1"],horizon_bars=config.horizon_bars,round_trip_cost_pips=config.round_trip_cost_pips)
+            future=store.future_m1_after(_dt(r["candle_ts"]), config.horizon_bars + max(0, int(config.execution.latency_bars)) + 1)
+            out=resolve_executed_outcome(payload,future,horizon_bars=config.horizon_bars,config=config.execution)
             z=dict(r)
             if out:
-                z.update({"outcome_status":out["status"],"label":out.get("label"),"mfe_r":out.get("mfe_r"),"mae_r":out.get("mae_r"),"cost_r":out.get("cost_r")})
-                z["realized_r"]=economic_realized_r(payload,out)
+                z.update({"outcome_status":out["status"],"label":out.get("label"),"mfe_r":out.get("mfe_r"),"mae_r":out.get("mae_r"),
+                          "entry_ts":out.get("entry_ts"),"exit_ts":out.get("exit_ts"),"entry_fill":out.get("entry_fill"),
+                          "exit_fill":out.get("exit_fill"),"entry_spread_pips":out.get("entry_spread_pips"),
+                          "entry_slippage_pips":out.get("entry_slippage_pips"),"exit_slippage_pips":out.get("exit_slippage_pips"),
+                          "execution_note":out.get("note"),"realized_r":out.get("realized_r")})
             else:z.update({"outcome_status":"PENDING","realized_r":None})
             resolved.append(z)
+
+        holdout=chronological_holdout(resolved,horizon_bars=config.horizon_bars,config=config.validation)
+        wf=walk_forward_splits(resolved,horizon_bars=config.horizon_bars,config=config.validation)
+        holdout_report={k:_metrics(holdout[k]) for k in ("discovery","validation","test")}
+        holdout_report.update({"status":holdout["status"],"purged":holdout["purged"],"embargoed":holdout["embargoed"],
+                               "boundaries":holdout.get("boundaries",{})})
+        wf_report=[]
+        for i,fold in enumerate(wf,1):
+            wf_report.append({"fold":i,"boundary":fold["boundary"],"purged":fold["purged"],"embargoed":fold["embargoed"],
+                              "train_metrics":_metrics(fold["train"]),"test_metrics":_metrics(fold["test"])})
         reports[v.name]={"raw_snapshots":len(raw[v.name]),"actionable_snapshots":len(actionable),"independent_episodes":len(episodes),
-                         "rejections":rejection[v.name],"metrics":_metrics(resolved),"episodes":resolved}
+                         "rejections":rejection[v.name],"metrics":_metrics(resolved),"holdout":holdout_report,
+                         "walk_forward":wf_report,"episodes":resolved,
+                         "m1_rejection_shadow":{
+                             "enabled":bool(config.save_m1_rejection_shadow),
+                             "episodes":m1_shadow_resolved,
+                             "metrics":_metrics(m1_shadow_resolved)
+                         }}
     return {"instrument":inst,"start":start.isoformat(),"end":end.isoformat(),
             "methodology":{"no_lookahead_decision":True,"future_bars_only_for_outcome":True,
-                           "episode_gap_minutes":config.episode_gap_minutes,"round_trip_cost_pips":config.round_trip_cost_pips,
-                           "scope":"DETERMINISTIC_STRATEGY_CORE_NOT_PRODUCTION_ML_OR_MUTABLE_GATES"},"variants":reports}
+                           "episode_gap_minutes":config.episode_gap_minutes,
+                           "execution_model":"HISTORICAL_BID_ASK_MARKET_FILL_WITH_EXPLICIT_ADVERSE_SLIPPAGE",
+                           "entry_slippage_pips":config.execution.entry_slippage_pips,
+                           "exit_slippage_pips":config.execution.exit_slippage_pips,
+                           "latency_bars":config.execution.latency_bars,
+                           "require_bid_ask":config.execution.require_bid_ask,
+                           "validation":"CHRONOLOGICAL_HOLDOUT_PLUS_WALK_FORWARD_WITH_PURGING_AND_EMBARGO",
+                           "embargo_minutes":config.validation.embargo_minutes,
+                           "scope":"DETERMINISTIC_STRATEGY_CORE_NOT_PRODUCTION_ML_OR_MUTABLE_GATES",
+                           "limitations":["M1 OHLC cannot reconstruct intrabar tick ordering; dual TP/SL touches remain AMBIGUOUS",
+                                          "Historical candles do not provide order-book depth, so partial-fill probability is not inferred"]},"variants":reports}

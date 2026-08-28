@@ -1,0 +1,19 @@
+BotsTrader V3.35.2 Observability Hardening
+Validation date: 2026-08-22
+
+Scope:
+- stale alert recovery
+- heartbeat lifecycle recovery
+- stable Ensemble alert identity/cardinality
+- market-closed alert semantics
+- compact/rate-limited Ensemble local alert history
+- shadow ML validation governance
+- no strategy/risk/leverage/minimum_rr/execution-authority changes
+
+Regression:
+194 passed
+0 failed
+4 deprecation warnings (FastAPI on_event -> lifespan; pre-existing/non-blocking)
+
+Additional correction:
+- test_governance_engine used a fixed historical NOW that aged outside its own 7-day window as calendar time advanced. Test clock changed to runtime UTC; production governance logic unchanged.

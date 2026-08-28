@@ -233,3 +233,15 @@ def test_positive_gross_edge_without_cost_reports_cost_unavailable():
     assert 'EXECUTION_COST_UNAVAILABLE' in r['reasoning_summary']
     assert 'NO_CLEAR_EDGE_AFTER_EXECUTION_COSTS' not in r['reasoning_summary']
     os.remove(p)
+
+def test_duplicate_model_is_deduplicated_before_persistence():
+    e,p=engine(min_active_directional=1)
+    older=sig('A','LONG',.6,ts=(datetime.now(timezone.utc)-timedelta(seconds=1)).isoformat())
+    newer=sig('A','SHORT',.9,ts=datetime.now(timezone.utc).isoformat())
+    r=e.evaluate([older,newer],regime='RANGE')
+    c=e.conn();rows=c.execute("SELECT strategy_id,direction,confidence FROM ensemble_signals").fetchall();c.close()
+    assert len(rows)==1
+    assert rows[0]['strategy_id']=='A'
+    assert rows[0]['direction']=='SHORT'
+    assert abs(rows[0]['confidence']-.9)<1e-12
+    os.remove(p)

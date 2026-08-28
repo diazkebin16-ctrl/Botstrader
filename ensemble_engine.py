@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional, Tuple
-import json, math, sqlite3, statistics, uuid
+import hashlib, json, math, sqlite3, statistics, uuid
 
 DIRECTIONS=("LONG","SHORT","NEUTRAL","ABSTAIN")
 MODES=("SHADOW","PAPER","CANARY","LIMITED_ENSEMBLE","PRODUCTION_ENSEMBLE")
@@ -152,11 +152,30 @@ class EnsembleEngine:
             role=str(signal.get("role") or "DIRECTIONAL").upper(),ttl_seconds=max(1,int(signal.get("ttl_seconds") or self.default_signal_ttl_seconds)),
             status=str(signal.get("status") or "ONLINE").upper(),metadata=dict(signal.get("metadata") or {}))
 
-    def record_signals(self,cycle_id:str,signals:List[Dict[str,Any]])->List[StandardSignal]:
-        out=[];c=self.conn()
+    def _standardize_unique(self,signals:List[Dict[str,Any]])->List[StandardSignal]:
+        """Normalize one opinion per strategy/symbol before persistence or voting.
+
+        The ensemble previously persisted the raw list and only deduplicated it
+        afterwards for voting. A repeated research/context observation therefore
+        could not change the vote, but it could multiply database rows. Keep the
+        newest observation for each model/symbol once, before any side effect.
+        """
+        latest={}
         for raw in signals:
-            s=self.standardize(raw);out.append(s);sid="ens_sig_"+uuid.uuid4().hex
-            c.execute("""INSERT INTO ensemble_signals(signal_id,ensemble_cycle_id,strategy_id,strategy_version,symbol,ts,
+            s=self.standardize(raw);key=(s.strategy_id,s.symbol)
+            prev=latest.get(key)
+            if prev is None or (parse_ts(s.timestamp) or datetime.min.replace(tzinfo=timezone.utc)) >= (parse_ts(prev.timestamp) or datetime.min.replace(tzinfo=timezone.utc)):
+                latest[key]=s
+        return list(latest.values())
+
+    def record_signals(self,cycle_id:str,signals:List[Dict[str,Any]])->List[StandardSignal]:
+        out=self._standardize_unique(signals);c=self.conn()
+        for s in out:
+            # Deterministic per-cycle identity makes persistence idempotent even if
+            # record_signals is retried for the same model/symbol in one cycle.
+            key=f"{cycle_id}|{s.strategy_id}|{s.symbol}".encode()
+            sid="ens_sig_"+hashlib.sha256(key).hexdigest()[:32]
+            c.execute("""INSERT OR IGNORE INTO ensemble_signals(signal_id,ensemble_cycle_id,strategy_id,strategy_version,symbol,ts,
               direction,confidence,expected_edge,market_regime,time_horizon,signal_strength,risk_characteristics_json,
               data_quality,family,input_dependencies_json,role,ttl_seconds,status,metadata_json)
               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
@@ -390,17 +409,9 @@ class EnsembleEngine:
                  current_system_direction:Optional[str]=None,current_system_confidence:Optional[float]=None,
                  current_executed:bool=False)->Dict[str,Any]:
         method=method if method in BASELINES else "REGIME_WEIGHTED";cycle="ens_cycle_"+uuid.uuid4().hex
+        # record_signals normalizes and deduplicates before persistence, so the
+        # exact same signal set is used by storage and by the voting path.
         std=self.record_signals(cycle,signals);at=datetime.now(timezone.utc)
-        # One model must contribute at most one opinion per ensemble cycle.
-        # Keep the newest observation for each strategy_id so repeated collection
-        # of the same cross-asset/context model cannot inflate votes, abstentions,
-        # disagreement, or diversity metrics.
-        latest_by_model={}
-        for sig in std:
-            prev=latest_by_model.get(sig.strategy_id)
-            if prev is None or (parse_ts(sig.timestamp) or datetime.min.replace(tzinfo=timezone.utc)) >= (parse_ts(prev.timestamp) or datetime.min.replace(tzinfo=timezone.utc)):
-                latest_by_model[sig.strategy_id]=sig
-        std=list(latest_by_model.values())
         fresh=[];abstain=[];offline=[];stale=[]
         for s in std:
             if s.status!="ONLINE":offline.append(s.strategy_id);continue
@@ -517,6 +528,29 @@ class EnsembleEngine:
           (ver,now_iso(),method,regime,canonical(weights),canonical(family_info.get("family_totals",{})),canonical(evidence),
            prev["ensemble_weight_version"] if prev else None,"ACTIVE_SHADOW"));c.commit();c.close();return ver
 
+    def _record_alert_event(self,event:str,severity:str,r:Dict[str,Any],cooldown_seconds:int=900):
+        """Persist bounded event history, not one full payload per scan cycle."""
+        c=self.conn()
+        prev=c.execute("SELECT ts FROM ensemble_alerts WHERE event_type=? AND symbol=? ORDER BY id DESC LIMIT 1",
+                       (event,r["symbol"])).fetchone()
+        should_write=True
+        if prev:
+            try:
+                age=(datetime.now(timezone.utc)-datetime.fromisoformat(str(prev["ts"]).replace("Z","+00:00"))).total_seconds()
+                should_write=age>=max(60,int(cooldown_seconds))
+            except Exception:
+                pass
+        if should_write:
+            summary={k:r.get(k) for k in ("ensemble_decision_id","ensemble_cycle_id","symbol","ts","mode","method",
+                                            "ensemble_direction","ensemble_confidence","agreement_score","disagreement_score",
+                                            "diversity_score","market_regime","data_quality","reasoning_summary")}
+            summary["abstaining_models"]=r.get("abstaining_models",[])
+            summary["offline_models"]=r.get("offline_models",[])
+            c.execute("INSERT INTO ensemble_alerts(ts,event_type,severity,symbol,ensemble_decision_id,message,details_json) VALUES(?,?,?,?,?,?,?)",
+                      (now_iso(),event,severity,r["symbol"],r["ensemble_decision_id"],event,canonical(summary)))
+            c.commit()
+        c.close()
+
     def _emit_alerts(self,r:Dict[str,Any]):
         events=[]
         if "ENSEMBLE_CONFLICT" in r["reasoning_summary"]:events.append(("ENSEMBLE_CONFLICT","WARNING"))
@@ -528,11 +562,8 @@ class EnsembleEngine:
         if any((x.get("reliability") or {}).get("global",{}).get("evidence")=="SUFFICIENT" and
                ((x.get("reliability") or {}).get("global",{}).get("calibration") or 1.0)<.50 for x in r.get("model_contributions",[])):
             events.append(("CONFIDENCE_MISCALIBRATION","WARNING"))
-        c=self.conn()
         for event,sev in events:
-            c.execute("INSERT INTO ensemble_alerts(ts,event_type,severity,symbol,ensemble_decision_id,message,details_json) VALUES(?,?,?,?,?,?,?)",
-                      (now_iso(),event,sev,r["symbol"],r["ensemble_decision_id"],event,canonical(r)))
-        c.commit();c.close()
+            self._record_alert_event(event,sev,r)
 
     def correlation_audit(self)->Dict[str,Any]:
         reg=self.registry();out=[]

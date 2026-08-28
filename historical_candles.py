@@ -23,7 +23,7 @@ async def fetch_oanda_candles(instrument:str,granularity:str,start:datetime,end:
     headers={"Authorization":f"Bearer {token}"}
     async with httpx.AsyncClient(timeout=30) as client:
         while cursor<=end:
-            params={"price":"M","granularity":granularity,"from":_iso(cursor),"count":5000}
+            params={"price":"MBA","granularity":granularity,"from":_iso(cursor),"count":5000}
             r=await client.get(f"{base_url}/v3/instruments/{instrument}/candles",params=params,headers=headers)
             if r.status_code>=400:raise RuntimeError(f"OANDA {r.status_code}: {r.text[:300]}")
             candles=r.json().get("candles",[])
@@ -34,8 +34,15 @@ async def fetch_oanda_candles(instrument:str,granularity:str,start:datetime,end:
                 t=_dt(x["time"]);last=t
                 if t>end:continue
                 if t in seen:continue
-                seen.add(t);m=x["mid"]
-                out.append({"t":t.isoformat(),"o":float(m["o"]),"h":float(m["h"]),"l":float(m["l"]),"c":float(m["c"]),"v":int(x.get("volume",0))})
+                seen.add(t)
+                m=x.get("mid") or {}; b=x.get("bid") or {}; a=x.get("ask") or {}
+                if not (m and b and a):
+                    raise RuntimeError(f"OANDA candle missing requested midpoint/bid/ask components at {t.isoformat()}")
+                out.append({
+                    "t":t.isoformat(),"o":float(m["o"]),"h":float(m["h"]),"l":float(m["l"]),"c":float(m["c"]),
+                    "bid_o":float(b["o"]),"bid_h":float(b["h"]),"bid_l":float(b["l"]),"bid_c":float(b["c"]),
+                    "ask_o":float(a["o"]),"ask_h":float(a["h"]),"ask_l":float(a["l"]),"ask_c":float(a["c"]),
+                    "v":int(x.get("volume",0))})
             if last is None:break
             nxt=last+timedelta(seconds=DUR[granularity])
             if nxt<=cursor:break

@@ -25,6 +25,7 @@ from governance_engine import GovernanceEngine, AUTHORITY_MATRIX, AUTHORITY_PRIO
 from production_readiness import ProductionReadinessGate
 from smart_execution import SmartExecutionEngine
 from ensemble_engine import EnsembleEngine
+from storage_lifecycle import StorageLifecycleManager
 from capital_allocation import CapitalAllocationEngine
 from research_evidence import (resolve_outcome as research_resolve_outcome, collapse_market_episodes,
                                annotate_market_episodes, split_episode_holdout)
@@ -80,6 +81,9 @@ SINGLE = os.getenv("SINGLE_POSITION_PER_INSTRUMENT", "true").lower() == "true"
 SESSION = os.getenv("SESSION_FILTER", "true").lower() == "true"
 NEWS = os.getenv("NEWS_FILTER", "true").lower() == "true"
 MIN_RR = float(os.getenv("MIN_RR", "1.5"))
+# Entry admission can accept less structural room than the final managed target.
+# The target remains MIN_RR (1.50R); this value only controls admission.
+MIN_ENTRY_RR = max(0.10, min(MIN_RR, float(os.getenv("MIN_ENTRY_RR", "0.40"))))
 # Storage resolution. A Railway volume cannot be created by application code;
 # the runtime can only detect and use a mounted persistent path.  We therefore
 # separate "configured" from "recommended" and never claim that the ephemeral
@@ -167,7 +171,7 @@ BOOTSTRAP_MIN_CONFIDENCE = max(0.35, min(0.60, float(os.getenv("BOOTSTRAP_MIN_CO
 BOOTSTRAP_MAX_CONFIDENCE = max(0.66, min(0.85, float(os.getenv("BOOTSTRAP_MAX_CONFIDENCE", "0.78"))))
 BOOTSTRAP_BLEND_MIN_SAMPLES = max(10, int(os.getenv("BOOTSTRAP_BLEND_MIN_SAMPLES", "20")))
 BREAK_EVEN_TRIGGER_R = max(0.5, float(os.getenv("BREAK_EVEN_TRIGGER_R", "1.0")))
-BREAK_EVEN_LOCK_R = max(0.0, float(os.getenv("BREAK_EVEN_LOCK_R", "0.05")))
+BREAK_EVEN_LOCK_R = max(0.0, float(os.getenv("BREAK_EVEN_LOCK_R", "0.00")))
 PROFIT_LOCK_TRIGGER_R = max(BREAK_EVEN_TRIGGER_R, float(os.getenv("PROFIT_LOCK_TRIGGER_R", "1.5")))
 PROFIT_LOCK_R = max(BREAK_EVEN_LOCK_R, float(os.getenv("PROFIT_LOCK_R", "0.75")))
 TRAIL_TRIGGER_R = max(PROFIT_LOCK_TRIGGER_R, float(os.getenv("TRAIL_TRIGGER_R", "2.0")))
@@ -178,7 +182,7 @@ TREND_RUNNER_MIN_SCORE = max(0.0, float(os.getenv("TREND_RUNNER_MIN_SCORE", "0.6
 TREND_RUNNER_TP_R = max(2.0, float(os.getenv("TREND_RUNNER_TP_R", "3.0")))
 TREND_RUNNER_TRAIL_START_R = max(1.5, float(os.getenv("TREND_RUNNER_TRAIL_START_R", "1.75")))
 TREND_RUNNER_TRAIL_DISTANCE_R = max(0.40, float(os.getenv("TREND_RUNNER_TRAIL_DISTANCE_R", "0.90")))
-VERSION_TAG = "3.34.1"
+VERSION_TAG = "3.35.2"
 ENTRY_TIMING_ENABLED = os.getenv("ENTRY_TIMING_ENABLED", "true").lower() == "true"
 MAX_ENTRY_EXTENSION_ATR = max(0.5, float(os.getenv("MAX_ENTRY_EXTENSION_ATR", "1.50")))
 MIN_ROOM_TO_BARRIER_R = max(1.0, float(os.getenv("MIN_ROOM_TO_BARRIER_R", "1.50")))
@@ -200,6 +204,45 @@ MIN_STOP_PIPS = max(0.1, float(os.getenv("MIN_STOP_PIPS", "9.0")))
 STOP_ATR_M1_MULT = max(0.1, float(os.getenv("STOP_ATR_M1_MULT", "1.50")))
 STOP_ATR_M5_MULT = max(0.1, float(os.getenv("STOP_ATR_M5_MULT", "0.40")))
 M1_CONFIRMATION_REQUIRED = os.getenv("M1_CONFIRMATION_REQUIRED", "true").lower() == "true"
+
+# Forward-validation entry filters. These rules have execution authority only in
+# PAPER + OANDA practice. Production cannot inherit them implicitly.
+PAPER_FORWARD_FILTERS_ENABLED = os.getenv("PAPER_FORWARD_FILTERS_ENABLED", "true").lower() == "true"
+LOW_ROOM_LOW_RR_MAX_ROOM_R = 0.40
+LOW_ROOM_LOW_RR_MAX_ENTRY_RR = 1.00
+LOW_ROOM_EXTENDED_MAX_ROOM_R = 0.60
+LOW_ROOM_EXTENDED_MIN_EXTENSION_ATR = 0.80
+
+def paper_forward_filters_active() -> bool:
+    return bool(
+        PAPER_FORWARD_FILTERS_ENABLED
+        and TRADING_ENVIRONMENT == "PAPER"
+        and PRIMARY_OANDA_ENV == "practice"
+        and OANDA.endswith("fxpractice.oanda.com")
+    )
+
+def forward_entry_pattern_flags(features: Dict[str, Any]) -> Dict[str, bool]:
+    """Pure rule evaluation shared by telemetry and the PAPER execution gate."""
+    try:
+        room_raw = features.get("room_to_barrier_r")
+        room = None if room_raw is None else float(room_raw)
+        rr = float(features.get("rr_raw", 0) or 0)
+        ext = float(features.get("extension_atr", 0) or 0)
+    except (TypeError, ValueError):
+        return {"low_room_low_rr": False, "low_room_extended": False}
+    return {
+        "low_room_low_rr": bool(
+            room is not None
+            and room < LOW_ROOM_LOW_RR_MAX_ROOM_R
+            and rr < LOW_ROOM_LOW_RR_MAX_ENTRY_RR
+        ),
+        "low_room_extended": bool(
+            room is not None
+            and room < LOW_ROOM_EXTENDED_MAX_ROOM_R
+            and ext > LOW_ROOM_EXTENDED_MIN_EXTENSION_ATR
+        ),
+    }
+
 DEDUP_SIGNAL_SNAPSHOTS = os.getenv("DEDUP_SIGNAL_SNAPSHOTS", "true").lower() == "true"
 RESEARCH_LAB_ENABLED = os.getenv("RESEARCH_LAB_ENABLED", "true").lower() == "true"
 RESEARCH_EVAL_MIN_SAMPLES = max(30, int(os.getenv("RESEARCH_EVAL_MIN_SAMPLES", "50")))
@@ -451,7 +494,7 @@ logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(
 for _handler in logging.getLogger().handlers:
     _handler.addFilter(RedactingFilter())
 log = logging.getLogger("market-alert")
-app = FastAPI(title="Market Alert V3.34.1 — Historical Replay Research Runtime")
+app = FastAPI(title="Market Alert V3.35 — Historical Execution + OOS Research Runtime")
 state: Dict[str, Any] = {
     "started": datetime.now(timezone.utc).isoformat(),
     "last_scan": None,
@@ -828,6 +871,7 @@ deployment_manager = DeploymentManager(
 observability_manager = ObservabilityManager(
     DB, VERSION_TAG, alert_cooldown_seconds=OBSERVABILITY_ALERT_COOLDOWN_SECONDS
 )
+storage_lifecycle_manager = StorageLifecycleManager(DB)
 system_evaluation_engine = SystemEvaluationEngine(
     DB, VERSION_TAG,
     min_samples=SYSTEM_EVALUATION_MIN_SAMPLES,
@@ -1207,6 +1251,32 @@ def conn() -> sqlite3.Connection:
         )
     """)
     c.execute("""
+        CREATE TABLE IF NOT EXISTS trade_forward_observations(
+            trade_id TEXT PRIMARY KEY,
+            instrument TEXT NOT NULL,
+            side TEXT NOT NULL,
+            opened_ts TEXT NOT NULL,
+            be_trigger_r REAL NOT NULL,
+            be_lock_r REAL NOT NULL,
+            max_r_seen REAL NOT NULL DEFAULT 0,
+            be_activated_ts TEXT,
+            be_activation_r REAL,
+            max_r_after_be REAL,
+            updated_ts TEXT NOT NULL
+        )
+    """)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS trade_forward_events(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            trade_id TEXT NOT NULL,
+            ts TEXT NOT NULL,
+            event TEXT NOT NULL,
+            r_multiple REAL,
+            detail_json TEXT NOT NULL DEFAULT '{}',
+            UNIQUE(trade_id,event)
+        )
+    """)
+    c.execute("""
         CREATE TABLE IF NOT EXISTS model_runs(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             trained_ts TEXT NOT NULL,
@@ -1261,6 +1331,7 @@ def conn() -> sqlite3.Connection:
     for name, ddl in {
         "safety_filters_ok":"INTEGER",
         "quality_filters_ok":"INTEGER",
+        "forward_audit_json":"TEXT NOT NULL DEFAULT '{}'",
     }.items():
         if name not in decision_cols:
             c.execute(f"ALTER TABLE decision_log ADD COLUMN {name} {ddl}")
@@ -1994,6 +2065,24 @@ def structure(c: List[Dict[str, Any]]) -> tuple[bool, bool]:
     return bh > ah and bl > al, bh < ah and bl < al
 
 
+def structure_close_confirmed(c: List[Dict[str, Any]]) -> tuple[bool, bool]:
+    """Research-only M5 structure using close-confirmed breakout of prior range."""
+    if len(c) < 31:
+        return False, False
+    prior = c[-31:-16]
+    recent = c[-16:]
+    if len(prior) < 10 or len(recent) < 10:
+        return False, False
+
+    prior_high = max(float(x["h"]) for x in prior)
+    prior_low = min(float(x["l"]) for x in prior)
+
+    bull = any(float(x["c"]) > prior_high for x in recent)
+    bear = any(float(x["c"]) < prior_low for x in recent)
+
+    return bull and not bear, bear and not bull
+
+
 def pullbacks(c: List[Dict[str, Any]], e: List[float], side: str) -> tuple[int, bool]:
     count, last = 0, -99
     armed = False
@@ -2257,8 +2346,10 @@ def _direction_hypothesis(h1, m15, m5, m1, inst: str, sig: str) -> Dict[str, Any
     m15_opposes = -sign*gap > .15 and -sign*slope > .07
 
     mb,ms=structure(m5)
+    cbull,cbear=structure_close_confirmed(m5)
     m5m=mom(m5,6)
     m5_structure = (mb and m5m>0) if sig=="BUY" else (ms and m5m<0)
+    m5_structure_close_confirmed = (cbull and m5m>0) if sig=="BUY" else (cbear and m5m<0)
     m5_momentum = sign*m5m > 0
 
     pc,pr=pullbacks(m5,e5,sig)
@@ -2266,15 +2357,19 @@ def _direction_hypothesis(h1, m15, m5, m1, inst: str, sig: str) -> Dict[str, Any
 
     last=m1[-1]
     ph,pl,mm=swing(m1[:-1],"h",7),swing(m1[:-1],"l",7),mom(m1,4)
-    cb=last["c"]>e9[-1] and mm>0 and last["c"]>last["o"]
-    cs=last["c"]<e9[-1] and mm<0 and last["c"]<last["o"]
+    m1_ema9_side_ok = (last["c"]>e9[-1]) if sig=="BUY" else (last["c"]<e9[-1])
+    m1_candle_color_ok = (last["c"]>last["o"]) if sig=="BUY" else (last["c"]<last["o"])
+    cb=m1_ema9_side_ok and mm>0 and m1_candle_color_ok
+    cs=m1_ema9_side_ok and mm<0 and m1_candle_color_ok
     confirm=(cb and (last["c"]>ph or mm>.00012)) if sig=="BUY" else (cs and (last["c"]<pl or mm<-.00012))
 
-    # Research-only alternative M1 confirmation:
-    # strong momentum may substitute for candle color.
+    # Alternative M1 evidence retained separately from canonical confirmation.
+    # Strong directional momentum may substitute for candle colour, but the flag
+    # does not rewrite m1_confirmation itself.
     shadow_cb=last["c"]>e9[-1] and mm>0 and (last["c"]>last["o"] or mm>.00012)
     shadow_cs=last["c"]<e9[-1] and mm<0 and (last["c"]<last["o"] or mm<-.00012)
     m1_shadow_confirm=(shadow_cb and (last["c"]>ph or mm>.00012)) if sig=="BUY" else (shadow_cs and (last["c"]<pl or mm<-.00012))
+    m1_exception_shadow = bool(m1_shadow_confirm and not confirm)
 
     m1_momentum = sign*mm > 0
 
@@ -2353,7 +2448,7 @@ def _direction_hypothesis(h1, m15, m5, m1, inst: str, sig: str) -> Dict[str, Any
         "m5_structure": m5_structure,
         "second_pullback": second,
         "m1_confirmation": confirm,
-        "minimum_rr": actual_rr>=MIN_RR and rr_raw>=MIN_RR,
+        "minimum_rr": actual_rr>=MIN_RR and rr_raw>=MIN_ENTRY_RR,
         "minimum_tp_pips": tp_pips>=MIN_TAKE_PROFIT_PIPS-1e-9,
         "barrier_room_ok": barrier_allows_target,
         "not_extended": ext<=1.35,
@@ -2366,7 +2461,7 @@ def _direction_hypothesis(h1, m15, m5, m1, inst: str, sig: str) -> Dict[str, Any
         "valid_direction": True,
         "finite_prices": all(math.isfinite(float(x)) for x in (entry,stop,target)),
         "positive_risk": abs(entry-stop)>0,
-        "minimum_rr": actual_rr>=MIN_RR-1e-9 and rr_raw>=MIN_RR,
+        "minimum_rr": actual_rr>=MIN_RR-1e-9 and rr_raw>=MIN_ENTRY_RR,
         "minimum_tp_pips": tp_pips>=MIN_TAKE_PROFIT_PIPS-1e-9,
         "minimum_stop_pips": pips_between(entry,stop,inst)>=MIN_STOP_PIPS-1e-9,
         "barrier_room_ok": barrier_allows_target,
@@ -2384,8 +2479,13 @@ def _direction_hypothesis(h1, m15, m5, m1, inst: str, sig: str) -> Dict[str, Any
             "h1_gap_atr":float(hgap),"h1_slope_atr":float(hslope),
             "m15_gap_atr":float(gap),"m15_slope_atr":float(slope),
             "m5_momentum":float(m5m),"m1_momentum":float(mm),
+            "m5_structure_close_confirmed":bool(m5_structure_close_confirmed),
             "extension_atr":float(ext),"volatility_ratio":float(vol),
-            "second_pullback":second,"m1_confirm":confirm,"m1_shadow_confirm":m1_shadow_confirm,"session":sess,
+            "second_pullback":second,"m1_confirm":confirm,"m1_shadow_confirm":m1_shadow_confirm,
+            "m1_exception_shadow":m1_exception_shadow,
+            "m1_ema9_side_ok":bool(m1_ema9_side_ok),
+            "m1_candle_color_ok":bool(m1_candle_color_ok),
+            "session":sess,"session_regime":intraday,
         }
     }
 
@@ -2657,6 +2757,9 @@ def analyze(h1, m15, m5, m1, inst) -> Dict[str, Any]:
         "second_pullback":1 if mt["second_pullback"] else 0,
         "m1_momentum":mt["m1_momentum"],"m1_confirm":1 if mt["m1_confirm"] else 0,
         "m1_shadow_confirm":1 if mt.get("m1_shadow_confirm") else 0,
+        "m1_exception_shadow":1 if mt.get("m1_exception_shadow") else 0,
+        "m1_ema9_side_ok":1 if mt.get("m1_ema9_side_ok") else 0,
+        "m1_candle_color_ok":1 if mt.get("m1_candle_color_ok") else 0,
         "extension_atr":mt["extension_atr"],"volatility_ratio":mt["volatility_ratio"],
         "rr_raw":float(chosen["rr_raw"]),
         "room_to_barrier_r":float(chosen["room_to_barrier_r"]) if chosen["room_to_barrier_r"] is not None else None,
@@ -2673,6 +2776,11 @@ def analyze(h1, m15, m5, m1, inst) -> Dict[str, Any]:
         "session_displacement_atr":float(mt.get("session_regime",{}).get("displacement_atr",0) or 0),
         "session_momentum_atr":float(mt.get("session_regime",{}).get("momentum_atr",0) or 0),
     }
+
+    forward_flags = forward_entry_pattern_flags(features)
+    # Research telemetry only; these names are deliberately excluded from FEATURE_COLUMNS.
+    features["low_room_low_rr_shadow"] = 1 if forward_flags["low_room_low_rr"] else 0
+    features["low_room_extended_shadow"] = 1 if forward_flags["low_room_extended"] else 0
 
     safety=dict(chosen["safety_checks"])
     safety["valid_direction"]=sig in ("BUY","SELL")
@@ -2988,16 +3096,21 @@ def empirical_confidence(r: Dict[str, Any]) -> Dict[str, Any]:
     It intentionally refuses to report very high confidence from tiny samples.
     """
     c = conn()
-    total = c.execute("SELECT COUNT(*) n FROM learning_samples WHERE label IN (0,1)").fetchone()["n"]
-    wins = c.execute("SELECT COUNT(*) n FROM learning_samples WHERE label=1").fetchone()["n"]
+    # Adaptive execution confidence is intentionally based only on trades the bot
+    # actually executed. Rejected/counterfactual samples remain research evidence.
+    total = c.execute(
+        "SELECT COUNT(*) n FROM learning_samples WHERE executed=1 AND label IN (0,1)"
+    ).fetchone()["n"]
+    wins = c.execute(
+        "SELECT COUNT(*) n FROM learning_samples WHERE executed=1 AND label=1"
+    ).fetchone()["n"]
     variant = setup_variant(r)
 
-    # Variant is reconstructed from the signal row when available.
     rows = c.execute("""
         SELECT ls.label, s.setup_variant
         FROM learning_samples ls
         JOIN signals s ON s.id=ls.signal_id
-        WHERE ls.label IN (0,1)
+        WHERE ls.executed=1 AND ls.label IN (0,1)
         ORDER BY ls.id DESC
     """).fetchall()
     c.close()
@@ -3203,27 +3316,68 @@ def desired_target_for_trade(r: Dict[str, Any]) -> Dict[str, Any]:
 
 def quality_entry_gate(r: Dict[str, Any], conf: Dict[str, Any]) -> Dict[str, Any]:
     rr = float(r.get("rr_raw",0) or 0)
-    if rr < 1.5 and r.get("barrier_class")=="STRONG":
-        return {"ok":False,"reason":f"barrera fuerte deja solo {rr:.2f}R < 1.50R"}
+    if rr < MIN_ENTRY_RR and r.get("barrier_class")=="STRONG":
+        return {"ok":False,"reason":f"barrera fuerte deja solo {rr:.2f}R < {MIN_ENTRY_RR:.2f}R de admisión"}
 
-    # M1 is the execution trigger, not the directional thesis. We still record the
-    # BUY/SELL hypothesis for learning, but do not put money behind it until M1 agrees.
+    # M1 remains the execution trigger, but validated admission evidence can
+    # substitute for the stricter canonical swing/strong-momentum confirmation.
     if M1_CONFIRMATION_REQUIRED and not bool((r.get("filters") or {}).get("m1_confirmation")):
-        return {"ok":False,"reason":"falta confirmación M1; hipótesis registrada, entrada aplazada"}
+        f_m1 = r.get("features") or {}
+        sig_m1 = str(r.get("signal") or "").upper()
+        m1_raw = float(f_m1.get("m1_momentum",0) or 0)
+        momentum_direction_ok = (
+            m1_raw > 0 if sig_m1=="BUY"
+            else m1_raw < 0 if sig_m1=="SELL"
+            else False
+        )
+        exception_1 = bool(f_m1.get("m1_exception_shadow"))
+        ema9_admission_exception = not bool(f_m1.get("m1_ema9_side_ok"))
+        m1_base_admission = bool(
+            f_m1.get("m1_ema9_side_ok")
+            and momentum_direction_ok
+            and f_m1.get("m1_candle_color_ok")
+        )
+        if not (exception_1 or ema9_admission_exception or m1_base_admission):
+            return {"ok":False,"reason":"falta confirmación M1; hipótesis registrada, entrada aplazada"}
+
+    f=r.get("features") or {}
+
+    # The two forward filters are active only in PAPER/practice. The same pure
+    # conditions also populate shadow telemetry for prospective audit.
+    if paper_forward_filters_active():
+        flags = forward_entry_pattern_flags(f)
+        room_raw = f.get("room_to_barrier_r")
+        room = None if room_raw is None else float(room_raw)
+        rr_entry = float(f.get("rr_raw", r.get("rr_raw",0)) or 0)
+        extension = float(f.get("extension_atr",0) or 0)
+        if flags["low_room_low_rr"]:
+            return {
+                "ok":False,
+                "reason":(
+                    "PAPER_FORWARD_VETO: LOW_ROOM_LOW_RR "
+                    f"room={room:.3f}R < {LOW_ROOM_LOW_RR_MAX_ROOM_R:.2f}R; "
+                    f"rr={rr_entry:.3f} < {LOW_ROOM_LOW_RR_MAX_ENTRY_RR:.2f}"
+                ),
+            }
+        if flags["low_room_extended"]:
+            return {
+                "ok":False,
+                "reason":(
+                    "PAPER_FORWARD_VETO: LOW_ROOM_EXTENDED "
+                    f"room={room:.3f}R < {LOW_ROOM_EXTENDED_MAX_ROOM_R:.2f}R; "
+                    f"extension={extension:.3f}ATR > {LOW_ROOM_EXTENDED_MIN_EXTENSION_ATR:.2f}ATR"
+                ),
+            }
 
     if not ENTRY_TIMING_ENABLED:
         return {"ok":True,"reason":"quality_ok"}
 
-    f=r.get("features") or {}
     ext=float(f.get("extension_atr",0) or 0)
-    p=float(conf.get("probability") or 0)
-
     if ext > MAX_ENTRY_EXTENSION_ATR:
         return {"ok":False,"reason":f"entrada tardía/chasing: {ext:.2f} ATR > {MAX_ENTRY_EXTENSION_ATR:.2f}"}
 
-    if ext > 0.90 and p < 0.72:
-        return {"ok":False,"reason":f"extensión {ext:.2f} ATR con confianza {p:.1%}; esperar mejor precio"}
-
+    # Confidence no longer creates an extra extension veto inside the normal
+    # 1.50 ATR timing envelope. Hard chasing protection remains unchanged.
     return {"ok":True,"reason":"quality_context_ok"}
 
 
@@ -5655,6 +5809,52 @@ def candidate_registry_snapshot() -> List[Dict[str,Any]]:
     c=conn();rows=c.execute("SELECT * FROM candidate_registry ORDER BY created_ts,id" if False else "SELECT * FROM candidate_registry ORDER BY created_ts,candidate_id").fetchall();c.close()
     return [dict(x) for x in rows]
 
+def forward_observation_snapshot(r: Dict[str, Any], conf: Dict[str, Any]) -> Dict[str, Any]:
+    """Observational-only snapshot for forward attribution and filter-stacking audits.
+
+    This function has no execution authority. It records every relevant gate independently
+    so later analysis does not depend on the order in which execution gates return.
+    """
+    f=r.get("features") or {}
+    safety=r.get("safety_checks") or {}
+    checks=r.get("filters") or {}
+    flags=forward_entry_pattern_flags(f)
+    rr_raw=float(f.get("rr_raw",r.get("rr_raw",0)) or 0)
+    actual_rr=float(r.get("rr",0) or 0)
+    room_raw=f.get("room_to_barrier_r",r.get("room_to_barrier_r"))
+    room=None if room_raw is None else float(room_raw)
+    extension=float(f.get("extension_atr",0) or 0)
+    buy_score=float(r.get("buy_score",f.get("buy_score",0)) or 0)
+    sell_score=float(r.get("sell_score",f.get("sell_score",0)) or 0)
+    edge=float(r.get("direction_edge",f.get("direction_edge",abs(buy_score-sell_score))) or 0)
+    score_pass=max(buy_score,sell_score)>=DIRECTION_MIN_SCORE
+    edge_pass=edge>=DIRECTION_MIN_EDGE
+    current_rr_pass=bool(actual_rr>=MIN_RR-1e-9 and rr_raw>=MIN_ENTRY_RR)
+    prior_rr_pass=bool(actual_rr>=MIN_RR-1e-9 and rr_raw>=MIN_RR)
+    vetoes={
+        "minimum_rr": not bool(safety.get("minimum_rr",current_rr_pass)),
+        "barrier_room_ok": not bool(safety.get("barrier_room_ok",checks.get("barrier_room_ok",True))),
+        "low_room_low_rr": bool(flags["low_room_low_rr"]),
+        "low_room_extended": bool(flags["low_room_extended"]),
+    }
+    return {
+        "schema":"FORWARD_ATTRIBUTION_V1",
+        "observational_only":True,
+        "score_pre_filters":float(r.get("score",0) or 0),
+        "buy_score":buy_score,"sell_score":sell_score,"direction_edge":edge,
+        "direction_score_pass":bool(score_pass),"direction_edge_pass":bool(edge_pass),
+        "rr_raw":rr_raw,"actual_rr":actual_rr,"room_to_barrier_r":room,
+        "extension_atr":extension,"barrier_class":r.get("barrier_class"),
+        "min_entry_rr_current":MIN_ENTRY_RR,"min_entry_rr_prior_reference":MIN_RR,
+        "passes_current_rr_gate":current_rr_pass,"passes_prior_rr_reference":prior_rr_pass,
+        "admitted_only_by_min_entry_rr_relaxation":bool(current_rr_pass and not prior_rr_pass),
+        "vetoes":vetoes,
+        "paper_forward_filters_active":paper_forward_filters_active(),
+        "confidence":conf.get("probability"),"required_confidence":conf.get("required_confidence"),
+        "confidence_samples":conf.get("samples"),
+    }
+
+
 def execution_decision(r: Dict[str, Any], conf: Dict[str, Any]) -> Dict[str, Any]:
     if r["signal"] == "WAIT":
         return {"execute": False, "reason": "WAIT: no hay señal direccional"}
@@ -5679,6 +5879,16 @@ def execution_decision(r: Dict[str, Any], conf: Dict[str, Any]) -> Dict[str, Any
         return {"execute": False, "reason": "Re-entry veto: " + rg["reason"]}
     p = float(conf.get("probability") or 0)
     required = float(conf.get("required_confidence") or EXECUTION_MIN_CONFIDENCE)
+    executed_evidence = int(conf.get("samples") or 0)
+    if executed_evidence < CONFIDENCE_MIN_SAMPLES:
+        return {
+            "execute": True,
+            "reason":(
+                "Adaptive OBSERVE_ONLY: "
+                f"executed_evidence={executed_evidence}/{CONFIDENCE_MIN_SAMPLES}; "
+                f"stored_confidence={p:.1%}; RR={float(r.get('rr_raw',0)):.2f}"
+            ),
+        }
     phase = "learned" if conf.get("mature") else "bootstrap"
     if p >= required:
         return {"execute": True, "reason": f"Adaptive gate ({phase}): confianza {p:.1%} >= {required:.1%}; RR={float(r.get('rr_raw',0)):.2f}"}
@@ -5702,22 +5912,69 @@ def save_decision(r: Dict[str, Any], conf: Dict[str, Any], executed: int, reason
     # Legacy hard_filters_ok now means all deterministic pre-confidence gates,
     # not merely the low-level price/risk safety checks.
     hard_ok=bool(safety_ok and quality_ok)
+    try:
+        forward_audit=json.dumps(forward_observation_snapshot(r,conf),separators=(",",":"),sort_keys=True)
+    except Exception as e:
+        forward_audit=json.dumps({"schema":"FORWARD_ATTRIBUTION_V1","observational_only":True,"error":str(e)},separators=(",",":"))
     c.execute("""
         INSERT INTO decision_log(ts,candle_ts,instrument,signal,setup_variant,quality_score,dynamic_confidence,
           confidence_source,confidence_samples,required_confidence,recent_win_rate,performance_penalty,
-          hard_filters_ok,safety_filters_ok,quality_filters_ok,auto_trade,executed,reason)
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+          hard_filters_ok,safety_filters_ok,quality_filters_ok,auto_trade,executed,reason,forward_audit_json)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     """, (
         now_iso(), r.get("candle_ts"), r["instrument"], r["signal"], conf.get("variant"),
         r.get("score"), conf.get("probability"), conf.get("source"), conf.get("samples"),
         conf.get("required_confidence"), conf.get("recent_win_rate"), conf.get("performance_penalty"),
-        int(hard_ok),int(safety_ok),int(quality_ok),int(AUTO),int(executed),reason
+        int(hard_ok),int(safety_ok),int(quality_ok),int(AUTO),int(executed),reason,forward_audit
     ))
     c.commit(); c.close()
 
 
+def _shadow_model_acceptance(metrics: Dict[str,Any]) -> Dict[str,Any]:
+    """Conservative, non-optimized governance gate for shadow ML artifacts.
+
+    The model must show discrimination better than random and must not underperform
+    the simple majority-class accuracy baseline on the same walk-forward folds.
+    This gate is intentionally fixed; it is not tuned to improve replay results.
+    """
+    try:
+        auc=float(metrics.get("roc_auc"))
+        acc=float(metrics.get("accuracy"))
+        baseline=float(metrics.get("baseline_accuracy"))
+    except Exception:
+        return {"accepted":False,"reason":"missing_validation_metrics"}
+    accepted=bool(math.isfinite(auc) and math.isfinite(acc) and math.isfinite(baseline) and auc>0.5 and acc>=baseline)
+    reasons=[]
+    if not math.isfinite(auc) or auc<=0.5: reasons.append("roc_auc_not_above_random")
+    if not math.isfinite(acc) or not math.isfinite(baseline) or acc<baseline: reasons.append("accuracy_below_majority_baseline")
+    return {"accepted":accepted,"reason":"accepted" if accepted else ";".join(reasons),
+            "roc_auc":auc,"accuracy":acc,"baseline_accuracy":baseline}
+
+
+def shadow_model_governance_status() -> Dict[str,Any]:
+    if not Path(MODEL_PATH).exists():
+        return {"ready":False,"reason":"model_artifact_missing"}
+    try:
+        artifact=joblib.load(MODEL_PATH)
+        samples=int(artifact.get("samples") or 0) if isinstance(artifact,dict) else 0
+        c=conn()
+        row=c.execute("SELECT id,samples,baseline_accuracy,accuracy,roc_auc,log_loss,accepted,trained_ts FROM model_runs WHERE samples=? ORDER BY id DESC LIMIT 1",(samples,)).fetchone() if samples else None
+        c.close()
+        if not row:
+            return {"ready":False,"reason":"validation_record_missing","samples":samples}
+        gate=_shadow_model_acceptance(dict(row))
+        return {"ready":bool(gate["accepted"]),"reason":gate["reason"],"samples":samples,"model_run_id":row["id"],
+                "stored_accepted":bool(row["accepted"]),"validation":gate}
+    except Exception as e:
+        return {"ready":False,"reason":"model_governance_error","error":str(e)}
+
+
 def load_shadow_probability(features: Dict[str, Any]) -> Optional[float]:
     if not ML_SHADOW or not Path(MODEL_PATH).exists():
+        return None
+    governance=shadow_model_governance_status()
+    if not governance.get("ready"):
+        log.debug("shadow model disabled by validation governance: %s",governance.get("reason"))
         return None
     try:
         import joblib
@@ -5933,8 +6190,8 @@ async def recovery_price_preflight(client: httpx.AsyncClient, r: Dict[str,Any]) 
 async def execute_recoverable(client: httpx.AsyncClient, r: Dict[str,Any],
                               correlation_id: Optional[str], decision_id: Optional[str],
                               risk_decision_id: Optional[str]) -> Dict[str,Any]:
-    # Hard execution invariant: a known-closed FX market can never reach the broker
-    # order endpoint, regardless of signal, confidence, Risk Engine output, or AUTO mode.
+    # Hard execution invariants: known-closed FX markets take precedence, then
+    # restricted new-entry windows. Open trades are managed independently.
     if market_is_weekend_closed():
         payload={"reason":"MARKET_CLOSED","market_closed":True,"market_data_state":"MARKET_CLOSED"}
         try:
@@ -5942,6 +6199,14 @@ async def execute_recoverable(client: httpx.AsyncClient, r: Dict[str,Any],
         except Exception:
             pass
         return {"skipped":"MARKET_CLOSED",**payload}
+    entry_gate=new_entry_time_gate()
+    if not entry_gate["allowed"]:
+        payload={"reason":entry_gate["reason"],"entry_time_gate":entry_gate}
+        try:
+            recovery_manager.journal("REJECT_EXECUTION",correlation_id,strategy_id=setup_variant(r),payload=payload)
+        except Exception:
+            pass
+        return {"skipped":entry_gate["reason"],**payload}
     if SINGLE and await haspos(client,r["instrument"]):
         return {"skipped":"existing_position"}
     preflight=await recovery_price_preflight(client,r)
@@ -6038,9 +6303,12 @@ async def execute_recoverable(client: httpx.AsyncClient, r: Dict[str,Any],
 
 
 async def execute(client: httpx.AsyncClient, r: Dict[str, Any]):
-    # Legacy/fallback execution path carries the same hard market-closed veto.
+    # Legacy/fallback execution path carries the same hard new-entry gates.
     if market_is_weekend_closed():
         return {"skipped":"MARKET_CLOSED","reason":"MARKET_CLOSED","market_closed":True,"market_data_state":"MARKET_CLOSED"}
+    entry_gate=new_entry_time_gate()
+    if not entry_gate["allowed"]:
+        return {"skipped":entry_gate["reason"],"reason":entry_gate["reason"],"entry_time_gate":entry_gate}
     if SINGLE and await haspos(client, r["instrument"]):
         return {"skipped": "existing_position"}
     d = 3 if "JPY" in r["instrument"] else 5
@@ -6106,6 +6374,95 @@ def save_signal(r: Dict[str, Any], executed: int, order_id: str, ml_probability:
 
 
 
+
+
+def new_entry_time_gate(at: Optional[datetime] = None) -> Dict[str, Any]:
+    """Hard gate for NEW entries only; open trades remain fully managed."""
+    at=at or datetime.now(timezone.utc)
+    ny=at.astimezone(MARKET_TZ)
+    mins=ny.hour*60+ny.minute
+    morning_blocked=7*60 <= mins < 10*60
+    afternoon_blocked=15*60 <= mins < 19*60
+    if morning_blocked:
+        reason="NY_ENTRY_BLACKOUT_07_10"
+        window="07:00-10:00 America/New_York"
+    elif afternoon_blocked:
+        reason="NY_ENTRY_BLACKOUT_15_19"
+        window="15:00-19:00 America/New_York"
+    else:
+        reason="ALLOWED"
+        window=None
+    return {
+        "allowed": not (morning_blocked or afternoon_blocked),
+        "reason": reason,
+        "ny_time": ny.isoformat(),
+        "window": window,
+        "blocked_windows": ["07:00-10:00", "15:00-19:00"],
+        "timezone": "America/New_York",
+    }
+
+
+def daily_exit_cutoff_reached(at: Optional[datetime] = None) -> bool:
+    """True only during the weekday 16:50-19:00 ET flattening window.
+
+    New entries are already blocked from 15:00-19:00 ET. Limiting the cutoff to
+    that same pre-rollover window prevents the flattening rule from immediately
+    closing legitimate evening trades opened at/after 19:00 ET. Sunday is excluded
+    because it is the weekly market reopen, not a daily rollover-close session.
+    """
+    at=at or datetime.now(timezone.utc)
+    ny=at.astimezone(MARKET_TZ)
+    mins=ny.hour*60+ny.minute
+    return ny.weekday() < 5 and (16*60+50) <= mins < 19*60
+
+
+async def close_managed_trades_for_daily_cutoff(client: httpx.AsyncClient, instrument: str,
+                                                 at: Optional[datetime] = None) -> int:
+    """Close bot-managed open trades at/after 16:50 ET; never opens or reverses exposure."""
+    if not daily_exit_cutoff_reached(at):
+        return 0
+    c=conn()
+    rows=[dict(x) for x in c.execute(
+        "SELECT * FROM active_trade_management WHERE instrument=? AND closed=0",(instrument,)
+    ).fetchall()]
+    c.close()
+    closed=0
+    for tr in rows:
+        trade_id=str(tr.get("trade_id") or "")
+        if not trade_id:
+            continue
+        try:
+            await req(client,"PUT",f"/v3/accounts/{{account}}/trades/{trade_id}/close",
+                      body={"units":"ALL"})
+            now=now_iso(); c=conn()
+            c.execute("UPDATE active_trade_management SET closed=1,last_action=?,updated_ts=? WHERE trade_id=?",
+                      ("DAILY_CUTOFF_CLOSE",now,trade_id))
+            c.commit(); c.close(); closed += 1
+            if RECOVERY_MANAGER_ENABLED:
+                try:
+                    recovery_manager.journal("DAILY_CUTOFF_CLOSE",trade_id,strategy_id=tr.get("setup_variant"),
+                        payload={"trade_id":trade_id,"instrument":instrument,"cutoff":"16:50 America/New_York"})
+                except Exception:
+                    pass
+        except Exception as e:
+            log.exception("Daily cutoff close failed trade=%s: %s",trade_id,e)
+            if OBSERVABILITY_ENABLED:
+                try:
+                    observability_manager.alert(
+                        f"DAILY_CUTOFF_CLOSE_FAILED:{trade_id}","CRITICAL","Execution Engine","DAILY_CUTOFF_CLOSE_FAILED",
+                        "Open trade could not be closed at the 16:50 ET daily cutoff",
+                        details={"trade_id":trade_id,"instrument":instrument,"error":str(e),
+                                 "cutoff":"16:50 America/New_York"})
+                except Exception:
+                    pass
+            if RECOVERY_MANAGER_ENABLED:
+                try:
+                    recovery_manager.journal("DAILY_CUTOFF_CLOSE_FAILED",trade_id,strategy_id=tr.get("setup_variant"),
+                        payload={"trade_id":trade_id,"instrument":instrument,"error":str(e),
+                                 "cutoff":"16:50 America/New_York"})
+                except Exception:
+                    pass
+    return closed
 
 
 def market_is_weekend_closed(at: Optional[datetime] = None) -> bool:
@@ -6405,8 +6762,11 @@ def build_ensemble_shadow_signals(r: Dict[str,Any], conf: Dict[str,Any], mlp: Op
           "family":"WEEKEND_CONTEXT","input_dependencies":["GDELT_WEEKEND","MARKET_REOPEN_REACTION"],"role":"DIRECTIONAL",
           "ttl_seconds":ENSEMBLE_SIGNAL_TTL_SECONDS,"metadata":{"weekend_id":weekend.get("weekend_id")}})
     # Cross-asset observations are kept as CONTEXT until a directional relationship is validated.
-    c=conn();obs=c.execute("""SELECT * FROM external_research_observations WHERE instrument=? AND candle_ts=? AND source_type='CROSS_ASSET'""",
-                         (symbol,r.get("candle_ts"))).fetchall();c.close()
+    c=conn();obs=c.execute("""SELECT e.* FROM external_research_observations e
+                         JOIN (SELECT source_key,MAX(id) AS id FROM external_research_observations
+                               WHERE instrument=? AND candle_ts=? AND source_type='CROSS_ASSET' GROUP BY source_key) latest
+                           ON latest.id=e.id
+                         ORDER BY e.id""",(symbol,r.get("candle_ts"))).fetchall();c.close()
     for o in obs:
         key=str(o["source_key"]);val=float(o["value_num"] or 0);mid=f"CROSS_ASSET_{key}"
         ensemble_engine.register_model(mid,f"cross_asset@{VERSION_TAG}","CROSS_ASSET","CONTEXT",
@@ -7452,7 +7812,7 @@ def learning_stats() -> Dict[str, Any]:
         "win_rate_all": (wins / resolved) if resolved else None,
         "executed_resolved": executed_resolved, "win_rate_executed": (executed_wins / executed_resolved) if executed_resolved else None,
         "blocked_resolved": blocked_resolved, "counterfactual_win_rate_blocked": (blocked_wins / blocked_resolved) if blocked_resolved else None,
-        "ml_min_samples": ML_MIN_SAMPLES, "model_ready": Path(MODEL_PATH).exists(), "last_model_run": dict(run) if run else None,
+        "ml_min_samples": ML_MIN_SAMPLES, "model_ready": bool(shadow_model_governance_status().get("ready")), "model_governance": shadow_model_governance_status(), "last_model_run": dict(run) if run else None,
         "mode":"CONTINUOUS_RESEARCH",
         # Keep authority semantics explicit: adaptive learning itself is
         # observation-only and cannot mutate production execution. The separate
@@ -7518,31 +7878,42 @@ def train_shadow_model(force: bool = False) -> Dict[str, Any]:
     if not folds:return {"trained":False,"reason":"insufficient class diversity across time folds","samples":len(y)}
     final=Pipeline([("scale",StandardScaler()),("clf",LogisticRegression(max_iter=1000,class_weight="balanced"))]); final.fit(X,y)
     avg={k:float(np.mean([f[k] for f in folds])) for k in ["accuracy","auc","log_loss","brier","baseline"]}
-    joblib.dump({"model":final,"features":FEATURE_COLUMNS,"trained_at":now_iso(),"samples":len(y),"walk_forward":folds},MODEL_PATH)
+    gate=_shadow_model_acceptance({"roc_auc":avg["auc"],"accuracy":avg["accuracy"],"baseline_accuracy":avg["baseline"]})
+    accepted=bool(gate["accepted"])
+    if accepted:
+        joblib.dump({"model":final,"features":FEATURE_COLUMNS,"trained_at":now_iso(),"samples":len(y),"walk_forward":folds,
+                     "validation_gate":gate},MODEL_PATH)
     c=conn(); c.execute("""INSERT INTO model_runs(trained_ts,samples,train_samples,test_samples,win_rate,baseline_accuracy,accuracy,roc_auc,log_loss,accepted,model_path,note)
       VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
-      (now_iso(),len(y),folds[-1]["train"],folds[-1]["test"],float(np.mean(y)),avg["baseline"],avg["accuracy"],avg["auc"],avg["log_loss"],1,MODEL_PATH,
-       json.dumps({"validation":"TimeSeriesSplit_walk_forward","folds":folds,"brier":avg["brier"]}))); c.commit(); c.close()
-    return {"trained":True,"samples":len(y),"validation":"TimeSeriesSplit_walk_forward","folds":folds,"average":avg}
+      (now_iso(),len(y),folds[-1]["train"],folds[-1]["test"],float(np.mean(y)),avg["baseline"],avg["accuracy"],avg["auc"],avg["log_loss"],int(accepted),MODEL_PATH if accepted else None,
+       json.dumps({"validation":"TimeSeriesSplit_walk_forward","folds":folds,"brier":avg["brier"],"acceptance_gate":gate}))); c.commit(); c.close()
+    return {"trained":True,"accepted":accepted,"acceptance_gate":gate,"samples":len(y),"validation":"TimeSeriesSplit_walk_forward","folds":folds,"average":avg}
 
 
 async def replace_trade_stop(client: httpx.AsyncClient, trade_id: str, price: float) -> Dict[str, Any]:
     body = {"stopLoss": {"price": f"{price:.5f}", "timeInForce": "GTC"}}
-    return await req(client, "PUT", f"/v3/accounts/{{account}}/trades/{trade_id}/orders", body)
+    # IMPORTANT: req()'s fourth positional argument is params, not body. Always
+    # pass protective-order updates explicitly as JSON body.
+    return await req(client, "PUT", f"/v3/accounts/{{account}}/trades/{trade_id}/orders", body=body)
 
 def register_trade_management(trade_id: str, r: Dict[str, Any], target: float,
-                              filled_units: Optional[float]=None):
+                              filled_units: Optional[float]=None,
+                              entry_price: Optional[float]=None):
     if not trade_id:
         return
     tscore=trend_runner_score(r)
     policy="BE_PROFIT_TRAIL"
+    # Manage R from the broker-confirmed fill whenever available. The planned
+    # entry remains in the signal/trade-memory context for execution-quality
+    # analysis, but must not shift BE/profit-lock/trailing thresholds.
+    management_entry=float(entry_price if entry_price is not None else r["entry"])
     c=conn()
     try:
         c.execute("""INSERT OR REPLACE INTO active_trade_management(
           trade_id,instrument,side,entry,initial_stop,initial_target,current_stop,setup_variant,policy,trend_score,
           opened_ts,last_r,last_action,updated_ts,closed,current_units)
           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,?)""",
-          (trade_id,r["instrument"],r["signal"],float(r["entry"]),float(r["stop"]),float(target),
+          (trade_id,r["instrument"],r["signal"],management_entry,float(r["stop"]),float(target),
            float(r["stop"]),setup_variant(r),policy,tscore,now_iso(),0.0,"OPEN",now_iso(),
            abs(float(filled_units if filled_units is not None else UNITS))))
     except sqlite3.OperationalError:
@@ -7550,9 +7921,45 @@ def register_trade_management(trade_id: str, r: Dict[str, Any], target: float,
           trade_id,instrument,side,entry,initial_stop,initial_target,current_stop,setup_variant,policy,trend_score,
           opened_ts,last_r,last_action,updated_ts,closed)
           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,0)""",
-          (trade_id,r["instrument"],r["signal"],float(r["entry"]),float(r["stop"]),float(target),
+          (trade_id,r["instrument"],r["signal"],management_entry,float(r["stop"]),float(target),
            float(r["stop"]),setup_variant(r),policy,tscore,now_iso(),0.0,"OPEN",now_iso()))
+    c.execute("""INSERT OR IGNORE INTO trade_forward_observations(
+      trade_id,instrument,side,opened_ts,be_trigger_r,be_lock_r,max_r_seen,updated_ts)
+      VALUES(?,?,?,?,?,?,0,?)""",
+      (trade_id,r["instrument"],r["signal"],now_iso(),float(BREAK_EVEN_TRIGGER_R),float(BREAK_EVEN_LOCK_R),now_iso()))
     c.commit();c.close()
+
+def _record_trade_forward_telemetry(tr: Dict[str,Any], proposal: Dict[str,Any], *, action_applied: bool=False) -> None:
+    """Best-effort observational telemetry. Failures never affect trade management."""
+    try:
+        trade_id=str(tr["trade_id"]); r_now=float(proposal.get("r_multiple",0) or 0)
+        r_prev=float(tr.get("last_r",0) or 0)
+        c=conn(); now=now_iso()
+        c.execute("""INSERT OR IGNORE INTO trade_forward_observations(
+          trade_id,instrument,side,opened_ts,be_trigger_r,be_lock_r,max_r_seen,updated_ts)
+          VALUES(?,?,?,?,?,?,?,?)""",
+          (trade_id,tr.get("instrument") or "",tr.get("side") or "",tr.get("opened_ts") or now,
+           float(BREAK_EVEN_TRIGGER_R),float(BREAK_EVEN_LOCK_R),max(0.0,r_now),now))
+        c.execute("UPDATE trade_forward_observations SET max_r_seen=MAX(max_r_seen,?),updated_ts=? WHERE trade_id=?",
+                  (r_now,now,trade_id))
+        for threshold,label in ((0.50,"REACHED_0_50R"),(0.75,"REACHED_0_75R"),(1.00,"REACHED_1_00R"),(1.25,"REACHED_1_25R"),(1.50,"REACHED_1_50R")):
+            if r_prev < threshold <= r_now:
+                c.execute("""INSERT OR IGNORE INTO trade_forward_events(trade_id,ts,event,r_multiple,detail_json)
+                  VALUES(?,?,?,?,?)""",(trade_id,now,label,r_now,"{}"))
+        row=c.execute("SELECT be_activated_ts FROM trade_forward_observations WHERE trade_id=?",(trade_id,)).fetchone()
+        be_was_active=bool(row and row["be_activated_ts"])
+        if action_applied and proposal.get("action") in ("BREAK_EVEN","PROFIT_LOCK","TRAIL","TREND_RUNNER_TRAIL") and not be_was_active:
+            c.execute("""UPDATE trade_forward_observations SET be_activated_ts=?,be_activation_r=?,max_r_after_be=?,updated_ts=? WHERE trade_id=?""",
+                      (now,r_now,r_now,now,trade_id))
+            c.execute("""INSERT OR IGNORE INTO trade_forward_events(trade_id,ts,event,r_multiple,detail_json)
+              VALUES(?,?,?,?,?)""",(trade_id,now,"BE_ACTIVATED",r_now,json.dumps({"trigger_r":BREAK_EVEN_TRIGGER_R,"lock_r":BREAK_EVEN_LOCK_R,"action":proposal.get("action")},separators=(",",":"))))
+            be_was_active=True
+        if be_was_active:
+            c.execute("UPDATE trade_forward_observations SET max_r_after_be=MAX(COALESCE(max_r_after_be,?),?),updated_ts=? WHERE trade_id=?",
+                      (r_now,r_now,now,trade_id))
+        c.commit();c.close()
+    except Exception as e:
+        log.warning("Forward trade telemetry failed trade=%s err=%s",tr.get("trade_id"),e)
 
 async def manage_open_trades(client: httpx.AsyncClient, instrument: str, current_price: float) -> int:
     c=conn()
@@ -7583,14 +7990,52 @@ async def manage_open_trades(client: httpx.AsyncClient, instrument: str, current
                    int(proposal["action"] in ("TRAIL","TREND_RUNNER_TRAIL")),
                    now_iso(),tr["trade_id"]))
                 c.commit(); c.close()
+                _record_trade_forward_telemetry(tr,proposal,action_applied=True)
                 changed += 1
             except Exception as e:
                 log.exception("Trade management update failed: %s",e)
+                # Keep forward telemetry current even when the broker rejects the
+                # protective-order update; the prior implementation froze last_r
+                # at the last pre-trigger value and hid the failure in stdout.
+                try:
+                    c=conn()
+                    c.execute("UPDATE active_trade_management SET last_r=?,updated_ts=? WHERE trade_id=?",
+                              (float(proposal["r_multiple"]),now_iso(),tr["trade_id"]))
+                    c.commit(); c.close()
+                except Exception as db_e:
+                    log.warning("Trade management failure-state persistence failed trade=%s err=%s",tr.get("trade_id"),db_e)
+                _record_trade_forward_telemetry(tr,proposal,action_applied=False)
+                failure_details={
+                    "trade_id":str(tr.get("trade_id") or ""),
+                    "instrument":str(tr.get("instrument") or instrument),
+                    "side":str(tr.get("side") or ""),
+                    "action":str(proposal.get("action") or "NONE"),
+                    "r_multiple":float(proposal.get("r_multiple",0) or 0),
+                    "current_stop":old,
+                    "proposed_stop":float(proposal.get("new_stop",old) or old),
+                    "current_price":float(current_price),
+                    "error":str(e),
+                }
+                if OBSERVABILITY_ENABLED:
+                    try:
+                        observability_manager.alert(
+                            f"TRADE_MANAGEMENT_UPDATE_FAILED:{tr['trade_id']}","CRITICAL","Execution Engine",
+                            "PROTECTIVE_ORDER_UPDATE_FAILED",
+                            "Broker rejected or failed a protective stop update; trade management will retry on later scans",
+                            details=failure_details)
+                    except Exception as obs_e:
+                        log.warning("Trade management observability alert failed trade=%s err=%s",tr.get("trade_id"),obs_e)
+                if RECOVERY_MANAGER_ENABLED:
+                    try:
+                        recovery_manager.journal("PROTECTIVE_ORDER_UPDATE_FAILED",payload=failure_details)
+                    except Exception as rec_e:
+                        log.warning("Trade management recovery journal failed trade=%s err=%s",tr.get("trade_id"),rec_e)
         else:
             c=conn()
             c.execute("UPDATE active_trade_management SET last_r=?,updated_ts=? WHERE trade_id=?",
                       (float(proposal["r_multiple"]),now_iso(),tr["trade_id"]))
             c.commit(); c.close()
+            _record_trade_forward_telemetry(tr,proposal,action_applied=False)
     return changed
 
 
@@ -8100,11 +8545,32 @@ def refresh_ensemble_observability() -> Dict[str,Any]:
         dash=ensemble_engine.dashboard()
         status="DEGRADED" if dash.get("ensemble_status")=="ABSTAIN" and dash.get("active_models") else "OK"
         _obs_module("Ensemble Engine",status,last_operation="ensemble shadow monitoring",details=dash)
-        c=conn();rows=[dict(x) for x in c.execute("SELECT * FROM ensemble_alerts ORDER BY id DESC LIMIT 50").fetchall()];c.close()
-        for a in rows:
-            observability_manager.alert(f"ENSEMBLE:{a['event_type']}:{a.get('ensemble_decision_id') or a.get('symbol')}",
-                                        a.get("severity") or "WARNING","Ensemble Engine",a["event_type"],
-                                        a.get("message") or a["event_type"],details=_obs_json_value(a.get("details_json"),{}))
+        # Bridge only the current ensemble decision into central observability.
+        # Stable keys are event+symbol, never per-decision UUIDs, so repeated cycles
+        # update one condition instead of creating unbounded alert cardinality.
+        c=conn()
+        latest=c.execute("SELECT ensemble_decision_id,symbol FROM ensemble_outputs ORDER BY ts DESC LIMIT 1").fetchone()
+        rows=[]
+        if latest:
+            rows=[dict(x) for x in c.execute("SELECT * FROM ensemble_alerts WHERE ensemble_decision_id=? ORDER BY id DESC",
+                                             (latest["ensemble_decision_id"],)).fetchall()]
+        c.close()
+        current={a["event_type"]:a for a in rows}
+        symbol=(latest["symbol"] if latest else "UNKNOWN") or "UNKNOWN"
+        known={"ENSEMBLE_CONFLICT","LOW_MODEL_DIVERSITY","HIGH_MODEL_CORRELATION","MODEL_OFFLINE",
+               "SIGNAL_STALE","INSUFFICIENT_ENSEMBLE_INFORMATION","CONFIDENCE_MISCALIBRATION","ENSEMBLE_DEGRADATION"}
+        expected_closed={"LOW_MODEL_DIVERSITY","SIGNAL_STALE","INSUFFICIENT_ENSEMBLE_INFORMATION"}
+        market_closed=market_is_weekend_closed()
+        for event in known:
+            key=f"ENSEMBLE:{event}:{symbol}"
+            a=current.get(event)
+            if a and not (market_closed and event in expected_closed):
+                observability_manager.alert(key,a.get("severity") or "WARNING","Ensemble Engine",event,
+                                            a.get("message") or event,group_key=f"ENSEMBLE:{event}:{symbol}",
+                                            details=_obs_json_value(a.get("details_json"),{}))
+            else:
+                reason="market closed; stale/abstention is expected" if market_closed and event in expected_closed else "condition no longer present"
+                observability_manager.recover(key,f"{event} recovered: {reason}",{"market_closed":market_closed})
         return dash
     except Exception as e:
         _obs_module("Ensemble Engine","ERROR",errors=[str(e)])
@@ -8130,11 +8596,11 @@ async def observability_loop_monitor():
         else:observability_manager.recover("EVENT_LOOP_LAG","Event loop lag recovered",{"lag_ms":lag})
         try:
             if SYSTEM_EVALUATION_ENABLED and system_evaluation_engine.due():
-                run_system_evaluation(source="periodic")
+                await asyncio.to_thread(run_system_evaluation, source="periodic")
             if GOVERNANCE_ENABLED and governance_engine.due(GOVERNANCE_EVALUATION_INTERVAL_MINUTES):
-                run_governance_cycle("periodic")
+                await asyncio.to_thread(run_governance_cycle, "periodic")
             if SMART_EXECUTION_ENABLED:
-                refresh_smart_execution_observability()
+                await asyncio.to_thread(refresh_smart_execution_observability)
                 await asyncio.to_thread(refresh_ensemble_observability)
             if PRODUCTION_READINESS_ENABLED:
                 pst=production_readiness_gate.state()
@@ -8235,10 +8701,17 @@ async def scan(client: httpx.AsyncClient, inst: str) -> Dict[str, Any]:
     if OBSERVABILITY_ENABLED:
         _obs_module("Trade Memory","OK" if TRADE_MEMORY_ENABLED else "PAUSED",last_operation="reconcile/observe",
                     details={"instrument":inst,"reconcile":trade_memory_reconcile,"excursion_updates":trade_memory_excursions})
+    daily_cutoff_closes=await close_managed_trades_for_daily_cutoff(client,inst)
     managed_changes=await manage_open_trades(client,inst,current_price) if current_price else 0
-    resolved = resolve_pending(inst, m1)
-    shadow_resolved = resolve_shadow_trials(inst, m1)
-    candidate_paper_resolved = resolve_candidate_paper_trades(inst,m1) if VALIDATION_PIPELINE_ENABLED else 0
+    # The outcome resolvers are synchronous SQLite/CPU research workloads.
+    # Run them off the asyncio event loop so broker management, watchdogs and
+    # health heartbeats remain responsive even when the pending research set is large.
+    resolved = await asyncio.to_thread(resolve_pending, inst, m1)
+    shadow_resolved = await asyncio.to_thread(resolve_shadow_trials, inst, m1)
+    candidate_paper_resolved = (
+        await asyncio.to_thread(resolve_candidate_paper_trades, inst, m1)
+        if VALIDATION_PIPELINE_ENABLED else 0
+    )
     deployment_live_reconcile = await deployment_manager.reconcile(client) if DEPLOYMENT_MANAGER_ENABLED and CANARY_ACCOUNT and CANARY_TOKEN else {"checked":0,"closed":0,"errors":[]}
     recovery_periodic={"skipped":True}
     if RECOVERY_MANAGER_ENABLED:
@@ -8258,26 +8731,31 @@ async def scan(client: httpx.AsyncClient, inst: str) -> Dict[str, Any]:
                 except Exception as e:
                     recovery_manager.verify_risk(False,{"error":str(e)})
     if resolved or shadow_resolved or candidate_paper_resolved:
-        refresh_discovered_patterns()
-        refresh_filter_hypotheses()
-        refresh_external_hypotheses()
-        autonomous_discovery_refresh()
-        review_active_research_rules()
-        security_queue_validated_research_changes()
-        state["strategy_health"]=evaluate_all_strategy_health()
-        reconcile_ai_director_outcomes()
+        # These research/learning refreshes are synchronous SQLite/CPU work too.
+        # Keep their original order and await completion, but execute them outside
+        # the asyncio thread so trade management/watchdogs remain responsive.
+        await asyncio.to_thread(refresh_discovered_patterns)
+        await asyncio.to_thread(refresh_filter_hypotheses)
+        await asyncio.to_thread(refresh_external_hypotheses)
+        await asyncio.to_thread(autonomous_discovery_refresh)
+        await asyncio.to_thread(review_active_research_rules)
+        await asyncio.to_thread(security_queue_validated_research_changes)
+        state["strategy_health"]=await asyncio.to_thread(evaluate_all_strategy_health)
+        await asyncio.to_thread(reconcile_ai_director_outcomes)
         # Close the learning loop as soon as enough labeled outcomes exist instead
         # of waiting for the hourly maintenance tick. Training still enforces its
         # own minimum sample and temporal-validation requirements.
-        retrain=should_retrain_model()
+        retrain=await asyncio.to_thread(should_retrain_model)
         if retrain["ready"]:
-            try: state["learning"]={**train_shadow_model(force=False),"last_train":now_iso(),"model_ready":Path(MODEL_PATH).exists(),"retrain_policy":retrain}
+            try:
+                trained=await asyncio.to_thread(train_shadow_model, force=False)
+                state["learning"]={**trained,"last_train":now_iso(),"model_ready":bool(shadow_model_governance_status().get("ready")),"retrain_policy":retrain}
             except Exception as e: log.exception("evidence-gated learning refresh failed: %s",e)
     # V3.19: autonomous research cannot self-activate rules.
     if AUTO_PROMOTE_RESEARCH:
-        security_queue_validated_research_changes()
+        await asyncio.to_thread(security_queue_validated_research_changes)
     if STRATEGY_SELF_EVAL_ENABLED:
-        state["strategy_health"]=evaluate_all_strategy_health()
+        state["strategy_health"]=await asyncio.to_thread(evaluate_all_strategy_health)
 
     obs_strategy_started=time.perf_counter()
     r = analyze(h1, m15, m5, m1, inst)
@@ -8433,6 +8911,10 @@ async def scan(client: httpx.AsyncClient, inst: str) -> Dict[str, Any]:
         decision={"execute":False,"reason":"MARKET_DATA_STALE: current data rejected by fail-safe"}
     if r.get("market_closed") or r.get("market_data_state")=="MARKET_CLOSED":
         decision={"execute":False,"reason":"MARKET_CLOSED: new orders blocked by hard execution gate"}
+    entry_gate=new_entry_time_gate()
+    r["new_entry_time_gate"]=entry_gate
+    if not entry_gate["allowed"]:
+        decision={"execute":False,"reason":f"{entry_gate['reason']}: new entries blocked during {entry_gate.get('window')}"}
     if DEPLOYMENT_MANAGER_ENABLED and deployment_manager.kill("SYSTEM").get("active"):
         decision={"execute":False,"reason":"GLOBAL KILL SWITCH: new trades blocked"}
     if TRADING_ENVIRONMENT=="PRODUCTION" and PRODUCTION_READINESS_ENABLED and decision.get("execute"):
@@ -8560,7 +9042,7 @@ async def scan(client: httpx.AsyncClient, inst: str) -> Dict[str, Any]:
                         observability_manager.alert(f"SMART_EXECUTION_RECORD:{oid or obs_trace_id}","WARNING","Smart Execution Engine",
                             "SMART_EXECUTION_TCA_RECORD_FAILED","Smart Execution shadow/TCA recording failed; existing execution state is unchanged",
                             correlation_id=obs_trace_id,details={"error":str(e)})
-            register_trade_management(trade_id,r,float(r.get("managed_target",r["target"])),actual_filled_units)
+            register_trade_management(trade_id,r,float(r.get("managed_target",r["target"])),actual_filled_units,fill_price)
             log.info("EXECUTED %s %s quality=%s confidence=%s order=%s slippage=%.2f protection=%s",
                      r["signal"], inst, r["score"], conf.get("probability"), oid, slippage, protection["status"])
         elif x and x.get("skipped"):
@@ -8602,6 +9084,11 @@ async def scan(client: httpx.AsyncClient, inst: str) -> Dict[str, Any]:
                      "market_regime_entry":current_regime.get("market_regime") if isinstance(current_regime,dict) else None,
                      "volatility_state_entry":current_regime.get("volatility_state") if isinstance(current_regime,dict) else None}
                 try:
+                    canary_entry_gate=new_entry_time_gate()
+                    if not canary_entry_gate["allowed"]:
+                        candidate_live_results.append({"candidate_id":dep["candidate_id"],"executed":False,
+                                                       "reasons":[canary_entry_gate["reason"]],"entry_time_gate":canary_entry_gate})
+                        continue
                     canary_risk=adaptive_risk_recommendation(
                         instrument=inst,variant=setup_variant(r),regime=current_regime,director=director,
                         signal_confidence=conf.get("probability"),
@@ -8807,6 +9294,7 @@ async def worker():
                     observability_strategy_degradation_summary()
                     observability_silent_anomalies()
                     observability_manager.prune()
+                    storage_lifecycle_manager.prune()
                     m=observability_manager.sample_system_metrics(broker_latency_ms=(obs_broker.get("latency_ms") if 'obs_broker' in locals() else None))
                     db_status="DEGRADED" if m.get("db_latency_ms") is not None and m["db_latency_ms"]>OBSERVABILITY_DB_LATENCY_WARNING_MS else "OK"
                     _obs_module("Database",db_status,m.get("db_latency_ms"),warnings=["database latency elevated"] if db_status!="OK" else [],last_operation="observability SELECT 1")
@@ -8840,7 +9328,7 @@ async def worker():
                 try:
                     retrain=should_retrain_model()
                     result=train_shadow_model(force=False) if retrain["ready"] else {"trained":False,"reason":f"waiting for evidence: {retrain['labeled']}/{retrain['next_training_at']}","samples":retrain["labeled"]}
-                    state["learning"]={**result,"last_train":now_iso(),"model_ready":Path(MODEL_PATH).exists(),"retrain_policy":retrain}
+                    state["learning"]={**result,"last_train":now_iso(),"model_ready":bool(shadow_model_governance_status().get("ready")),"retrain_policy":retrain}
                 except Exception as e:
                     log.exception("learning cycle failed")
                     state["learning"] = {"trained": False, "last_train": now_iso(), "model_ready": Path(MODEL_PATH).exists(), "error": str(e)}
@@ -9123,6 +9611,17 @@ async def start():
                 last_operation="startup security validation",
                 errors=[] if security_result.get("status")=="SECURITY_READY" else security_result.get("environment",{}).get("reasons",[]),
                 details=security_result)
+    if security_result.get("status")=="SECURITY_READY" and OBSERVABILITY_ENABLED:
+        # Clear startup alerts from older deployments only after the current runtime
+        # has passed the same fail-closed checks that originally raised them.
+        for _key,_msg in (
+            ("STARTUP_SECURITY_FAILED","Current startup security validation passed"),
+            ("UNKNOWN_CODE_VERSION","Current runtime integrity is verified"),
+            ("UNKNOWN_STRATEGY_VERSION","Current deployment/strategy version is valid"),
+            ("ADMIN_PERMISSION_CHANGED","Current role configuration is verified"),
+            ("CONFIGURATION_CORRUPTION","Current configuration integrity is verified"),
+        ):
+            observability_manager.recover(_key,_msg,{"security_status":"SECURITY_READY"})
     if security_result.get("status")!="SECURITY_READY":
         state["system_ready"]=False
         if RECOVERY_MANAGER_ENABLED and SECURITY_STARTUP_FAIL_CLOSED:
@@ -10642,7 +11141,7 @@ async def discovery():
 async def home():
     return """<!doctype html><html lang='es'><meta name='viewport' content='width=device-width'><title>Market Alert V3.27</title>
 <style>body{font-family:system-ui;background:#0b1020;color:#eef2ff;max-width:1050px;margin:auto;padding:24px}.c{background:#151c32;border:1px solid #2c3656;border-radius:16px;padding:18px;margin:12px 0}pre{white-space:pre-wrap;word-break:break-word;background:#080c17;padding:14px;border-radius:12px}.tag{display:inline-block;padding:5px 9px;border-radius:999px;background:#25304f;margin-right:6px}</style>
-<h1>Market Alert V3.34.1 · Historical Replay Research Runtime</h1><div class=c><span class=tag>OANDA PRACTICE ONLY</span><span class=tag>24/7</span><span class=tag>Sin límite diario</span><span class=tag>Confianza calibrada</span>
+<h1>Market Alert V3.35.2 · Historical Execution + OOS + Storage Lifecycle Hardening</h1><div class=c><span class=tag>OANDA PRACTICE ONLY</span><span class=tag>24/7</span><span class=tag>Sin límite diario</span><span class=tag>Confianza calibrada</span>
 <p><b>Quality Score ≠ probabilidad.</b> La confianza dinámica se calibra con resultados reales. Con poca muestra se limita deliberadamente y el 90% requiere evidencia sustancial.</p></div>
 <div class=c><h2>Estado</h2><pre id=s>Cargando…</pre></div><div class=c><h2>Aprendizaje</h2><pre id=l>Cargando…</pre></div><div class=c><h2>Última decisión</h2><pre id=d>Cargando…</pre></div><div class=c><h2>Últimas señales</h2><pre id=h>Cargando…</pre></div>
 <script>async function u(){s.textContent=JSON.stringify(await fetch('/api/status').then(r=>r.json()),null,2);l.textContent=JSON.stringify(await fetch('/api/learning').then(r=>r.json()),null,2);d.textContent=JSON.stringify(await fetch('/api/decisions?limit=5').then(r=>r.json()),null,2);h.textContent=JSON.stringify(await fetch('/api/signals?limit=15').then(r=>r.json()),null,2)}u();setInterval(u,15000)</script></html>"""

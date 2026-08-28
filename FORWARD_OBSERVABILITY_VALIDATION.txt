@@ -1,0 +1,34 @@
+BotsTrader V3.35.2 Forward Observability Validation
+==================================================
+
+Scope
+-----
+Observational/diagnostic additions only. No trading thresholds, position sizing,
+leverage, hard risk limits, signal scoring, execution authority, or broker-order
+logic were changed relative to BotsTrader_V3.35.2_FORWARD_CLEAN.
+
+Added
+-----
+- decision_log.forward_audit_json (FORWARD_ATTRIBUTION_V1)
+- independent veto vector: minimum_rr, barrier_room_ok, low_room_low_rr,
+  low_room_extended
+- pre-filter score/edge and RR/room/extension attribution telemetry
+- current MIN_ENTRY_RR vs prior MIN_RR reference attribution
+- trade_forward_observations and trade_forward_events
+- 0.50R/0.75R/1.00R/1.25R/1.50R milestone telemetry
+- BE activation and max-R-after-BE telemetry
+- order-independent filter stacking audit utility
+- resolver-semantics audit utility (requires explicit historical M1 bundle)
+- preregistered evidence classes: <15 inconclusive, 15-29 weak, >=30 usable
+
+Interpretation guardrail
+------------------------
+High Jaccard indicates mechanical redundancy only. It is not evidence that a
+filter is over-restrictive or should be relaxed.
+
+Validation
+----------
+python -m py_compile: PASS
+pytest -q: 208 passed, 4 deprecation warnings
+Warnings are existing FastAPI on_event deprecation warnings and do not indicate
+a failed test.

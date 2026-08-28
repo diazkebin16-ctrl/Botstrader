@@ -3,7 +3,7 @@ import os, sqlite3, tempfile, json
 from datetime import datetime, timezone, timedelta
 from governance_engine import GovernanceEngine
 
-NOW=datetime(2026,8,15,16,0,tzinfo=timezone.utc)
+NOW=datetime.now(timezone.utc).replace(microsecond=0)
 def iso(dt): return dt.isoformat()
 
 def make_db():

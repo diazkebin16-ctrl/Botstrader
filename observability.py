@@ -214,6 +214,12 @@ class ObservabilityManager:
                 self.alert(f"HEARTBEAT:{r['module_name']}",sev,r["module_name"],"MODULE_HEARTBEAT_MISSED",
                            f"{r['module_name']} heartbeat is {st['status'].lower()}",
                            details={"age_seconds":st["age_seconds"],"threshold_seconds":th})
+            elif st["status"]=="OK":
+                # A missed-heartbeat alert describes liveness only. Recover it as soon as
+                # the stored heartbeat is demonstrably fresh, even if the module's own
+                # business status is DEGRADED/ERROR for an unrelated reason.
+                self.recover(f"HEARTBEAT:{r['module_name']}",f"{r['module_name']} heartbeat is fresh again",
+                             {"heartbeat_age_seconds":st["age_seconds"],"threshold_seconds":th})
             out.append({"module_name":r["module_name"],**st})
         return out
 

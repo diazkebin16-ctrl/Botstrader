@@ -1,37 +1,37 @@
-# Environment / secrets
+# Secrets and local configuration
 .env
 .env.*
 !.env.example
 *.pem
 *.key
-*.p12
-*.pfx
 
-# Python
+# Python/runtime
+.venv/
+venv/
 __pycache__/
 *.py[cod]
 .pytest_cache/
+.mypy_cache/
 .coverage
 htmlcov/
-.venv/
-venv/
 
-# Runtime / local state
+# Runtime databases and generated state
 *.db
-*.db-*
 *.sqlite
 *.sqlite3
-*.log
-logs/
-data/
-artifacts/
+*.db-shm
+*.db-wal
+*.db-journal
 
-# IDE / OS
+# Generated research/audit artifacts
+indicator_research_base.csv.gz
+*.log
+*.zip
+*.tar
+*.tar.gz
+
+# OS/editor noise
 .DS_Store
+Thumbs.db
 .vscode/
 .idea/
-
-# Packaging
-*.zip
-dist/
-build/
