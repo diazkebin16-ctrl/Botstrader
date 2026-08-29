@@ -31,6 +31,7 @@ from research_evidence import (resolve_outcome as research_resolve_outcome, coll
                                annotate_market_episodes, split_episode_holdout)
 from session_regime import session_regime as detect_session_regime
 from instrument_registry import InstrumentRegistry
+from instrument_profiles import instrument_profile
 from observability import (
     ObservabilityManager, DEPENDENCY_CRITICAL, DEPENDENCY_IMPORTANT, DEPENDENCY_NON_CRITICAL,
     stale_status as observability_stale_status, reconciliation_status as observability_reconciliation_status,
@@ -82,21 +83,21 @@ def _instrument_list(raw: str) -> List[str]:
             out.append(symbol)
     return out
 
-# Backward compatibility: INSTRUMENTS remains the explicit set that may reach
-# the existing PAPER/production execution gates. Defining an instrument in the
-# registry does not activate it. Additional instruments can be observed by
-# SHADOW_INSTRUMENTS without granting order authority.
-INSTRUMENTS = _instrument_list(os.getenv("INSTRUMENTS", "EUR_USD")) or ["EUR_USD"]
+# Configured instruments are filtered through their central profile before they
+# receive broker order authority.  PAPER/practice defaults to the three approved
+# forward-collection instruments; secondary profiles explicitly deny LIVE.
+PRIMARY_INSTRUMENT = "EUR_USD"
+CONFIGURED_INSTRUMENTS = _instrument_list(os.getenv("INSTRUMENTS", "EUR_USD,GBP_USD,USD_JPY")) or [PRIMARY_INSTRUMENT]
+INSTRUMENTS = [x for x in CONFIGURED_INSTRUMENTS if instrument_profile(x).allows_execution(TRADING_ENVIRONMENT, PRIMARY_OANDA_ENV)]
 SHADOW_INSTRUMENTS = [x for x in _instrument_list(os.getenv("SHADOW_INSTRUMENTS", "")) if x not in INSTRUMENTS]
 SCAN_INSTRUMENTS = list(dict.fromkeys(INSTRUMENTS + SHADOW_INSTRUMENTS))
-PRIMARY_INSTRUMENT = INSTRUMENTS[0]
 INSTRUMENT_REGISTRY = InstrumentRegistry()
 _INSTRUMENT_METADATA_REFRESH_TS: Optional[datetime] = None
 INSTRUMENT_METADATA_REFRESH_SECONDS = max(300, int(os.getenv("INSTRUMENT_METADATA_REFRESH_SECONDS", "21600")))
 
 def instrument_mode(instrument: str) -> str:
     symbol=InstrumentRegistry.normalize_symbol(instrument)
-    if symbol in INSTRUMENTS:
+    if symbol in INSTRUMENTS and instrument_profile(symbol).allows_execution(TRADING_ENVIRONMENT, PRIMARY_OANDA_ENV):
         return "ENABLED"
     if symbol in SHADOW_INSTRUMENTS:
         return "SHADOW"
@@ -222,7 +223,7 @@ TREND_RUNNER_MIN_SCORE = max(0.0, float(os.getenv("TREND_RUNNER_MIN_SCORE", "0.6
 TREND_RUNNER_TP_R = max(2.0, float(os.getenv("TREND_RUNNER_TP_R", "3.0")))
 TREND_RUNNER_TRAIL_START_R = max(1.5, float(os.getenv("TREND_RUNNER_TRAIL_START_R", "1.75")))
 TREND_RUNNER_TRAIL_DISTANCE_R = max(0.40, float(os.getenv("TREND_RUNNER_TRAIL_DISTANCE_R", "0.90")))
-VERSION_TAG = "3.36.0"
+VERSION_TAG = "3.36.1"
 ENTRY_TIMING_ENABLED = os.getenv("ENTRY_TIMING_ENABLED", "true").lower() == "true"
 MAX_ENTRY_EXTENSION_ATR = max(0.5, float(os.getenv("MAX_ENTRY_EXTENSION_ATR", "1.50")))
 MIN_ROOM_TO_BARRIER_R = max(1.0, float(os.getenv("MIN_ROOM_TO_BARRIER_R", "1.50")))
@@ -253,12 +254,15 @@ LOW_ROOM_LOW_RR_MAX_ENTRY_RR = 1.00
 LOW_ROOM_EXTENDED_MAX_ROOM_R = 0.60
 LOW_ROOM_EXTENDED_MIN_EXTENSION_ATR = 0.80
 
-def paper_forward_filters_active() -> bool:
+def paper_forward_filters_active(instrument: Optional[str] = None) -> bool:
+    symbol=InstrumentRegistry.normalize_symbol(instrument or PRIMARY_INSTRUMENT)
+    profile=instrument_profile(symbol)
     return bool(
         PAPER_FORWARD_FILTERS_ENABLED
         and TRADING_ENVIRONMENT == "PAPER"
         and PRIMARY_OANDA_ENV == "practice"
         and OANDA.endswith("fxpractice.oanda.com")
+        and (profile.has_veto("LOW_ROOM_LOW_RR") or profile.has_veto("LOW_ROOM_EXTENDED"))
     )
 
 def forward_entry_pattern_flags(features: Dict[str, Any]) -> Dict[str, bool]:
@@ -1168,7 +1172,7 @@ def production_release_files() -> List[str]:
         "server.py","production_readiness.py","governance_engine.py","system_evaluation.py",
         "security_manager.py","recovery_manager.py","order_state.py","observability.py","smart_execution.py","ensemble_engine.py","capital_allocation.py",
         "adaptive_learning.py","validation_pipeline.py","deployment_manager.py","deployment_runtime.py",
-        "instrument_registry.py","requirements.txt","Dockerfile"
+        "instrument_registry.py","instrument_profiles.py","requirements.txt","Dockerfile"
     ]
     return [str(root/n) for n in names]
 
@@ -3430,6 +3434,10 @@ def quality_entry_gate(r: Dict[str, Any], conf: Dict[str, Any]) -> Dict[str, Any
     # M1 remains the execution trigger, but validated admission evidence can
     # substitute for the stricter canonical swing/strong-momentum confirmation.
     if M1_CONFIRMATION_REQUIRED and not bool((r.get("filters") or {}).get("m1_confirmation")):
+        symbol=InstrumentRegistry.normalize_symbol(r.get("instrument") or PRIMARY_INSTRUMENT)
+        profile=instrument_profile(symbol)
+        if not profile.has_exception("M1_ALTERNATIVE_ADMISSION"):
+            return {"ok":False,"reason":"falta confirmación M1 canónica; excepción específica no autorizada para este instrumento"}
         f_m1 = r.get("features") or {}
         sig_m1 = str(r.get("signal") or "").upper()
         m1_raw = float(f_m1.get("m1_momentum",0) or 0)
@@ -3452,7 +3460,7 @@ def quality_entry_gate(r: Dict[str, Any], conf: Dict[str, Any]) -> Dict[str, Any
 
     # The two forward filters are active only in PAPER/practice. The same pure
     # conditions also populate shadow telemetry for prospective audit.
-    if paper_forward_filters_active():
+    if paper_forward_filters_active(r.get("instrument")):
         flags = forward_entry_pattern_flags(f)
         room_raw = f.get("room_to_barrier_r")
         room = None if room_raw is None else float(room_raw)
@@ -4069,6 +4077,48 @@ def _shared_currency_correlation(instrument: str, open_instruments: List[str]) -
         "high":count>=RISK_MAX_CORRELATED_POSITIONS,
         "related":related,
         "method":"shared_currency_conservative_proxy"
+    }
+
+
+def portfolio_execution_guard(instrument: str, risk_context: Dict[str, Any],
+                              prospective_trade_risk: Optional[float] = None) -> Dict[str, Any]:
+    """Hard global multi-asset risk guard using existing approved ceilings only.
+
+    The adaptive risk engine remains SHADOW.  This function promotes only the
+    already-defined portfolio/margin/correlation hard ceilings into the real
+    execution path so adding symbols cannot bypass aggregate controls.
+    """
+    symbol=InstrumentRegistry.normalize_symbol(instrument)
+    ctx=risk_context or {}
+    max_trade=float(managed_value("risk.max_trade_fraction",RISK_MAX_TRADE_FRACTION))
+    max_portfolio=float(managed_value("risk.max_portfolio_fraction",RISK_MAX_PORTFOLIO_FRACTION))
+    max_margin=float(managed_value("risk.max_margin_usage",RISK_MAX_MARGIN_USAGE))
+    max_correlated=int(managed_value("risk.max_correlated_positions",RISK_MAX_CORRELATED_POSITIONS))
+    open_risk=_risk_float(ctx.get("portfolio_open_risk"),0.0) or 0.0
+    margin_usage=_risk_float(ctx.get("margin_usage"))
+    prospective=max(0.0,min(max_trade,float(prospective_trade_risk if prospective_trade_risk is not None else max_trade)))
+    corr=_shared_currency_correlation(symbol,list(ctx.get("open_instruments") or []))
+    reasons=[]
+    if ctx.get("system_abnormal") or ctx.get("data_stale"):
+        reasons.append("RISK_CONTEXT_UNSAFE")
+    if margin_usage is not None and margin_usage>=max_margin:
+        reasons.append("MARGIN_USAGE_LIMIT")
+    if open_risk+prospective>max_portfolio+1e-12:
+        reasons.append("PORTFOLIO_RISK_LIMIT")
+    if int(corr.get("count") or 0)>=max_correlated:
+        reasons.append("CORRELATED_POSITION_LIMIT")
+    return {
+        "allow":not reasons,
+        "instrument":symbol,
+        "reasons":reasons,
+        "portfolio_open_risk":open_risk,
+        "prospective_trade_risk":prospective,
+        "prospective_portfolio_risk":open_risk+prospective,
+        "portfolio_risk_cap":max_portfolio,
+        "margin_usage":margin_usage,
+        "margin_cap":max_margin,
+        "correlation":corr,
+        "max_correlated_positions":max_correlated,
     }
 
 
@@ -5967,15 +6017,24 @@ def forward_observation_snapshot(r: Dict[str, Any], conf: Dict[str, Any]) -> Dic
     edge_pass=edge>=DIRECTION_MIN_EDGE
     current_rr_pass=bool(actual_rr>=MIN_RR-1e-9 and rr_raw>=MIN_ENTRY_RR)
     prior_rr_pass=bool(actual_rr>=MIN_RR-1e-9 and rr_raw>=MIN_RR)
+    symbol=InstrumentRegistry.normalize_symbol(r.get("instrument") or PRIMARY_INSTRUMENT)
+    profile=instrument_profile(symbol)
     vetoes={
         "minimum_rr": not bool(safety.get("minimum_rr",current_rr_pass)),
         "barrier_room_ok": not bool(safety.get("barrier_room_ok",checks.get("barrier_room_ok",True))),
         "low_room_low_rr": bool(flags["low_room_low_rr"]),
         "low_room_extended": bool(flags["low_room_extended"]),
     }
+    effective_vetoes={
+        "minimum_rr":vetoes["minimum_rr"],
+        "barrier_room_ok":vetoes["barrier_room_ok"],
+        "low_room_low_rr":bool(vetoes["low_room_low_rr"] and profile.has_veto("LOW_ROOM_LOW_RR")),
+        "low_room_extended":bool(vetoes["low_room_extended"] and profile.has_veto("LOW_ROOM_EXTENDED")),
+    }
     return {
         "schema":"FORWARD_ATTRIBUTION_V1",
         "observational_only":True,
+        "instrument":symbol,
         "score_pre_filters":float(r.get("score",0) or 0),
         "buy_score":buy_score,"sell_score":sell_score,"direction_edge":edge,
         "direction_score_pass":bool(score_pass),"direction_edge_pass":bool(edge_pass),
@@ -5985,7 +6044,9 @@ def forward_observation_snapshot(r: Dict[str, Any], conf: Dict[str, Any]) -> Dic
         "passes_current_rr_gate":current_rr_pass,"passes_prior_rr_reference":prior_rr_pass,
         "admitted_only_by_min_entry_rr_relaxation":bool(current_rr_pass and not prior_rr_pass),
         "vetoes":vetoes,
-        "paper_forward_filters_active":paper_forward_filters_active(),
+        "effective_vetoes":effective_vetoes,
+        "instrument_specific_vetoes":sorted(profile.specific_vetoes),
+        "paper_forward_filters_active":paper_forward_filters_active(symbol),
         "confidence":conf.get("probability"),"required_confidence":conf.get("required_confidence"),
         "confidence_samples":conf.get("samples"),
     }
@@ -6364,6 +6425,15 @@ async def execute_recoverable(client: httpx.AsyncClient, r: Dict[str,Any],
     mode=instrument_mode(r["instrument"])
     if mode != "ENABLED":
         return {"skipped":"INSTRUMENT_NOT_EXECUTION_ENABLED","instrument_mode":mode}
+    attached_guard=r.get("portfolio_execution_guard")
+    if attached_guard is None:
+        risk_ctx=r.get("broker_risk_context")
+        if not isinstance(risk_ctx,dict):
+            return {"skipped":"GLOBAL_PORTFOLIO_RISK_CONTEXT_REQUIRED"}
+        attached_guard=portfolio_execution_guard(r["instrument"],risk_ctx)
+        r["portfolio_execution_guard"]=attached_guard
+    if not attached_guard.get("allow",False):
+        return {"skipped":"GLOBAL_PORTFOLIO_RISK_GUARD","portfolio_execution_guard":attached_guard}
     # Any newly PAPER-enabled secondary instrument must be verified against broker
     # metadata before an order can be built. EUR/USD retains its established fallback
     # during transient metadata outages, preserving the frozen baseline behavior.
@@ -6482,6 +6552,20 @@ async def execute(client: httpx.AsyncClient, r: Dict[str, Any]):
     mode=instrument_mode(r["instrument"])
     if mode != "ENABLED":
         return {"skipped":"INSTRUMENT_NOT_EXECUTION_ENABLED","instrument_mode":mode}
+    if market_is_weekend_closed():
+        return {"skipped":"MARKET_CLOSED","reason":"MARKET_CLOSED","market_closed":True,"market_data_state":"MARKET_CLOSED"}
+    entry_gate=new_entry_time_gate()
+    if not entry_gate["allowed"]:
+        return {"skipped":entry_gate["reason"],"reason":entry_gate["reason"],"entry_time_gate":entry_gate}
+    attached_guard=r.get("portfolio_execution_guard")
+    if attached_guard is None:
+        risk_ctx=r.get("broker_risk_context")
+        if not isinstance(risk_ctx,dict):
+            return {"skipped":"GLOBAL_PORTFOLIO_RISK_CONTEXT_REQUIRED"}
+        attached_guard=portfolio_execution_guard(r["instrument"],risk_ctx)
+        r["portfolio_execution_guard"]=attached_guard
+    if not attached_guard.get("allow",False):
+        return {"skipped":"GLOBAL_PORTFOLIO_RISK_GUARD","portfolio_execution_guard":attached_guard}
     if r["instrument"] != PRIMARY_INSTRUMENT and instrument_metadata(r["instrument"]).source != "OANDA":
         try:
             await refresh_instrument_metadata(client,[r["instrument"]],force=True)
@@ -6489,11 +6573,6 @@ async def execute(client: httpx.AsyncClient, r: Dict[str, Any]):
             return {"skipped":"INSTRUMENT_METADATA_UNVERIFIED","error":str(e)}
         if instrument_metadata(r["instrument"]).source != "OANDA":
             return {"skipped":"INSTRUMENT_METADATA_UNVERIFIED"}
-    if market_is_weekend_closed():
-        return {"skipped":"MARKET_CLOSED","reason":"MARKET_CLOSED","market_closed":True,"market_data_state":"MARKET_CLOSED"}
-    entry_gate=new_entry_time_gate()
-    if not entry_gate["allowed"]:
-        return {"skipped":entry_gate["reason"],"reason":entry_gate["reason"],"entry_time_gate":entry_gate}
     if SINGLE and await haspos(client, r["instrument"]):
         return {"skipped": "existing_position"}
     sizing=instrument_sizing(r["instrument"],UNITS,r["entry"],r["stop"],risk_context=r.get("broker_risk_context"))
@@ -7690,7 +7769,7 @@ def promote_validated_research_rule():
 
 def evaluate_active_research_rules(r):
     instrument=InstrumentRegistry.normalize_symbol((r or {}).get("instrument") or PRIMARY_INSTRUMENT)
-    if instrument != PRIMARY_INSTRUMENT:
+    if not instrument_profile(instrument).learned_research_veto_authority:
         return {"ok":True,"active":False,"rules":[],"vetoes":[],
                 "reason":"instrument_scoped_research_not_validated","instrument":instrument}
     rules=get_active_research_rules()
@@ -9121,8 +9200,12 @@ async def scan(client: httpx.AsyncClient, inst: str) -> Dict[str, Any]:
                     "emergency_stop":risk_shadow.get("emergency_stop"),"risk_decision_id":risk_shadow_id})
     r["adaptive_risk_engine"] = risk_shadow
     r["adaptive_risk_decision_id"] = risk_shadow_id
+    portfolio_guard=portfolio_execution_guard(inst,broker_risk_context)
+    r["portfolio_execution_guard"]=portfolio_guard
 
     decision = execution_decision(r, conf)
+    if not portfolio_guard["allow"]:
+        decision={"execute":False,"reason":"GLOBAL_PORTFOLIO_RISK_GUARD: "+", ".join(portfolio_guard["reasons"])}
     r["instrument_mode"]=instrument_mode(inst)
     if r["instrument_mode"] != "ENABLED":
         decision={"execute":False,"reason":f"INSTRUMENT_{r['instrument_mode']}: signal/research only; order authority disabled"}
@@ -11381,7 +11464,7 @@ async def discovery():
 async def home():
     return """<!doctype html><html lang='es'><meta name='viewport' content='width=device-width'><title>Market Alert V3.27</title>
 <style>body{font-family:system-ui;background:#0b1020;color:#eef2ff;max-width:1050px;margin:auto;padding:24px}.c{background:#151c32;border:1px solid #2c3656;border-radius:16px;padding:18px;margin:12px 0}pre{white-space:pre-wrap;word-break:break-word;background:#080c17;padding:14px;border-radius:12px}.tag{display:inline-block;padding:5px 9px;border-radius:999px;background:#25304f;margin-right:6px}</style>
-<h1>BotsTrader V3.36.0 · Multi-Asset Foundation</h1><div class=c><span class=tag>OANDA PRACTICE ONLY</span><span class=tag>24/7</span><span class=tag>Sin límite diario</span><span class=tag>Confianza calibrada</span>
+<h1>BotsTrader V3.36.1 · Multi-Asset PAPER Isolation</h1><div class=c><span class=tag>OANDA PRACTICE ONLY</span><span class=tag>24/7</span><span class=tag>Sin límite diario</span><span class=tag>Confianza calibrada</span>
 <p><b>Quality Score ≠ probabilidad.</b> La confianza dinámica se calibra con resultados reales. Con poca muestra se limita deliberadamente y el 90% requiere evidencia sustancial.</p></div>
 <div class=c><h2>Estado</h2><pre id=s>Cargando…</pre></div><div class=c><h2>Aprendizaje</h2><pre id=l>Cargando…</pre></div><div class=c><h2>Última decisión</h2><pre id=d>Cargando…</pre></div><div class=c><h2>Últimas señales</h2><pre id=h>Cargando…</pre></div>
 <script>async function u(){s.textContent=JSON.stringify(await fetch('/api/status').then(r=>r.json()),null,2);l.textContent=JSON.stringify(await fetch('/api/learning').then(r=>r.json()),null,2);d.textContent=JSON.stringify(await fetch('/api/decisions?limit=5').then(r=>r.json()),null,2);h.textContent=JSON.stringify(await fetch('/api/signals?limit=15').then(r=>r.json()),null,2)}u();setInterval(u,15000)</script></html>"""

@@ -64,7 +64,7 @@ def test_adaptive_observe_only_before_executed_sample_minimum(monkeypatch):
     # this test isolates the adaptive confidence authority boundary.
     r=_base_signal(room=2.0,rr=1.5,ext=.2,m1=True)
     r.update({"blocked":False,"safety_checks":{"minimum_rr":True},"instrument":"EUR_USD","candle_ts":"2099-01-01T00:00:00+00:00"})
-    monkeypatch.setattr(server,"paper_forward_filters_active",lambda:False)
+    monkeypatch.setattr(server,"paper_forward_filters_active",lambda instrument=None:False)
     monkeypatch.setattr(server,"evaluate_active_research_rules",lambda r:{"ok":True})
     monkeypatch.setattr(server,"strategy_execution_gate",lambda r:{"ok":True})
     monkeypatch.setattr(server,"reentry_guard",lambda r:{"ok":True})

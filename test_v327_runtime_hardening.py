@@ -162,9 +162,9 @@ def test_timeseries_pipeline_can_fit_small_binary_dataset():
 
 
 def test_runtime_version_and_dashboard_are_v327():
-    assert server.VERSION_TAG == "3.36.0"
+    assert server.VERSION_TAG == "3.36.1"
     src=open(server.__file__,encoding="utf-8").read()
-    assert "BotsTrader V3.36.0 · Multi-Asset Foundation" in src
+    assert "BotsTrader V3.36.1 · Multi-Asset PAPER Isolation" in src
 
 
 def test_storage_status_never_calls_ephemeral_storage_persistent():
@@ -245,5 +245,5 @@ def test_status_learning_uses_unambiguous_sample_names(monkeypatch):
         assert "training_labeled_samples" in learn
         assert "research_samples_total" in learn
         assert "pending_samples" in learn
-        assert out["version"]=="3.36.0"
+        assert out["version"]=="3.36.1"
     asyncio.run(run())

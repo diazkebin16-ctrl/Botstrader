@@ -150,6 +150,7 @@ def test_enabled_gbp_order_uses_gbp_and_registry_formatting(monkeypatch):
         captured.update({"method":method,"path":path,"body":body});return {"ok":True}
     monkeypatch.setattr(server,"req",fake_req)
     r=_signal("GBP_USD");r["stop"]=1.199876;r["target"]=1.202345;r["managed_target"]=1.202345
+    r["broker_risk_context"]={"portfolio_open_risk":0.0,"margin_usage":0.0,"open_instruments":[],"data_stale":False,"system_abnormal":False}
     out=asyncio.run(server.execute(object(),r))
     order=captured["body"]["order"]
     assert captured["method"] == "POST"

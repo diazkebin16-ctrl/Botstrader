@@ -17,7 +17,7 @@ def evidence_class(n: int) -> str:
 
 
 def _bool_map(record: Mapping[str, Any], names: Sequence[str]) -> Dict[str, bool]:
-    raw = record.get("vetoes") or {}
+    raw = record.get("effective_vetoes") or record.get("vetoes") or {}
     return {name: bool(raw.get(name, False)) for name in names}
 
 

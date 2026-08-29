@@ -33,7 +33,7 @@ def test_test_environment_cannot_enable_live_canary():
             "OANDA_CANARY_TOKEN":"dummy-live-token",
         })
     lines=out.splitlines()
-    assert lines[-4:] == ["3.36.0","False","False","False"]
+    assert lines[-4:] == ["3.36.1","False","False","False"]
 
 def test_unknown_strategy_version_fails_security_startup():
     code = '''

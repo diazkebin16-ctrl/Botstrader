@@ -67,8 +67,8 @@ class InstrumentMetadata:
 _DEFAULTS: Dict[str, InstrumentMetadata] = {
     "EUR_USD": InstrumentMetadata("EUR_USD", display_precision=5, pip_location=-4),
     "GBP_USD": InstrumentMetadata("GBP_USD", display_precision=5, pip_location=-4),
-    # Future-proofing example: not enabled by default and not part of this release.
-    "USD_JPY": InstrumentMetadata("USD_JPY", display_precision=3, pip_location=-2),
+    # Conservative PAPER fallback; broker metadata is still mandatory before secondary execution.
+    "USD_JPY": InstrumentMetadata("USD_JPY", display_precision=3, pip_location=-2, trade_units_precision=0, minimum_trade_size=1.0),
 }
 
 

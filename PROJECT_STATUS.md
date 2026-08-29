@@ -55,3 +55,16 @@ Do not commit `.env`, credentials, runtime DBs, virtual environments, caches, lo
 - Canonical reconciled code commit: `6e1aabe` — BotsTrader V3.36.0 research reconciliation.
 - All future IA/chat work must start from the current GitHub `main` branch and preserve this reconciled baseline unless a newer explicitly approved canonical commit replaces it.
 - Do not reconstruct work from older branches or local ZIPs when GitHub `main` contains newer certified changes.
+
+## V3.36.1 candidate — Multi-Asset PAPER Isolation
+- Candidate version: `V3.36.1`; canonical source remains current GitHub `main` (`06862d1`) over reconciled code reference `6e1aabe`.
+- Added central instrument profiles so EUR-specific forward/research authority cannot leak into newly enabled symbols.
+- EUR_USD remains primary and retains approved EUR-only `LOW_ROOM_LOW_RR`, `LOW_ROOM_EXTENDED`, `M1_ALTERNATIVE_ADMISSION`, and learned research-veto authority.
+- GBP_USD and USD_JPY are prepared for PAPER/OANDA Practice execution, require broker-verified metadata before secondary order construction, and explicitly deny LIVE authority.
+- GBP_USD and USD_JPY have no EUR-specific vetoes/exceptions by default.
+- Global strategy geometry remains shared, including `MIN_ENTRY_RR=0.40`, `minimum_rr`, `barrier_room_ok`, canonical M1 confirmation, approved global blackouts and weekday cutoff.
+- Existing hard portfolio, margin and correlated-position ceilings are now enforced by a minimum global execution guard so additional instruments cannot silently multiply aggregate risk. No hard-risk value or leverage ceiling was raised.
+- Forward observations separate raw observed patterns from effective instrument-authorized vetoes.
+- Directional research reconciliation, stacking/Jaccard and resolver-semantics work remain research/offline and were not reverted.
+- Final local regression for this candidate: `275 passed, 0 failed, 4 warnings`; warnings are existing FastAPI `on_event` deprecations.
+- V3.36.1 has **not** been deployed to Railway. GBP_USD/USD_JPY PAPER broker behavior still requires separately approved forward runtime observation.

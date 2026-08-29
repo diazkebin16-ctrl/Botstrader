@@ -1,0 +1,44 @@
+BotsTrader V3.36.1 MULTI-ASSET PAPER ISOLATION — VALIDATION EVIDENCE
+
+CANONICAL SOURCE
+GitHub main observed: 06862d12350e64eead55b7ffb2e2bc7bbe0d01fc
+Reconciled code parent/reference: 6e1aabe8eb4903d1f973a2f038c69d8821341860
+06862d1 changes only PROJECT_STATUS.md over 6e1aabe.
+
+FOCUSED V3.36.1 PROFILE/RISK/EXECUTION SUITE
+pytest -q test_multi_asset_paper_isolation_v3361.py
+20 passed, 0 failed, 4 warnings
+
+EXISTING MULTI-ASSET + FORWARD REGRESSION
+pytest -q test_multi_asset_foundation_v3360.py test_forward_observability.py test_forward_paper_release.py
+32 passed, 0 failed, 4 warnings
+
+FORWARD AUTHORITY/OBSERVABILITY REGRESSION AFTER EFFECTIVE-VETO SEPARATION
+pytest -q test_forward_observability.py test_forward_paper_release.py test_multi_asset_paper_isolation_v3361.py
+29 passed, 0 failed, 4 warnings
+
+SECURITY / RUNTIME / RECOVERY / PRODUCTION READINESS
+pytest -q test_security_integration.py test_v327_runtime_hardening.py test_recovery_manager.py test_recovery_orphan_quarantine.py test_production_readiness.py
+35 passed, 0 failed, 4 warnings
+
+HISTORICAL / REPLAY / RESEARCH
+pytest -q test_directional_null_test.py test_research_evidence.py test_replay_validation.py test_historical_replay.py test_historical_execution.py test_research_validation.py
+37 passed, 0 failed, 0 warnings
+
+FULL REGRESSION
+pytest -q
+275 passed, 0 failed, 4 warnings
+
+WARNINGS
+The 4 warnings are existing FastAPI @app.on_event deprecation warnings.
+
+INTERMEDIATE COMPATIBILITY FINDINGS RESOLVED BEFORE FINAL REGRESSION
+- An existing forward-paper monkeypatch expected paper_forward_filters_active() with zero args; test stub was updated to accept the new optional instrument parameter. No trading threshold changed.
+- Legacy execute() initially evaluated the new portfolio context before MARKET_CLOSED; hard-gate ordering was corrected so MARKET_CLOSED/time blackout preserve precedence.
+- TEST collection sets TRADING_ENVIRONMENT=TEST; profile logic now permits logical PAPER-style test/simulation execution while existing test-mode endpoint hardening continues to deny LIVE broker authority.
+
+NO STRATEGY OPTIMIZATION
+No RR, spread, barrier, BE, anomaly, ensemble, leverage or hard-risk limit was increased/tuned.
+
+RAILWAY
+Not touched. Not deployed.

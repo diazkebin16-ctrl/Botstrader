@@ -1,0 +1,26 @@
+BotsTrader V3.36.1 MULTI-ASSET PAPER ISOLATION — CLEAN PACKAGE MANIFEST
+
+Canonical GitHub main observed before work:
+  06862d12350e64eead55b7ffb2e2bc7bbe0d01fc
+Canonical reconciled code reference:
+  6e1aabe8eb4903d1f973a2f038c69d8821341860
+
+Candidate version:
+  3.36.1
+
+Candidate-specific source/test/document changes are listed in MULTI_ASSET_PROFILE_AUDIT_V3.36.1.md and the final report.
+Dockerfile is included verbatim from canonical main (Git blob 8a937d3637ef756463aa05ecb3d272dff5a8e885); it is not a V3.36.1 behavioral modification.
+
+Excluded from clean package:
+  .git/
+  .env and .env-like files
+  credentials/secrets
+  .venv/ and venv/
+  __pycache__/
+  .pytest_cache/
+  *.pyc
+  runtime DB/sqlite/WAL/SHM files
+  internal ZIP/TAR/GZ archives
+  temporary/backup files
+
+Railway: NOT TOUCHED / NOT DEPLOYED.
