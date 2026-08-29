@@ -50,3 +50,8 @@ V3.36.0 is an architectural expansion, not GBP_USD optimization. No RR, spread, 
 
 ## Public GitHub safety
 Do not commit `.env`, credentials, runtime DBs, virtual environments, caches, logs, generated archives or large audit artifacts. Review the repository for secrets before every public synchronization.
+
+## Canonical Git baseline
+- Canonical reconciled code commit: `6e1aabe` — BotsTrader V3.36.0 research reconciliation.
+- All future IA/chat work must start from the current GitHub `main` branch and preserve this reconciled baseline unless a newer explicitly approved canonical commit replaces it.
+- Do not reconstruct work from older branches or local ZIPs when GitHub `main` contains newer certified changes.
