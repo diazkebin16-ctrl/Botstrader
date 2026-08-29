@@ -242,3 +242,13 @@ Test C; they are not forced into the present experiment.
 
 ## Post-Test-B component diagnostic
 Descriptive only. Records frozen BUY/SELL evidence on Test-B-comparable episodes. No weights, thresholds, gates, execution assumptions, or sample boundaries change. Final TEST holdout remains sealed.
+
+
+## E1 evidence-size classification (fixed before analysis)
+The effective E1 sample size is classified with fixed thresholds that must not be adjusted after seeing results:
+- `n < 15`: `UNDERPOWERED`
+- `15 <= n < 30`: `WEAK_LIMITED_EVIDENCE`
+- `n >= 30`: `USABLE`
+
+## E1 mechanically conditioned component exclusion
+`m1_score_contribution` is not part of the E1/BH-FDR family when the analytical population is conditioned on M1 confirmation of the selected/actionable side. Under that construction it is mechanically conditioned by the chosen-side definition and therefore is not statistically independent directional evidence. The exclusion must remain explicit; no post-hoc substitute is introduced to improve apparent results.
