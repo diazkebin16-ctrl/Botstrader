@@ -32,6 +32,10 @@ from research_evidence import (resolve_outcome as research_resolve_outcome, coll
 from session_regime import session_regime as detect_session_regime
 from instrument_registry import InstrumentRegistry
 from instrument_profiles import instrument_profile
+from slot_allocator import slot_policy
+from opportunity_ranker import rank_opportunities
+from broker_risk import OandaBrokerRiskAdapter
+from counterfactual_tracker import CounterfactualTracker
 from observability import (
     ObservabilityManager, DEPENDENCY_CRITICAL, DEPENDENCY_IMPORTANT, DEPENDENCY_NON_CRITICAL,
     stale_status as observability_stale_status, reconciliation_status as observability_reconciliation_status,
@@ -87,10 +91,72 @@ def _instrument_list(raw: str) -> List[str]:
 # receive broker order authority.  PAPER/practice defaults to the three approved
 # forward-collection instruments; secondary profiles explicitly deny LIVE.
 PRIMARY_INSTRUMENT = "EUR_USD"
-CONFIGURED_INSTRUMENTS = _instrument_list(os.getenv("INSTRUMENTS", "EUR_USD,GBP_USD,USD_JPY")) or [PRIMARY_INSTRUMENT]
+ANALYSIS_INSTRUMENTS = ("EUR_USD", "GBP_USD", "USD_JPY", "AUD_USD", "USD_CAD")
+
+def configured_instruments(raw: Optional[str] = None) -> List[str]:
+    """Resolve explicit analysis configuration; default/fallback is primary only."""
+    if raw is None:
+        raw = os.getenv("INSTRUMENTS", PRIMARY_INSTRUMENT)
+    requested = _instrument_list(raw)
+    allowed = [x for x in requested if x in ANALYSIS_INSTRUMENTS]
+    return allowed or [PRIMARY_INSTRUMENT]
+
+CONFIGURED_INSTRUMENTS = configured_instruments()
 INSTRUMENTS = [x for x in CONFIGURED_INSTRUMENTS if instrument_profile(x).allows_execution(TRADING_ENVIRONMENT, PRIMARY_OANDA_ENV)]
+
+# V3.37.0 execution coordination invariant: one active process/replica per broker
+# account. Distributed execution locking is intentionally out of scope. Detect
+# common local/process worker-count settings and fail closed for new batch orders
+# when they explicitly request more than one worker.
+EXECUTION_WORKER_MODE = "SINGLE_PROCESS_SINGLE_ACTIVE_REPLICA"
+DISTRIBUTED_EXECUTION_COORDINATION = False
+
+EXECUTION_WORKER_ENV_VARS = ("WEB_CONCURRENCY", "UVICORN_WORKERS", "GUNICORN_WORKERS")
+
+def execution_worker_configuration(env: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Validate every known local worker-count setting; any unsafe value fails closed.
+
+    Empty strings are treated as unset.  Horizontal execution scaling remains
+    unsupported: every explicitly configured value must be exactly 1.
+    """
+    source = os.environ if env is None else env
+    configured: Dict[str, int] = {}
+    invalid: Dict[str, Any] = {}
+    for name in EXECUTION_WORKER_ENV_VARS:
+        raw = source.get(name)
+        if raw is None or not str(raw).strip():
+            continue
+        try:
+            count = int(str(raw).strip())
+        except (TypeError, ValueError, OverflowError):
+            invalid[name] = raw
+            continue
+        configured[name] = count
+        if count != 1:
+            invalid[name] = raw
+    safe = not invalid
+    effective = 1 if not configured else max(configured.values())
+    if any(name in invalid and name not in configured for name in invalid):
+        effective = None
+    return {
+        "safe": safe,
+        "effective_workers": effective,
+        "configured": configured,
+        "invalid": invalid,
+        "distributed_coordination": False,
+    }
+
+def _configured_execution_worker_count() -> Optional[int]:
+    return execution_worker_configuration().get("effective_workers")
+
+EXECUTION_WORKER_CONFIG = execution_worker_configuration()
+EXECUTION_WORKER_COUNT = EXECUTION_WORKER_CONFIG.get("effective_workers")
+MULTI_WORKER_EXECUTION_BLOCKED = not bool(EXECUTION_WORKER_CONFIG.get("safe"))
 SHADOW_INSTRUMENTS = [x for x in _instrument_list(os.getenv("SHADOW_INSTRUMENTS", "")) if x not in INSTRUMENTS]
-SCAN_INSTRUMENTS = list(dict.fromkeys(INSTRUMENTS + SHADOW_INSTRUMENTS))
+# Analysis universe is intentionally broader than OANDA execution authority.
+# All five target FX pairs may execute only when explicitly configured and their
+# profiles/broker metadata authorize OANDA Practice. Secondary LIVE remains denied.
+SCAN_INSTRUMENTS = list(dict.fromkeys(CONFIGURED_INSTRUMENTS + SHADOW_INSTRUMENTS))
 INSTRUMENT_REGISTRY = InstrumentRegistry()
 _INSTRUMENT_METADATA_REFRESH_TS: Optional[datetime] = None
 INSTRUMENT_METADATA_REFRESH_SECONDS = max(300, int(os.getenv("INSTRUMENT_METADATA_REFRESH_SECONDS", "21600")))
@@ -192,6 +258,17 @@ ML_SHADOW = os.getenv("ML_SHADOW", "true").lower() == "true"
 ML_MIN_SAMPLES = max(50, int(os.getenv("ML_MIN_SAMPLES", "100")))
 ML_RETRAIN_HOURS = max(1, int(os.getenv("ML_RETRAIN_HOURS", "24")))
 OUTCOME_HORIZON_MIN = max(30, int(os.getenv("OUTCOME_HORIZON_MIN", "180")))
+COUNTERFACTUAL_SHADOW_ENABLED = os.getenv("COUNTERFACTUAL_SHADOW_ENABLED", "true").lower() == "true"
+COUNTERFACTUAL_HORIZON_BARS = max(1, int(os.getenv("COUNTERFACTUAL_HORIZON_BARS", str(OUTCOME_HORIZON_MIN))))
+_COUNTERFACTUAL_TRACKERS: Dict[str, CounterfactualTracker] = {}
+
+def counterfactual_tracker() -> CounterfactualTracker:
+    tracker=_COUNTERFACTUAL_TRACKERS.get(DB)
+    if tracker is None or tracker.horizon_bars != COUNTERFACTUAL_HORIZON_BARS:
+        tracker=CounterfactualTracker(DB,COUNTERFACTUAL_HORIZON_BARS)
+        _COUNTERFACTUAL_TRACKERS[DB]=tracker
+    return tracker
+
 RESEARCH_ROUND_TRIP_COST_PIPS = max(0.0, float(os.getenv("RESEARCH_ROUND_TRIP_COST_PIPS", "1.0")))
 RESEARCH_EPISODE_GAP_MINUTES = max(1, int(os.getenv("RESEARCH_EPISODE_GAP_MINUTES", "15")))
 ADAPTIVE_CONFIDENCE = os.getenv("ADAPTIVE_CONFIDENCE", "true").lower() == "true"
@@ -223,7 +300,7 @@ TREND_RUNNER_MIN_SCORE = max(0.0, float(os.getenv("TREND_RUNNER_MIN_SCORE", "0.6
 TREND_RUNNER_TP_R = max(2.0, float(os.getenv("TREND_RUNNER_TP_R", "3.0")))
 TREND_RUNNER_TRAIL_START_R = max(1.5, float(os.getenv("TREND_RUNNER_TRAIL_START_R", "1.75")))
 TREND_RUNNER_TRAIL_DISTANCE_R = max(0.40, float(os.getenv("TREND_RUNNER_TRAIL_DISTANCE_R", "0.90")))
-VERSION_TAG = "3.36.1"
+VERSION_TAG = "3.37.0"
 ENTRY_TIMING_ENABLED = os.getenv("ENTRY_TIMING_ENABLED", "true").lower() == "true"
 MAX_ENTRY_EXTENSION_ATR = max(0.5, float(os.getenv("MAX_ENTRY_EXTENSION_ATR", "1.50")))
 MIN_ROOM_TO_BARRIER_R = max(1.0, float(os.getenv("MIN_ROOM_TO_BARRIER_R", "1.50")))
@@ -1172,7 +1249,7 @@ def production_release_files() -> List[str]:
         "server.py","production_readiness.py","governance_engine.py","system_evaluation.py",
         "security_manager.py","recovery_manager.py","order_state.py","observability.py","smart_execution.py","ensemble_engine.py","capital_allocation.py",
         "adaptive_learning.py","validation_pipeline.py","deployment_manager.py","deployment_runtime.py",
-        "instrument_registry.py","instrument_profiles.py","requirements.txt","Dockerfile"
+        "instrument_registry.py","instrument_profiles.py","opportunity_ranker.py","slot_allocator.py","broker_risk.py","counterfactual_tracker.py","requirements.txt","Dockerfile"
     ]
     return [str(root/n) for n in names]
 
@@ -1773,6 +1850,24 @@ def conn() -> sqlite3.Connection:
             data_stale INTEGER NOT NULL DEFAULT 0,
             system_abnormal INTEGER NOT NULL DEFAULT 0,
             details_json TEXT NOT NULL DEFAULT '{}'
+        )
+    """)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS multi_asset_decision_cycles(
+            cycle_id TEXT PRIMARY KEY,
+            ts TEXT NOT NULL,
+            broker_mode TEXT NOT NULL,
+            trading_environment TEXT NOT NULL,
+            nlv REAL,
+            slot_tier TEXT,
+            max_slots INTEGER NOT NULL,
+            slots_available INTEGER NOT NULL,
+            open_positions INTEGER NOT NULL,
+            candidates_json TEXT NOT NULL DEFAULT '[]',
+            ranking_json TEXT NOT NULL DEFAULT '[]',
+            selected_json TEXT NOT NULL DEFAULT '[]',
+            rejected_json TEXT NOT NULL DEFAULT '[]',
+            metadata_json TEXT NOT NULL DEFAULT '{}'
         )
     """)
     c.execute("""
@@ -6513,12 +6608,17 @@ async def execute_recoverable(client: httpx.AsyncClient, r: Dict[str,Any],
                    "positionFill":"DEFAULT",
                    "stopLossOnFill":{"price":format_instrument_price(r["instrument"],r["stop"]),"timeInForce":"GTC"},
                    "takeProfitOnFill":{"price":format_instrument_price(r["instrument"],r.get("managed_target",r["target"])),"timeInForce":"GTC"}}}
+    # RecoveryManager's deterministic key is deliberately stable across scan cycles:
+    # the same instrument/side/strategy/market-time/geometry cannot be submitted twice
+    # after a retry or restart. Batch cycle/signal identity is retained as metadata.
     key=deterministic_intent_key(
         recovery_manager.account_scope,r["instrument"],r["signal"],setup_variant(r),
         r.get("candle_ts") or now_iso(),r["entry"],r["stop"],r.get("managed_target",r["target"]))
     version_ctx=security_version_context(r)
+    batch_intent_context=dict(r.get("_batch_execution_intent") or {})
     metadata={
         **version_ctx,
+        "batch_execution_intent": batch_intent_context,
         "market_regime":(r.get("market_regime") or {}).get("market_regime") if isinstance(r.get("market_regime"),dict) else None,
         "volatility_state":(r.get("market_regime") or {}).get("volatility_state") if isinstance(r.get("market_regime"),dict) else None,
         "trend_strength":(r.get("market_regime") or {}).get("trend_strength") if isinstance(r.get("market_regime"),dict) else None,
@@ -8971,7 +9071,7 @@ def _worker_heartbeat() -> None:
     state["worker_last_heartbeat"] = now_iso()
 
 
-async def scan(client: httpx.AsyncClient, inst: str) -> Dict[str, Any]:
+async def scan(client: httpx.AsyncClient, inst: str, *, batch_collect: bool=False) -> Dict[str, Any]:
     _worker_heartbeat()
     obs_scan_started=time.perf_counter()
     obs_trace_id=observability_manager.new_trace(inst,context={"instrument":inst,"cycle":state.get("cycles")}) if OBSERVABILITY_ENABLED else None
@@ -9004,6 +9104,15 @@ async def scan(client: httpx.AsyncClient, inst: str) -> Dict[str, Any]:
     # Run them off the asyncio event loop so broker management, watchdogs and
     # health heartbeats remain responsive even when the pending research set is large.
     resolved = await asyncio.to_thread(resolve_pending, inst, m1)
+    counterfactual_resolved = 0
+    if COUNTERFACTUAL_SHADOW_ENABLED:
+        try:
+            counterfactual_resolved = await asyncio.to_thread(counterfactual_tracker().resolve_open, inst, m1)
+        except Exception as e:
+            log.exception("counterfactual shadow resolution failed instrument=%s: %s",inst,e)
+            if OBSERVABILITY_ENABLED:
+                observability_manager.alert(f"COUNTERFACTUAL_TRACKER:{inst}","WARNING","Observability","COUNTERFACTUAL_TRACKER_FAILURE",
+                                            f"Counterfactual shadow resolution failed for {inst}",details={"error":str(e),"instrument":inst,"execution_authority":False})
     shadow_resolved = await asyncio.to_thread(resolve_shadow_trials, inst, m1)
     candidate_paper_resolved = (
         await asyncio.to_thread(resolve_candidate_paper_trades, inst, m1)
@@ -9204,6 +9313,11 @@ async def scan(client: httpx.AsyncClient, inst: str) -> Dict[str, Any]:
     r["portfolio_execution_guard"]=portfolio_guard
 
     decision = execution_decision(r, conf)
+    # Strategy-valid candidates are ranked before broker/instrument/portfolio
+    # authorization. This lets all five analysis instruments compete while
+    # preserving fail-closed execution for OANDA-disabled symbols.
+    batch_strategy_eligible = bool(decision.get("execute"))
+    batch_strategy_reason = str(decision.get("reason") or "")
     if not portfolio_guard["allow"]:
         decision={"execute":False,"reason":"GLOBAL_PORTFOLIO_RISK_GUARD: "+", ".join(portfolio_guard["reasons"])}
     r["instrument_mode"]=instrument_mode(inst)
@@ -9255,6 +9369,10 @@ async def scan(client: httpx.AsyncClient, inst: str) -> Dict[str, Any]:
                     decision={"execute":False,"reason":"SECURITY_REAL_ORDER_GUARD: "+", ".join(sec_guard.get("reasons") or [])}
     if OBSERVABILITY_ENABLED:
         _obs_module("Execution Engine","OK",last_operation="execution decision evaluated",details={"instrument":inst,"execute":decision.get("execute"),"reason":decision.get("reason")})
+    batch_selection_eligible = bool(batch_strategy_eligible) if batch_collect else bool(decision.get("execute"))
+    batch_preselection_reason = batch_strategy_reason if batch_collect else str(decision.get("reason") or "")
+    if batch_collect and batch_selection_eligible:
+        decision={"execute":False,"reason":"MULTI_ASSET_BATCH_COLLECT: strategy-valid candidate deferred until ranking/slot/broker/portfolio selection"}
     pre_execution_reason = str(decision["reason"])
     executed, oid = 0, ""
     trade_id=""; fill={}; fill_price=None; slippage=None
@@ -9508,6 +9626,17 @@ async def scan(client: httpx.AsyncClient, inst: str) -> Dict[str, Any]:
         "performance_penalty": conf.get("performance_penalty"),
         "setup_variant": conf.get("variant"),
         "decision": decision,
+        "batch_selection_eligible": bool(batch_selection_eligible),
+        "batch_preselection_reason": batch_preselection_reason,
+        "_batch_context": {
+            "confidence": conf,
+            "director": director,
+            "director_id": director_id,
+            "risk_shadow": risk_shadow,
+            "risk_shadow_id": risk_shadow_id,
+            "ml_probability": mlp,
+            "signal_id": signal_id,
+        } if batch_collect else None,
         "management_updates_this_cycle": managed_changes,
         "trend_runner": r.get("trend_runner",False),
         "trend_score": r.get("trend_score",0.0),
@@ -9559,15 +9688,289 @@ def scanner_health_snapshot() -> Dict[str, Any]:
     }
 
 
+async def _batch_scan_candidate(client: httpx.AsyncClient, inst: str) -> Dict[str, Any]:
+    """Collect a full pre-entry decision without sending an order.
+
+    Compatibility fallback is only for test doubles whose signature predates
+    V3.37.0; the production scan() supports batch_collect explicitly.
+    """
+    try:
+        return await scan(client,inst,batch_collect=True)
+    except TypeError as e:
+        if "batch_collect" not in str(e):
+            raise
+        return await scan(client,inst)
+
+
+def _oanda_batch_broker_guard(candidate: Dict[str, Any], selected: List[Dict[str, Any]],
+                              risk_context: Dict[str, Any]) -> Dict[str, Any]:
+    inst=InstrumentRegistry.normalize_symbol(candidate.get("instrument"))
+    meta=instrument_metadata(inst)
+    adapter=OandaBrokerRiskAdapter()
+    secondary=inst!=PRIMARY_INSTRUMENT
+    context={
+        "environment":TRADING_ENVIRONMENT,
+        "instrument_execution_allowed":instrument_mode(inst)=="ENABLED",
+        "secondary_instrument":secondary,
+        "metadata_verified":(meta.source=="OANDA") if secondary else True,
+        "available_margin_ok":not (
+            risk_context.get("margin_usage") is not None and
+            float(risk_context.get("margin_usage"))>=float(managed_value("risk.max_margin_usage",RISK_MAX_MARGIN_USAGE))
+        ),
+    }
+    return adapter.prospective_check(candidate,selected,context).as_dict()
+
+
+def _batch_portfolio_guard(candidate: Dict[str, Any], selected: List[Dict[str, Any]],
+                           risk_context: Dict[str, Any]) -> Dict[str, Any]:
+    ctx=dict(risk_context or {})
+    open_instruments=list(ctx.get("open_instruments") or [])
+    pending=[]
+    for x in selected:
+        symbol=InstrumentRegistry.normalize_symbol(x.get("instrument"))
+        if symbol and symbol not in open_instruments:
+            open_instruments.append(symbol)
+            pending.append(x)
+    ctx["open_instruments"]=open_instruments
+    max_trade=float(managed_value("risk.max_trade_fraction",RISK_MAX_TRADE_FRACTION))
+    # Fresh broker context may already include a just-confirmed first fill. Only
+    # simulate selected exposure that is not yet represented in that snapshot.
+    ctx["portfolio_open_risk"]=float(ctx.get("portfolio_open_risk") or 0.0)+(len(pending)*max_trade)
+    return portfolio_execution_guard(candidate.get("instrument"),ctx,prospective_trade_risk=max_trade)
+
+
+def _counterfactual_rejection_category(reason: str) -> str:
+    reason=str(reason or "")
+    if reason in {"NO_SLOT_AVAILABLE","NO_SLOT","LOWER_RANK","BEST_SAFE_SET_NOT_SELECTED"}:return "SELECTION_REJECTED"
+    if reason in {"GLOBAL_PORTFOLIO_RISK_GUARD","BROKER_RISK_GUARD","INSTRUMENT_METADATA_UNVERIFIED",
+                  "GLOBAL_ENTRY_TIME_GATE","RECOVERY_SAFE_MODE","SINGLE_EXECUTION_WORKER_REQUIRED","AUTO_TRADE=false"}:return "SAFETY_REJECTED"
+    if reason in {"BROKER_EXPLICIT_REJECTION","ORDER_STATUS_UNKNOWN","ORDER_SUBMITTED_NOT_CONFIRMED",
+                  "BROKER_RESULT_MISSING","BROKER_RESULT_WITHOUT_CONFIRMED_FILL","DUPLICATE_INTENT_REQUIRES_RECONCILIATION"}:return "EXECUTION_REJECTED"
+    return "OTHER_REJECTED"
+
+
+def _shadow_candidate_safety(candidate: Dict[str,Any], risk_context: Dict[str,Any]) -> Dict[str,Any]:
+    """Read-only classification for selector observability; never changes productive authority."""
+    inst=InstrumentRegistry.normalize_symbol(candidate.get("instrument"))
+    if instrument_mode(inst)!="ENABLED":return {"safe":False,"reason":"EXECUTION_ELIGIBILITY"}
+    if inst!=PRIMARY_INSTRUMENT and instrument_metadata(inst).source!="OANDA":return {"safe":False,"reason":"METADATA"}
+    pg=_batch_portfolio_guard(candidate,[],risk_context)
+    if not pg.get("allow"):return {"safe":False,"reason":"PORTFOLIO_RISK","details":pg}
+    bg=_oanda_batch_broker_guard(candidate,[],risk_context)
+    if not bg.get("allow"):return {"safe":False,"reason":"BROKER_RISK","details":bg}
+    if not new_entry_time_gate().get("allowed"):return {"safe":False,"reason":"GLOBAL_GATE"}
+    if RECOVERY_MANAGER_ENABLED and not recovery_manager.new_trades_allowed():return {"safe":False,"reason":"RECOVERY"}
+    return {"safe":True,"reason":"SELECTION_ONLY"}
+
+
+def _record_counterfactual_cycle(cycle: Dict[str,Any], ranked: List[Any], allocation: Dict[str,Any],
+                                 executions: List[Dict[str,Any]], risk_context: Dict[str,Any]) -> Dict[str,Any]:
+    """Persist selector evidence after productive decisions; failures are isolated and observable."""
+    if not COUNTERFACTUAL_SHADOW_ENABLED:return {"enabled":False,"created":0}
+    tracker=counterfactual_tracker();selected=allocation.get("selected") or []
+    winner=None
+    if selected:
+        best=min(selected,key=lambda x: next((i for i,r in enumerate(ranked,1) if r.instrument==x.get("instrument")),10**9))
+        winner_rank=next((i for i,r in enumerate(ranked,1) if r.instrument==best.get("instrument")),None)
+        ex=next((x for x in executions if x.get("executed") and x.get("instrument")==best.get("instrument")),{})
+        intent=ex.get("intent") or {}
+        batch=best.get("_batch_context") or {}
+        winner={"instrument":best.get("instrument"),"rank":winner_rank,"rank_score":best.get("opportunity_rank_score"),
+                "signal_id":batch.get("signal_id") or best.get("signal_id"),"trade_id":ex.get("trade_id"),
+                "intent_id":intent.get("execution_intent_id")}
+    selected_symbols={x.get("instrument") for x in selected}
+    rejected_by_inst={x.get("instrument"):x for x in allocation.get("rejected") or []}
+    created=0;events=0
+    for rank,item in enumerate(ranked,1):
+        if item.instrument in selected_symbols:continue
+        rej=rejected_by_inst.get(item.instrument) or {}
+        reason=rej.get("reason") or "NOT_SELECTED"
+        if reason=="NO_SLOT_AVAILABLE":
+            safety=_shadow_candidate_safety(item.candidate,risk_context)
+            if safety.get("safe") and winner:
+                out=tracker.record_selection_rejected(cycle_id=cycle["cycle_id"],candidate=item.candidate,rank=rank,
+                    rank_score=item.rank_score,components=item.components,slot_capacity=cycle["max_slots"],
+                    slots_available=cycle["slots_available"],cycle_size=len(ranked),winner=winner,rejection_reason="NO_SLOT")
+                created+=int(out.get("created",False))
+            else:
+                tracker.record_non_counterfactual_rejection(cycle_id=cycle["cycle_id"],instrument=item.instrument,
+                    reason=safety.get("reason") or reason,category="SAFETY_REJECTED",detail={"rank":rank,"rank_score":item.rank_score})
+                events+=1
+        else:
+            category=_counterfactual_rejection_category(reason)
+            tracker.record_non_counterfactual_rejection(cycle_id=cycle["cycle_id"],instrument=item.instrument,
+                reason=reason,category=category,detail={"rank":rank,"rank_score":item.rank_score})
+            events+=1
+    if winner:
+        tracker.link_winner(cycle["cycle_id"],**winner)
+    return {"enabled":True,"created":created,"non_counterfactual_rejections":events,
+            "execution_authority":False,"research_authority":False,"look_ahead":False}
+
+
+def _persist_multi_asset_cycle(cycle: Dict[str, Any]) -> None:
+    c=conn()
+    c.execute("""INSERT OR REPLACE INTO multi_asset_decision_cycles(
+      cycle_id,ts,broker_mode,trading_environment,nlv,slot_tier,max_slots,slots_available,
+      open_positions,candidates_json,ranking_json,selected_json,rejected_json,metadata_json)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+      (cycle["cycle_id"],cycle["ts"],cycle["broker_mode"],TRADING_ENVIRONMENT,cycle.get("nlv"),
+       cycle.get("slot_tier"),int(cycle.get("max_slots") or 0),int(cycle.get("slots_available") or 0),
+       int(cycle.get("open_positions") or 0),json.dumps(cycle.get("candidates") or [],separators=(",",":"),default=str),
+       json.dumps(cycle.get("ranking") or [],separators=(",",":"),default=str),
+       json.dumps(cycle.get("selected") or [],separators=(",",":"),default=str),
+       json.dumps(cycle.get("rejected") or [],separators=(",",":"),default=str),
+       json.dumps(cycle.get("metadata") or {},separators=(",",":"),default=str)))
+    c.commit();c.close()
+
+
+async def execute_ranked_candidate(client: httpx.AsyncClient, candidate: Dict[str, Any], cycle_id: str,
+                                   *, rank: Optional[int] = None, slot_index: Optional[int] = None,
+                                   selected_confirmed: Optional[List[Dict[str, Any]]] = None,
+                                   max_slots: Optional[int] = None) -> Dict[str, Any]:
+    """Freshly revalidate and submit one ranked OANDA candidate.
+
+    Clear pre-submit rejections and explicit broker rejections may fall through to
+    the next ranked candidate. Any submitted/unknown outcome blocks fallback until
+    RecoveryManager reconciliation establishes authoritative broker state.
+    """
+    inst=InstrumentRegistry.normalize_symbol(candidate.get("instrument"))
+    selected_confirmed=list(selected_confirmed or [])
+    try:
+        ctx=await build_broker_risk_context(client)
+    except Exception as e:
+        return {"executed":False,"instrument":inst,"reason":"BROKER_RISK_CONTEXT_UNAVAILABLE",
+                "pre_execution_rejection":True,"fallback_allowed":True,"error":str(e)}
+    if max_slots is not None and int(ctx.get("open_positions") or 0) >= int(max_slots):
+        return {"executed":False,"instrument":inst,"reason":"NO_FRESH_SLOT_AVAILABLE",
+                "pre_execution_rejection":True,"fallback_allowed":True}
+    guard=_batch_portfolio_guard(candidate,selected_confirmed,ctx)
+    if not guard.get("allow"):
+        return {"executed":False,"instrument":inst,"reason":"GLOBAL_PORTFOLIO_RISK_GUARD","guard":guard,
+                "pre_execution_rejection":True,"fallback_allowed":True}
+    if inst != PRIMARY_INSTRUMENT and instrument_metadata(inst).source != "OANDA":
+        try:
+            await refresh_instrument_metadata(client,[inst],force=True)
+        except Exception as e:
+            return {"executed":False,"instrument":inst,"reason":"INSTRUMENT_METADATA_UNVERIFIED",
+                    "pre_execution_rejection":True,"fallback_allowed":True,"error":str(e)}
+        if instrument_metadata(inst).source != "OANDA":
+            return {"executed":False,"instrument":inst,"reason":"INSTRUMENT_METADATA_UNVERIFIED",
+                    "pre_execution_rejection":True,"fallback_allowed":True}
+    broker_guard=_oanda_batch_broker_guard(candidate,selected_confirmed,ctx)
+    if not broker_guard.get("allow"):
+        return {"executed":False,"instrument":inst,"reason":"BROKER_RISK_GUARD","guard":broker_guard,
+                "pre_execution_rejection":True,"fallback_allowed":True}
+    if not new_entry_time_gate().get("allowed"):
+        return {"executed":False,"instrument":inst,"reason":"GLOBAL_ENTRY_TIME_GATE",
+                "pre_execution_rejection":True,"fallback_allowed":True}
+    if RECOVERY_MANAGER_ENABLED and not recovery_manager.new_trades_allowed():
+        return {"executed":False,"instrument":inst,"reason":"RECOVERY_SAFE_MODE",
+                "pre_execution_rejection":True,"fallback_allowed":True}
+    if not (AUTO and bool(managed_value("execution.auto_trade",AUTO))):
+        return {"executed":False,"instrument":inst,"reason":"AUTO_TRADE=false",
+                "pre_execution_rejection":True,"fallback_allowed":True}
+
+    batch_ctx=candidate.get("_batch_context") or {}
+    signal_id=(batch_ctx.get("signal_id") or candidate.get("signal_id"))
+    candidate["broker_risk_context"]=ctx
+    candidate["portfolio_execution_guard"]=guard
+    candidate["_batch_execution_intent"]={
+        "cycle_id":cycle_id,"instrument":inst,"signal_id":signal_id,
+        "decision_id":batch_ctx.get("director_id"),"created_at":now_iso(),
+        "status":"RESERVED","rank":rank,"slot_index":slot_index,
+        "broker":"OANDA","environment":TRADING_ENVIRONMENT,
+    }
+    trace_id=candidate.get("correlation_id")
+    x=await execute_recoverable(
+        client,candidate,trace_id,batch_ctx.get("director_id"),batch_ctx.get("risk_shadow_id")
+    ) if RECOVERY_MANAGER_ENABLED else await execute(client,candidate)
+    intent_obj=(x or {}).get("intent") if isinstance(x,dict) else None
+    intent_state=(intent_obj or {}).get("state")
+    if not x:
+        return {"executed":False,"instrument":inst,"reason":"BROKER_RESULT_MISSING",
+                "uncertain":True,"fallback_allowed":False}
+    if x.get("status_unknown"):
+        return {"executed":False,"instrument":inst,"reason":"ORDER_STATUS_UNKNOWN","broker_result":x,
+                "intent":intent_obj,"intent_state":intent_state or "UNKNOWN","uncertain":True,"fallback_allowed":False}
+    if x.get("submitted") or intent_state in {"SUBMITTING","SUBMITTED","ACKNOWLEDGED","UNKNOWN"}:
+        return {"executed":False,"instrument":inst,"reason":"ORDER_SUBMITTED_NOT_CONFIRMED","broker_result":x,
+                "intent":intent_obj,"intent_state":intent_state,"uncertain":True,"fallback_allowed":False}
+    if x.get("rejected"):
+        return {"executed":False,"instrument":inst,"reason":"BROKER_EXPLICIT_REJECTION","broker_result":x,
+                "intent":intent_obj,"intent_state":intent_state or "REJECTED","explicit_rejection":True,"fallback_allowed":True}
+    if x.get("skipped"):
+        duplicate=x.get("skipped")=="DUPLICATE_INTENT_PREVENTED"
+        existing_state=(intent_obj or {}).get("state")
+        if duplicate and existing_state not in {"REJECTED","CANCELLED"}:
+            return {"executed":False,"instrument":inst,"reason":"DUPLICATE_INTENT_REQUIRES_RECONCILIATION",
+                    "broker_result":x,"intent":intent_obj,"intent_state":existing_state,
+                    "uncertain":True,"fallback_allowed":False}
+        return {"executed":False,"instrument":inst,"reason":str(x.get("skipped")),"broker_result":x,
+                "intent":intent_obj,"intent_state":existing_state,"pre_execution_rejection":True,"fallback_allowed":True}
+
+    fill=x.get("orderFillTransaction") or {}
+    if not fill:
+        return {"executed":False,"instrument":inst,"reason":"BROKER_RESULT_WITHOUT_CONFIRMED_FILL","broker_result":x,
+                "intent":intent_obj,"intent_state":intent_state,"uncertain":True,"fallback_allowed":False}
+    order_id=str(fill.get("id") or "")
+    trade_id=str((fill.get("tradeOpened") or {}).get("tradeID") or "")
+    fill_price=float(fill.get("price") or candidate.get("entry"))
+    actual_units=_risk_float((fill.get("tradeOpened") or {}).get("units"))
+    if actual_units is None:
+        actual_units=_risk_float(x.get("filled_units"),UNITS)
+    protection=await verify_trade_protection(client,trade_id) if trade_id else {"status":"UNKNOWN","sl_ok":False,"tp_ok":False,"detail":"missing trade id"}
+    if trade_id:
+        register_trade_management(trade_id,candidate,float(candidate.get("managed_target",candidate.get("target"))),actual_units,fill_price)
+    slip=(fill_price-float(candidate.get("entry")))/pip_size(inst)
+    if candidate.get("signal")=="SELL": slip=-slip
+    if signal_id:
+        c=conn()
+        c.execute("UPDATE signals SET executed=1,order_id=?,decision_reason=decision_reason||? WHERE id=?",
+                  (order_id,f"; BATCH_SELECTED cycle={cycle_id}",signal_id))
+        try:c.execute("UPDATE learning_samples SET executed=1 WHERE signal_id=?",(signal_id,))
+        except sqlite3.OperationalError:pass
+        c.commit();c.close()
+        if RECOVERY_MANAGER_ENABLED and intent_obj and intent_obj.get("execution_intent_id"):
+            recovery_manager.link_signal(intent_obj["execution_intent_id"],int(signal_id))
+    conf=batch_ctx.get("confidence") or {"probability":candidate.get("dynamic_confidence"),"source":candidate.get("confidence_source"),"samples":candidate.get("confidence_samples"),"variant":candidate.get("setup_variant")}
+    director=batch_ctx.get("director") or candidate.get("ai_strategy_director") or {}
+    risk_shadow=batch_ctx.get("risk_shadow") or candidate.get("adaptive_risk_engine") or {}
+    if trade_id and signal_id:
+        record_trade_memory_entry(
+            trade_id=trade_id,signal_id=int(signal_id),order_id=order_id,r=candidate,conf=conf,
+            director=director,risk_shadow=risk_shadow,pre_execution_reason=f"BATCH_SELECTED cycle={cycle_id}",
+            fill=fill,fill_price=float(fill_price),entry_slippage_pips=slip
+        )
+    save_decision(candidate,conf,1,f"BATCH_SELECTED cycle={cycle_id}; broker fill confirmed")
+    if trace_id:
+        observability_manager.link_trace(trace_id,signal_id=signal_id,order_id=order_id or None,trade_id=trade_id or None,symbol=inst)
+    c=conn(); c.execute("""INSERT INTO execution_audit(ts,signal_id,instrument,order_id,trade_id,expected_entry,fill_price,slippage_pips,
+      stop_loss_ok,take_profit_ok,protection_status,detail) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
+      (now_iso(),signal_id,inst,order_id,trade_id,candidate.get("entry"),fill_price,slip,
+       int(bool(protection.get("sl_ok"))),int(bool(protection.get("tp_ok"))),protection.get("status"),
+       f"V3.37 batch cycle={cycle_id}; {protection.get('detail')}"))
+    c.commit();c.close()
+    return {"executed":True,"instrument":inst,"order_id":order_id,"trade_id":trade_id,
+            "fill_price":fill_price,"slippage_pips":slip,"protection":protection,"cycle_id":cycle_id,
+            "intent":intent_obj,"intent_state":intent_state or "FILLED","fallback_allowed":False}
+
+
 async def scan_instruments_once(client: httpx.AsyncClient) -> bool:
-    """Run one instrument pass with strict per-symbol failure isolation."""
+    """COLLECT -> RANK -> SLOT/BROKER/PORTFOLIO CHECK -> EXECUTE.
+
+    Every configured analysis instrument is collected before any new order is
+    sent, eliminating loop-order slot bias. Existing open-trade management still
+    runs inside each scan and remains independent of new-entry selection.
+    """
     cycle_ok=True
+    collected=[]
     for inst in SCAN_INSTRUMENTS:
         try:
             if WEEKEND_RESEARCH_ENABLED and market_is_weekend_closed():
                 snap=await collect_weekend_news_snapshot(client,inst)
                 state.setdefault("weekend_research",{})[inst]=snap
-            result=await scan(client,inst)
+            result=await _batch_scan_candidate(client,inst)
+            collected.append(result)
             state["last_results"][inst]=result
             state.setdefault("instrument_state",{})[inst]={
                 "instrument":inst,"mode":instrument_mode(inst),"last_scan":now_iso(),"ok":True,
@@ -9590,6 +9993,96 @@ async def scan_instruments_once(client: httpx.AsyncClient) -> bool:
                 observability_manager.alert(f"SCAN_FAILURE:{inst}","HIGH","Execution Engine","SCAN_FAILURE",
                                             f"Scan failed for {inst}",details={"error":str(e),"instrument":inst})
             log.exception("scan failed for %s",inst)
+
+    eligible=[x for x in collected if isinstance(x,dict) and x.get("batch_selection_eligible") and x.get("signal") in ("BUY","SELL")]
+    try:
+        risk_context=await build_broker_risk_context(client)
+    except Exception as e:
+        risk_context={"nav":0.0,"open_positions":0,"open_instruments":[],"portfolio_open_risk":0.0,
+                      "margin_usage":None,"system_abnormal":True,"errors":[str(e)]}
+        cycle_ok=False
+    nlv=float(risk_context.get("nav") or 0.0)
+    policy=slot_policy(nlv)
+    slots_available=max(0,int(policy["max_slots"])-max(0,int(risk_context.get("open_positions") or 0)))
+    ranked=rank_opportunities(eligible)
+    allocation={
+        "policy":policy,"slots_available":slots_available,"selected":[],"rejected":[],
+        "ranking":[{"rank":i+1,"instrument":x.instrument,"rank_score":x.rank_score,"components":x.components}
+                   for i,x in enumerate(ranked)],
+    }
+    cycle_id="MA-"+datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
+    executions=[]
+    confirmed=[]
+    if MULTI_WORKER_EXECUTION_BLOCKED and ranked:
+        allocation["rejected"].extend({
+            "instrument":x.instrument,"reason":"SINGLE_EXECUTION_WORKER_REQUIRED",
+            "details":EXECUTION_WORKER_CONFIG,"rank_score":x.rank_score,
+        } for x in ranked)
+        cycle_ok=False
+    else:
+        for rank_index,item in enumerate(ranked,1):
+            if len(confirmed)>=slots_available:
+                allocation["rejected"].append({"instrument":item.instrument,"reason":"NO_SLOT_AVAILABLE","rank_score":item.rank_score})
+                continue
+            selected_candidate={**item.candidate,
+                "opportunity_rank_score":item.rank_score,
+                "opportunity_rank_components":item.components,
+                "selection_reason":"highest_ranked_candidate_passing_fresh_hard_guards",
+            }
+            # Every submit gets a fresh broker/account/portfolio/metadata/recovery
+            # revalidation. A confirmed first fill therefore changes the context
+            # used before a possible second slot is submitted.
+            result=await execute_ranked_candidate(
+                client,selected_candidate,cycle_id,rank=rank_index,slot_index=len(confirmed)+1,
+                selected_confirmed=confirmed,max_slots=int(policy["max_slots"]),
+            )
+            executions.append(result)
+            if result.get("executed"):
+                confirmed.append(selected_candidate)
+                allocation["selected"].append(selected_candidate)
+                state["last_results"][selected_candidate["instrument"]]={**state["last_results"].get(selected_candidate["instrument"],{}),
+                                                                         "batch_execution":result,"executed":True}
+                continue
+            allocation["rejected"].append({
+                "instrument":item.instrument,"reason":result.get("reason") or "EXECUTION_REJECTED",
+                "details":result,"rank_score":item.rank_score,
+                "fallback_allowed":bool(result.get("fallback_allowed")),
+            })
+            if result.get("uncertain") or not result.get("fallback_allowed",False):
+                # A submit may have reached OANDA. Do not consume another candidate
+                # until RecoveryManager reconciliation resolves the intent.
+                cycle_ok=False
+                break
+
+    cycle={
+        "cycle_id":cycle_id,"ts":now_iso(),"broker_mode":"OANDA_PRACTICE_BATCH_SELECTOR",
+        "nlv":nlv,"slot_tier":allocation["policy"]["tier"],"max_slots":allocation["policy"]["max_slots"],
+        "slots_available":allocation["slots_available"],"open_positions":int(risk_context.get("open_positions") or 0),
+        "candidates":[{"instrument":x.get("instrument"),"signal":x.get("signal"),"score":x.get("score"),
+                       "dynamic_confidence":x.get("dynamic_confidence"),"rr_raw":x.get("rr_raw"),
+                       "metadata_verified":instrument_metadata(x.get("instrument")).source=="OANDA",
+                       "instrument_mode":instrument_mode(x.get("instrument"))} for x in eligible],
+        "ranking":allocation.get("ranking") or [],
+        "selected":[{"instrument":x.get("instrument"),"rank_score":x.get("opportunity_rank_score")} for x in allocation.get("selected") or []],
+        "rejected":allocation.get("rejected") or [],
+        "metadata":{"executions":executions,"execution_intents":[x.get("intent") for x in executions if x.get("intent")],
+                    "uncertain_submit":any(bool(x.get("uncertain")) for x in executions),
+                    "fallback_attempted":len(executions)>len(allocation.get("selected") or []),
+                    "worker_configuration":EXECUTION_WORKER_CONFIG,
+                    "research_authority":False,"ibkr_execution_authority":False,
+                    "look_ahead":False,"configured_universe":list(SCAN_INSTRUMENTS)},
+    }
+    try:
+        cf_obs=_record_counterfactual_cycle(cycle,ranked,allocation,executions,risk_context)
+        cycle["metadata"]["counterfactual_shadow"]=cf_obs
+    except Exception as e:
+        log.exception("counterfactual shadow persistence failed cycle=%s: %s",cycle_id,e)
+        cycle["metadata"]["counterfactual_shadow"]={"enabled":True,"error":str(e),"execution_authority":False,"research_authority":False}
+        if OBSERVABILITY_ENABLED:
+            observability_manager.alert(f"COUNTERFACTUAL_TRACKER:{cycle_id}","WARNING","Observability","COUNTERFACTUAL_TRACKER_FAILURE",
+                                        "Counterfactual shadow persistence failed",details={"cycle_id":cycle_id,"error":str(e),"execution_authority":False})
+    state["multi_asset_decision_cycle"]=cycle
+    _persist_multi_asset_cycle(cycle)
     return cycle_ok
 
 
@@ -11464,7 +11957,7 @@ async def discovery():
 async def home():
     return """<!doctype html><html lang='es'><meta name='viewport' content='width=device-width'><title>Market Alert V3.27</title>
 <style>body{font-family:system-ui;background:#0b1020;color:#eef2ff;max-width:1050px;margin:auto;padding:24px}.c{background:#151c32;border:1px solid #2c3656;border-radius:16px;padding:18px;margin:12px 0}pre{white-space:pre-wrap;word-break:break-word;background:#080c17;padding:14px;border-radius:12px}.tag{display:inline-block;padding:5px 9px;border-radius:999px;background:#25304f;margin-right:6px}</style>
-<h1>BotsTrader V3.36.1 · Multi-Asset PAPER Isolation</h1><div class=c><span class=tag>OANDA PRACTICE ONLY</span><span class=tag>24/7</span><span class=tag>Sin límite diario</span><span class=tag>Confianza calibrada</span>
+<h1>BotsTrader V3.37.0 · IBKR Multi-Asset Preparation</h1><div class=c><span class=tag>OANDA PRACTICE ONLY</span><span class=tag>24/7</span><span class=tag>Sin límite diario</span><span class=tag>Confianza calibrada</span>
 <p><b>Quality Score ≠ probabilidad.</b> La confianza dinámica se calibra con resultados reales. Con poca muestra se limita deliberadamente y el 90% requiere evidencia sustancial.</p></div>
 <div class=c><h2>Estado</h2><pre id=s>Cargando…</pre></div><div class=c><h2>Aprendizaje</h2><pre id=l>Cargando…</pre></div><div class=c><h2>Última decisión</h2><pre id=d>Cargando…</pre></div><div class=c><h2>Últimas señales</h2><pre id=h>Cargando…</pre></div>
 <script>async function u(){s.textContent=JSON.stringify(await fetch('/api/status').then(r=>r.json()),null,2);l.textContent=JSON.stringify(await fetch('/api/learning').then(r=>r.json()),null,2);d.textContent=JSON.stringify(await fetch('/api/decisions?limit=5').then(r=>r.json()),null,2);h.textContent=JSON.stringify(await fetch('/api/signals?limit=15').then(r=>r.json()),null,2)}u();setInterval(u,15000)</script></html>"""

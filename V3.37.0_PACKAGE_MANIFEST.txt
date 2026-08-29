@@ -1,0 +1,51 @@
+BotsTrader V3.37.0 IBKR MULTI-ASSET PREPARATION — PACKAGE MANIFEST
+
+Canonical source commit:
+1a35f004a467cb4f38a5004f43ed0ed5d7c6d35f
+
+Package status:
+DEVELOPMENT / LOCAL VALIDATION ONLY
+NOT DEPLOYMENT-CERTIFIED
+
+Five-pair analysis universe:
+EUR_USD, GBP_USD, USD_JPY, AUD_USD, USD_CAD
+
+Excluded from clean package:
+.git/
+.env and .env-like files
+.venv/ and venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+runtime DB/sqlite/WAL/SHM files
+credentials/tokens/secrets
+internal ZIP/TAR/GZ archives
+temporary/backup files
+
+Railway: NOT TOUCHED / NOT DEPLOYED
+IBKR: NOT CONNECTED / NO ORDER AUTHORITY
+LIVE: NOT ENABLED
+
+HARDENING RE-AUDIT CANDIDATE
+Package target: BotsTrader_V3.37.0_IBKR_MULTI_ASSET_PREPARATION_HARDENED.zip
+Version remains 3.37.0. First independent review was NOT ACCEPTED; this package contains only controlled hardening fixes/evidence for re-audit.
+
+
+FIVE-PAIR EXECUTION CANDIDATE
+Base package SHA-256: 3454cd514a9ef997135876f7d248c1b9a6ad6f961176cf050cb05a1e74c3b218
+Target package: BotsTrader_V3.37.0_FIVE_PAIR_EXECUTION_HARDENED.zip
+OANDA Practice/PAPER profiles: EUR_USD, GBP_USD, USD_JPY, AUD_USD, USD_CAD.
+Secondary LIVE: DENIED.
+IBKR execution authority: FALSE.
+Single active execution replica/worker per broker account remains required.
+
+
+RAILWAY PREDEPLOYMENT FINAL — COUNTERFACTUAL OBSERVABILITY
+Base SHA-256: 53b794ab1c0ee36aeaa3e65045c2f5418410d9bfec96df3a873a2942ba897458
+Added runtime module: counterfactual_tracker.py
+Added tests: test_counterfactual_selector_observability_v3370.py
+Added documentation: COUNTERFACTUAL_SELECTOR_OBSERVABILITY_V3.37.0.md
+Runtime Integrity/release fingerprint includes counterfactual_tracker.py for evidence integrity; module authority remains FALSE.
+Final expected validation: 394 passed / 0 failed / 4 warnings.
+No files removed from accepted base.
+Productive ranker, slot allocator, broker risk, profiles, instrument registry, and recovery manager remain byte-identical.

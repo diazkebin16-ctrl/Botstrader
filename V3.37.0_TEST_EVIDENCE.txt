@@ -1,0 +1,175 @@
+BotsTrader V3.37.0 — IBKR MULTI-ASSET PREPARATION
+LOCAL IMPLEMENTATION / HARDENING / VALIDATION EVIDENCE
+
+CANONICAL BASELINE
+GitHub main / V3.36.1 canonical commit:
+1a35f004a467cb4f38a5004f43ed0ed5d7c6d35f
+
+VERSION
+VERSION_TAG = 3.37.0
+Deployment certification: NOT CLAIMED
+
+COMPILE
+python -m compileall -q .
+PASS
+
+V3.37.0 FOCUSED SUITE
+pytest -q test_v3370_ibkr_multi_asset_preparation.py
+27 passed, 0 failed, 4 warnings
+
+MULTI-ASSET + FORWARD REGRESSION
+pytest -q test_multi_asset_foundation_v3360.py test_multi_asset_paper_isolation_v3361.py test_forward_observability.py test_forward_paper_release.py
+52 passed, 0 failed, 4 warnings
+
+SECURITY / RUNTIME / RECOVERY / PRODUCTION READINESS
+pytest -q test_security_manager.py test_security_integration.py test_v327_runtime_hardening.py test_recovery_manager.py test_recovery_orphan_quarantine.py test_production_readiness.py
+40 passed, 0 failed, 4 warnings
+
+INTEGRATION / RISK / ANOMALY
+pytest -q test_system_integration_framework.py test_smart_execution.py test_smart_execution_integration.py test_capital_allocation.py test_governance_engine.py test_system_evaluation.py test_anomaly_engine.py test_anomaly_integration.py
+88 passed, 0 failed
+
+HISTORICAL / REPLAY / RESEARCH
+pytest -q test_directional_null_test.py test_research_evidence.py test_replay_validation.py test_historical_replay.py test_historical_execution.py test_research_validation.py test_validation_pipeline.py test_ml_governance_v3352.py
+46 passed, 0 failed, 4 warnings
+
+FINAL FULL REGRESSION
+pytest -q
+302 passed, 0 failed, 4 warnings in 25.77s
+
+WARNINGS
+Only the pre-existing FastAPI @app.on_event deprecation warnings.
+
+OPPORTUNITY RANKING EVIDENCE
+- Five candidates + one slot: highest-ranked candidate selected.
+- Best candidate last in input: still selected.
+- Equal scores: deterministic instrument-symbol tie-break.
+- Input permutation does not change ranking.
+- Future/outcome fields do not change rank score (no look-ahead).
+
+SLOT ALLOCATION EVIDENCE
+- NLV 2999/3000/4999 => max_slots=1.
+- NLV 5000/10000 => max_slots=2.
+- Two slots are maximum capacity, never a target.
+- Incompatible #2 can be skipped for the next compatible candidate.
+- Broker/global guards can reduce available selections to one or zero.
+
+IBKR EVIDENCE
+- IbkrBrokerRiskAdapter.execution_authority = False.
+- Adapter always fails closed in V3.37.0.
+- No IBKR connection/order code exists.
+- Synthetic broker values cannot grant authority.
+- Fixed margin-rate fallbacks cannot grant IBKR authority.
+- Future real adapter requires broker account fields, instrument minimums and prospective/what-if margin evidence.
+
+RISK / STRATEGY INVARIANTS
+- MIN_ENTRY_RR remains 0.40.
+- BREAK_EVEN_LOCK_R remains 0.00.
+- RISK_ENGINE_SHADOW_MODE remains True.
+- Existing hard trade/strategy/portfolio/margin/correlation limits were not increased.
+- Existing portfolio_execution_guard remains final global authority.
+
+DEPLOYMENT
+NO RAILWAY DEPLOYMENT PERFORMED.
+NO IBKR CONNECTION PERFORMED.
+NO LIVE AUTHORITY ENABLED.
+
+CONTROLLED HARDENING / IA #2 RE-AUDIT CANDIDATE
+First independent review: NOT ACCEPTED (HIGH non-finite ranking input bug; MEDIUM unsafe INSTRUMENTS default; MEDIUM single-worker invariant documentation/protection).
+
+ROOT CAUSE / FIX
+- Old _clamp01 accepted float("nan") because conversion succeeds; non-finite values were not validated before min/max clamping.
+- Ranking now uses reusable finite-float sanitation with math.isfinite().
+- Critical score/confidence corruption invalidates only that candidate.
+- Optional RR/room/spread corruption maps to zero quality and cannot improve rank.
+- Accepted components and final rank score are finite-only.
+
+ADVERSARIAL HARDENING SUITE
+pytest -q test_v3370_hardening.py
+56 passed, 0 failed, 4 warnings
+Covers NaN, +inf, -inf, None, malformed strings/containers/objects, exact IA #2 reproduction, corrupt+valid competition, all-corrupt safe zero selection, finite-score invariants, INSTRUMENTS defaults, AUD/CAD authority isolation, and single-worker configuration detection.
+
+DEFAULT INSTRUMENTS
+- unset => [EUR_USD]
+- empty => [EUR_USD]
+- explicit EUR_USD,GBP_USD => both configured
+- malformed/unknown symbols => no unexpected analysis activation
+- AUD_USD/USD_CAD explicit config => still no OANDA execution authority
+
+SINGLE-WORKER INVARIANT
+- SINGLE_PROCESS_SINGLE_ACTIVE_REPLICA required per broker account.
+- Horizontal execution-worker scaling NOT supported without future distributed coordination/locking.
+- Explicit common worker count >1 or malformed => new batch execution fails closed.
+
+FINAL HARDENED FULL REGRESSION
+python -m compileall -q .
+PASS
+pytest -q
+358 passed, 0 failed, 4 warnings in 26.53s
+Warnings remain only the existing FastAPI @app.on_event deprecations.
+
+NO RAILWAY DEPLOYMENT PERFORMED.
+NO IBKR CONNECTION PERFORMED.
+NO LIVE AUTHORITY ENABLED.
+NO RISK LIMITS INCREASED.
+NO STRATEGY CHANGES PERFORMED.
+
+
+FIVE-PAIR EXECUTION HARDENING
+Accepted hardened base SHA-256: 3454cd514a9ef997135876f7d248c1b9a6ad6f961176cf050cb05a1e74c3b218
+- AUD_USD/USD_CAD PAPER profiles enabled; LIVE denied.
+- Secondary FALLBACK metadata blocks execution; verified OANDA metadata permits continuation.
+- Five-pair ranking, best-of-five, two-slot safe-set, permutation independence and NaN/inf hardening covered.
+- Worker-count contradictions/malformed/non-positive values fail closed across all three known worker env vars.
+- RecoveryManager deterministic intents provide idempotency; five instrument namespaces covered.
+- Clear pre-execution and explicit broker rejection permit ranked fallback.
+- UNKNOWN/submitted-unconfirmed state blocks fallback pending reconciliation.
+- Fresh broker/slot context is rebuilt before each candidate submit.
+- IBKR account/what-if/minimum-order contracts added; execution authority remains false.
+
+FOCUSED FIVE-PAIR SUITE
+pytest -q test_v3370_five_pair_execution.py
+22 passed, 0 failed, 4 warnings
+
+FINAL FIVE-PAIR VALIDATION
+python -m compileall -q . => PASS
+Focused V3.37 five-pair + prior hardening suites => 105 passed, 0 failed, 4 warnings
+Security/runtime/recovery/production-readiness + V3.36.1 multi-asset => 55 passed, 0 failed, 4 warnings
+Historical/replay/research focused => 37 passed, 0 failed
+Full pytest => 380 passed, 0 failed, 4 warnings in 32.93s
+Warnings are only existing FastAPI @app.on_event deprecations.
+git diff --check => PASS
+
+NO RAILWAY DEPLOYMENT PERFORMED.
+NO IBKR CONNECTION PERFORMED.
+NO LIVE AUTHORITY ENABLED FOR GBP_USD/USD_JPY/AUD_USD/USD_CAD.
+NO RISK LIMITS INCREASED.
+NO RANKING WEIGHTS CHANGED.
+NO EUR-SPECIFIC RULES COPIED TO AUD_USD OR USD_CAD.
+
+
+COUNTERFACTUAL SELECTOR OBSERVABILITY PRE-DEPLOYMENT FINAL
+Base SHA-256: 53b794ab1c0ee36aeaa3e65045c2f5418410d9bfec96df3a873a2942ba897458
+- New focused suite: test_counterfactual_selector_observability_v3370.py
+- Covers deterministic idempotency/restart, exact target-R WIN, -1R stop LOSS, same-bar AMBIGUOUS, strict timestamp>T no-look-ahead, TIMEOUT, selection-vs-safety separation, winner linkage, selector regret, head-to-head, 1-slot multi-candidate reconstruction, 2-slot rejected evidence, executed-vs-shadow reliability separation, evidence grades, no-authority ranking equivalence, five-pair/IBKR authority invariants, and single-position regression.
+- Tracker is SHADOW only; no productive rank/risk/selection input consumes its statistics.
+
+FINAL COUNTERFACTUAL PRE-DEPLOYMENT VALIDATION
+python -m compileall -q . => PASS
+Focused counterfactual + V3.37 five-pair/hardening + multi-asset => 162 passed, 0 failed, 4 warnings
+Security/Runtime Integrity/Recovery/Production readiness/Forward observability => 55 passed, 0 failed, 4 warnings
+Anomaly + research isolation + replay/historical => 56 passed, 0 failed
+Full pytest => 394 passed, 0 failed, 4 warnings in 20.45s
+Warnings: only existing FastAPI @app.on_event deprecations.
+
+EXACT PRODUCTIVE REGRESSION COMPARISON AGAINST BASE SHA 53b794ab1c0ee36aeaa3e65045c2f5418410d9bfec96df3a873a2942ba897458
+- opportunity_ranker.py byte-identical; SHA-256 34206ac38b9c0e997d8b7def0ab5fbddc1ed343f1214e3b2611d695bf55d6862
+- slot_allocator.py byte-identical
+- broker_risk.py byte-identical
+- instrument_profiles.py byte-identical
+- instrument_registry.py byte-identical
+- recovery_manager.py byte-identical
+- VERSION_TAG unchanged at 3.37.0
+- MIN_ENTRY_RR, BREAK_EVEN_LOCK_R, all listed risk ceilings, SINGLE_POSITION_PER_INSTRUMENT configuration line unchanged exactly
+- AST-equivalent productive functions: execution_worker_configuration, execute_ranked_candidate, execute_recoverable, execute, portfolio_execution_guard, _oanda_batch_broker_guard, _batch_portfolio_guard
+- No-authority test populates extreme shadow reliability evidence and proves productive ranking and selected candidate output remain identical.

@@ -64,6 +64,16 @@ INSTRUMENT_PROFILES: Dict[str, InstrumentProfile] = {
         paper_execution_allowed=True,
         live_execution_allowed=False,
     ),
+    "AUD_USD": InstrumentProfile(
+        symbol="AUD_USD",
+        paper_execution_allowed=True,
+        live_execution_allowed=False,
+    ),
+    "USD_CAD": InstrumentProfile(
+        symbol="USD_CAD",
+        paper_execution_allowed=True,
+        live_execution_allowed=False,
+    ),
 }
 
 

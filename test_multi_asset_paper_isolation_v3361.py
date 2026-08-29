@@ -37,9 +37,13 @@ def _signal(symbol="EUR_USD", *, m1=True, room=.8, rr=1.2, ext=.5):
 
 
 def test_release_and_primary_instrument_contract():
-    assert server.VERSION_TAG == "3.36.1"
+    assert server.VERSION_TAG == "3.37.0"
     assert server.PRIMARY_INSTRUMENT == "EUR_USD"
-    assert set(("EUR_USD","GBP_USD","USD_JPY")).issubset(set(server.CONFIGURED_INSTRUMENTS))
+    # V3.37 hardening changed only the config default: secondary instruments
+    # remain profiled/PAPER-capable but now require explicit INSTRUMENTS config.
+    assert server.CONFIGURED_INSTRUMENTS == [server.PRIMARY_INSTRUMENT]
+    assert instrument_profile("GBP_USD").paper_execution_allowed is True
+    assert instrument_profile("USD_JPY").paper_execution_allowed is True
 
 
 def test_default_paper_profiles_enable_three_but_secondary_deny_live():

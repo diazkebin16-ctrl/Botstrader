@@ -1,5 +1,16 @@
 # BotsTrader Project Status
 
+## Current development state — V3.37.0 IBKR Multi-Asset Preparation
+- Canonical source commit: `1a35f004a467cb4f38a5004f43ed0ed5d7c6d35f` (certified V3.36.1 Multi-Asset PAPER Isolation).
+- Development version: `3.37.0`. This is **NOT deployment-certified** and has not been pushed/deployed by this work.
+- Five-pair analysis universe: EUR_USD, GBP_USD, USD_JPY, AUD_USD, USD_CAD.
+- OANDA execution authority remains limited by instrument profiles: EUR_USD/GBP_USD/USD_JPY PAPER paths preserved; AUD_USD/USD_CAD analysis-ready but OANDA execution-inert.
+- New batch flow: COLLECT -> RANK -> SLOT ALLOCATION -> BROKER RISK -> PORTFOLIO/CORRELATION -> EXECUTE.
+- Capital policy: NLV < $5,000 => max 1 slot; NLV >= $5,000 => max 2 slots. Slots are ceilings only; broker/global risk may reduce to zero.
+- IBKR adapter exists only as an INACTIVE/fail-closed preparation layer with `execution_authority=False`; no IBKR connection, credentials, account IDs or order path exist.
+- Research/adaptive risk remain SHADOW/NO-AUTHORITY. No strategy threshold, leverage or hard-risk ceiling was increased.
+- Railway/OANDA runtime deployment is out of scope for V3.37.0 development.
+
 ## Authoritative local baseline
 - Version: V3.36.0 MULTI-ASSET FOUNDATION
 - Base commit: GitHub `6d7f2bc` / V3.35.3 runtime-integrity baseline.
@@ -68,3 +79,41 @@ Do not commit `.env`, credentials, runtime DBs, virtual environments, caches, lo
 - Directional research reconciliation, stacking/Jaccard and resolver-semantics work remain research/offline and were not reverted.
 - Final local regression for this candidate: `275 passed, 0 failed, 4 warnings`; warnings are existing FastAPI `on_event` deprecations.
 - V3.36.1 has **not** been deployed to Railway. GBP_USD/USD_JPY PAPER broker behavior still requires separately approved forward runtime observation.
+
+## V3.37.0 controlled hardening after independent IA #2 review
+- Independent review result for the first V3.37.0 candidate: **NOT ACCEPTED** because `opportunity_ranker._clamp01()` did not reject non-finite floats. In Python, `float("nan")` succeeds, and the old clamp expression could promote NaN to maximum component quality.
+- Ranking inputs are now sanitized through finite-number validation using `math.isfinite()`.
+- Critical ranking fields (`score` / signal quality and explicitly supplied confidence) invalidate only the corrupt candidate when malformed, NaN, +inf, -inf or otherwise non-numeric.
+- Optional RR/room/cost fields use worst-case conservative quality on malformed/non-finite input: RR=0 quality, room=0 quality, cost=0 quality. Corrupt data cannot improve ranking.
+- Accepted rank components and final `rank_score` are required to remain finite.
+- `INSTRUMENTS` now defaults/falls back to `PRIMARY_INSTRUMENT` only. Secondary analysis instruments require explicit configuration. AUD_USD/USD_CAD were execution-inert in the accepted hardening baseline; the subsequent five-pair execution candidate enables them for OANDA Practice only, with LIVE still denied.
+- Operational invariant: V3.37.0 requires **one execution worker / one active replica per broker account**. Horizontal scaling of execution workers is NOT supported until distributed coordination/locking is implemented.
+- Common process worker-count settings (`WEB_CONCURRENCY`, `UVICORN_WORKERS`, `GUNICORN_WORKERS`) are detected; an explicit count other than one (or malformed explicit value) fails closed for new batch executions. This is not distributed locking and does not make multi-replica execution safe.
+- Railway, IBKR connectivity and LIVE authority remain untouched/disabled. Version remains `3.37.0` pending independent re-audit.
+
+
+## V3.37.0 five-pair OANDA Practice execution candidate
+- Development base: accepted hardened ZIP SHA-256 `3454cd514a9ef997135876f7d248c1b9a6ad6f961176cf050cb05a1e74c3b218`.
+- EUR_USD, GBP_USD, USD_JPY, AUD_USD and USD_CAD are PAPER/OANDA Practice-capable when explicitly configured. Secondary LIVE authority remains denied.
+- AUD_USD/USD_CAD start with no EUR-specific vetoes/exceptions and no learned research-veto authority.
+- Every secondary order requires verified OANDA metadata; FALLBACK metadata cannot authorize an order.
+- Worker-count validation now inspects WEB_CONCURRENCY, UVICORN_WORKERS and GUNICORN_WORKERS together; any malformed, non-positive or >1 explicit setting blocks new batch execution.
+- The existing RecoveryManager execution-intent/idempotency system is reused rather than duplicated. Its deterministic key remains stable across cycles/restarts; batch cycle, signal, rank, slot, broker and environment are attached as intent metadata.
+- Ranked execution now falls through after clear pre-submit or explicit broker rejection, but UNKNOWN/submitted-unconfirmed outcomes stop fallback pending reconciliation.
+- Broker/account/portfolio/metadata/recovery/slot state is freshly revalidated before each submit, including a possible second slot.
+- Horizontal execution scaling remains unsupported; single active replica/worker per broker account is still mandatory.
+- IBKR contracts were strengthened, but `IbkrBrokerRiskAdapter.execution_authority=False` remains invariant.
+- This remains development/local validation only and is NOT deployment-ready.
+
+
+## V3.37.0 counterfactual selector observability — pre-deployment final
+- Added `counterfactual_tracker.py` as SHADOW-only selector observability (`execution_authority=False`, `research_authority=False`, `look_ahead=False`).
+- Productive COLLECT/RANK/SLOT/BROKER RISK/PORTFOLIO/EXECUTE decisions remain unchanged; `opportunity_ranker.py` and `slot_allocator.py` are byte-for-byte unchanged from the accepted five-pair baseline.
+- Valid no-slot/lower-rank alternatives are persisted idempotently in `counterfactual_opportunities`; safety/execution rejections are logged separately and excluded from selector-regret evidence.
+- Frozen entry/stop/target resolve incrementally to WIN/LOSS/TIMEOUT/AMBIGUOUS using only bars strictly after market time. Same-bar stop+target is AMBIGUOUS.
+- Selector regret, per-instrument reliability, and head-to-head analytics are on-demand only and have no productive authority.
+- Executed broker/PAPER results remain sourced from `trade_memory`; shadow rows are never represented as real broker trades or positions.
+- Evidence grades are informational only: <15 UNDERPOWERED, 15–29 WEAK_LIMITED_EVIDENCE, >=30 USABLE.
+- Tracker failures are isolated/logged and cannot modify selection or create duplicate orders.
+- `counterfactual_tracker.py` is included in Runtime Integrity/release fingerprint for evidence integrity, despite having no execution authority.
+- Five-pair OANDA Practice/PAPER authority, secondary LIVE denials, worker guard, risk ceilings, ranking weights, UNKNOWN-submit handling, recovery/idempotency, and IBKR execution-authority=false remain frozen.

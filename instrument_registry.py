@@ -69,6 +69,8 @@ _DEFAULTS: Dict[str, InstrumentMetadata] = {
     "GBP_USD": InstrumentMetadata("GBP_USD", display_precision=5, pip_location=-4),
     # Conservative PAPER fallback; broker metadata is still mandatory before secondary execution.
     "USD_JPY": InstrumentMetadata("USD_JPY", display_precision=3, pip_location=-2, trade_units_precision=0, minimum_trade_size=1.0),
+    "AUD_USD": InstrumentMetadata("AUD_USD", display_precision=5, pip_location=-4, trade_units_precision=0, minimum_trade_size=1.0),
+    "USD_CAD": InstrumentMetadata("USD_CAD", display_precision=5, pip_location=-4, trade_units_precision=0, minimum_trade_size=1.0),
 }
 
 
