@@ -640,7 +640,7 @@ class SecurityManager:
         if not self.code_root:return out
         for name in ("server.py","security_manager.py","recovery_manager.py","order_state.py",
                      "observability.py","deployment_runtime.py","deployment_manager.py",
-                     "adaptive_learning.py","validation_pipeline.py","system_evaluation.py","governance_engine.py","production_readiness.py","smart_execution.py"):
+                     "adaptive_learning.py","validation_pipeline.py","system_evaluation.py","governance_engine.py","production_readiness.py","smart_execution.py","instrument_registry.py"):
             p=os.path.join(self.code_root,name)
             if os.path.exists(p):
                 with open(p,"rb") as fh: out[name]=hashlib.sha256(fh.read()).hexdigest()

@@ -30,6 +30,7 @@ from capital_allocation import CapitalAllocationEngine
 from research_evidence import (resolve_outcome as research_resolve_outcome, collapse_market_episodes,
                                annotate_market_episodes, split_episode_holdout)
 from session_regime import session_regime as detect_session_regime
+from instrument_registry import InstrumentRegistry
 from observability import (
     ObservabilityManager, DEPENDENCY_CRITICAL, DEPENDENCY_IMPORTANT, DEPENDENCY_NON_CRITICAL,
     stale_status as observability_stale_status, reconciliation_status as observability_reconciliation_status,
@@ -73,7 +74,46 @@ DEPLOYMENT_LIVE_EXECUTION_ENABLED = os.getenv("DEPLOYMENT_LIVE_EXECUTION_ENABLED
 GDELT = "https://api.gdeltproject.org/api/v2/doc/doc"
 ACCOUNT = os.getenv("OANDA_ACCOUNT_ID", "").strip()
 TOKEN = os.getenv("OANDA_TOKEN", "").strip()
-INSTRUMENTS = [x.strip().upper().replace("/", "_") for x in os.getenv("INSTRUMENTS", "EUR_USD").split(",") if x.strip()]
+def _instrument_list(raw: str) -> List[str]:
+    out=[]
+    for value in str(raw or "").split(","):
+        symbol=InstrumentRegistry.normalize_symbol(value)
+        if symbol and symbol not in out:
+            out.append(symbol)
+    return out
+
+# Backward compatibility: INSTRUMENTS remains the explicit set that may reach
+# the existing PAPER/production execution gates. Defining an instrument in the
+# registry does not activate it. Additional instruments can be observed by
+# SHADOW_INSTRUMENTS without granting order authority.
+INSTRUMENTS = _instrument_list(os.getenv("INSTRUMENTS", "EUR_USD")) or ["EUR_USD"]
+SHADOW_INSTRUMENTS = [x for x in _instrument_list(os.getenv("SHADOW_INSTRUMENTS", "")) if x not in INSTRUMENTS]
+SCAN_INSTRUMENTS = list(dict.fromkeys(INSTRUMENTS + SHADOW_INSTRUMENTS))
+PRIMARY_INSTRUMENT = INSTRUMENTS[0]
+INSTRUMENT_REGISTRY = InstrumentRegistry()
+_INSTRUMENT_METADATA_REFRESH_TS: Optional[datetime] = None
+INSTRUMENT_METADATA_REFRESH_SECONDS = max(300, int(os.getenv("INSTRUMENT_METADATA_REFRESH_SECONDS", "21600")))
+
+def instrument_mode(instrument: str) -> str:
+    symbol=InstrumentRegistry.normalize_symbol(instrument)
+    if symbol in INSTRUMENTS:
+        return "ENABLED"
+    if symbol in SHADOW_INSTRUMENTS:
+        return "SHADOW"
+    return "DISABLED"
+
+def instrument_metadata(instrument: str):
+    return INSTRUMENT_REGISTRY.get(instrument)
+
+def format_instrument_price(instrument: str, price: float) -> str:
+    return instrument_metadata(instrument).format_price(price)
+
+def normalize_instrument_units(instrument: str, units: float, *, allow_zero: bool=False) -> float:
+    return instrument_metadata(instrument).normalize_units(units, allow_zero=allow_zero)
+
+def format_instrument_units(instrument: str, units: float, *, allow_zero: bool=False) -> str:
+    return instrument_metadata(instrument).format_units(units,allow_zero=allow_zero)
+
 UNITS = max(1, int(os.getenv("TRADE_UNITS", "100")))
 THRESH = max(0, min(100, int(os.getenv("QUALITY_THRESHOLD", "80"))))
 AUTO = os.getenv("AUTO_TRADE", "false").lower() == "true"
@@ -182,7 +222,7 @@ TREND_RUNNER_MIN_SCORE = max(0.0, float(os.getenv("TREND_RUNNER_MIN_SCORE", "0.6
 TREND_RUNNER_TP_R = max(2.0, float(os.getenv("TREND_RUNNER_TP_R", "3.0")))
 TREND_RUNNER_TRAIL_START_R = max(1.5, float(os.getenv("TREND_RUNNER_TRAIL_START_R", "1.75")))
 TREND_RUNNER_TRAIL_DISTANCE_R = max(0.40, float(os.getenv("TREND_RUNNER_TRAIL_DISTANCE_R", "0.90")))
-VERSION_TAG = "3.35.3"
+VERSION_TAG = "3.36.0"
 ENTRY_TIMING_ENABLED = os.getenv("ENTRY_TIMING_ENABLED", "true").lower() == "true"
 MAX_ENTRY_EXTENSION_ATR = max(0.5, float(os.getenv("MAX_ENTRY_EXTENSION_ATR", "1.50")))
 MIN_ROOM_TO_BARRIER_R = max(1.0, float(os.getenv("MIN_ROOM_TO_BARRIER_R", "1.50")))
@@ -1128,7 +1168,7 @@ def production_release_files() -> List[str]:
         "server.py","production_readiness.py","governance_engine.py","system_evaluation.py",
         "security_manager.py","recovery_manager.py","order_state.py","observability.py","smart_execution.py","ensemble_engine.py","capital_allocation.py",
         "adaptive_learning.py","validation_pipeline.py","deployment_manager.py","deployment_runtime.py",
-        "requirements.txt","Dockerfile"
+        "instrument_registry.py","requirements.txt","Dockerfile"
     ]
     return [str(root/n) for n in names]
 
@@ -1293,6 +1333,11 @@ def conn() -> sqlite3.Connection:
             note TEXT
         )
     """)
+    model_cols = {row[1] for row in c.execute("PRAGMA table_info(model_runs)").fetchall()}
+    if "instrument" not in model_cols:
+        c.execute("ALTER TABLE model_runs ADD COLUMN instrument TEXT NOT NULL DEFAULT 'EUR_USD'")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_model_runs_instrument_id ON model_runs(instrument,id)")
+
     # Safe migration from V1.5 databases already stored on the Railway volume.
     existing = {row[1] for row in c.execute("PRAGMA table_info(signals)").fetchall()}
     migrations = {
@@ -1351,6 +1396,25 @@ def conn() -> sqlite3.Connection:
             updated_ts TEXT NOT NULL
         )
     """)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS instrument_discovered_patterns(
+            instrument TEXT NOT NULL,
+            pattern_key TEXT NOT NULL,
+            family TEXT NOT NULL,
+            value TEXT NOT NULL,
+            samples INTEGER NOT NULL,
+            wins INTEGER NOT NULL,
+            win_rate REAL,
+            instrument_win_rate REAL,
+            edge REAL,
+            weight REAL NOT NULL,
+            validated INTEGER NOT NULL,
+            updated_ts TEXT NOT NULL,
+            PRIMARY KEY(instrument,pattern_key)
+        )
+    """)
+    c.execute("CREATE INDEX IF NOT EXISTS idx_learning_samples_instrument_resolved ON learning_samples(instrument,resolved_ts,id)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_signals_instrument_variant ON signals(instrument,setup_variant,id)")
     c.execute("""
         CREATE TABLE IF NOT EXISTS market_regime_history(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -2135,6 +2199,61 @@ async def req(client: httpx.AsyncClient, method: str, path: str, params=None, bo
         raise RuntimeError(f"OANDA Practice HTTP {r.status_code}: {msg}")
     return r.json()
 
+async def refresh_instrument_metadata(client: httpx.AsyncClient, symbols: Optional[List[str]]=None, *, force: bool=False) -> Dict[str,Any]:
+    """Refresh broker-owned instrument metadata without granting execution authority."""
+    global _INSTRUMENT_METADATA_REFRESH_TS
+    wanted=list(dict.fromkeys(symbols or SCAN_INSTRUMENTS))
+    now=datetime.now(timezone.utc)
+    if (not force and _INSTRUMENT_METADATA_REFRESH_TS is not None and
+        (now-_INSTRUMENT_METADATA_REFRESH_TS).total_seconds() < INSTRUMENT_METADATA_REFRESH_SECONDS):
+        return {"refreshed":False,"cached":True,"metadata":INSTRUMENT_REGISTRY.snapshot(wanted)}
+    if not wanted:
+        return {"refreshed":False,"cached":True,"metadata":{}}
+    payload=await req(client,"GET","/v3/accounts/{account}/instruments",params={"instruments":",".join(wanted)})
+    updated=INSTRUMENT_REGISTRY.update_from_oanda(payload)
+    _INSTRUMENT_METADATA_REFRESH_TS=now
+    missing=[x for x in wanted if x not in updated]
+    return {"refreshed":True,"cached":False,"updated":sorted(updated),"missing":missing,
+            "metadata":INSTRUMENT_REGISTRY.snapshot(wanted)}
+
+def instrument_sizing(instrument: str, requested_units: float, entry: float, stop: float,
+                      risk_context: Optional[Dict[str,Any]]=None,
+                      quote_home_conversion: Optional[float]=None) -> Dict[str,Any]:
+    """Conservative instrument-aware sizing. It may reduce legacy units, never increase them."""
+    meta=instrument_metadata(instrument)
+    hard_cap=max(0.0,min(abs(float(requested_units)),float(UNITS),float(managed_value("execution.trade_units",UNITS))))
+    risk_context=risk_context or {}
+    nav=_risk_float(risk_context.get("nav"))
+    account_currency=str(risk_context.get("account_currency") or "").upper()
+    parts=InstrumentRegistry.normalize_symbol(instrument).split("_")
+    quote_currency=parts[-1] if len(parts)==2 else ""
+    conversion=_risk_float(quote_home_conversion)
+    if conversion is None and account_currency and quote_currency==account_currency:
+        conversion=1.0
+    stop_distance=abs(float(entry)-float(stop))
+    risk_budget=(nav*float(managed_value("risk.max_trade_fraction",RISK_MAX_TRADE_FRACTION))) if nav and nav>0 else None
+    risk_limited=None
+    if risk_budget is not None and stop_distance>0 and conversion is not None and conversion>0:
+        risk_limited=risk_budget/(stop_distance*conversion)
+        hard_cap=min(hard_cap,risk_limited)
+    normalized=abs(float(meta.normalize_units(hard_cap,allow_zero=True)))
+    if normalized>abs(float(requested_units)):
+        normalized=abs(float(requested_units))
+    return {
+        "instrument":InstrumentRegistry.normalize_symbol(instrument),
+        "requested_units":abs(float(requested_units)),
+        "effective_units":normalized,
+        "risk_limited_units":risk_limited,
+        "risk_budget_home":risk_budget,
+        "stop_distance_price":stop_distance,
+        "stop_distance_pips":stop_distance/max(meta.pip_size,1e-12),
+        "quote_currency":quote_currency,
+        "account_currency":account_currency or None,
+        "quote_home_conversion":conversion,
+        "metadata_source":meta.source,
+        "never_increases_legacy_units":True,
+    }
+
 async def candles(client: httpx.AsyncClient, inst: str, granularity: str, count: int) -> List[Dict[str, Any]]:
     d = await req(client, "GET", f"/v3/accounts/{{account}}/instruments/{inst}/candles", {"price": "M", "granularity": granularity, "count": count})
     out = []
@@ -2321,7 +2440,7 @@ def structural_confidence_adjustment(ctx: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def pip_size(inst: str) -> float:
-    return 0.01 if "_JPY" in inst.upper() or inst.upper().endswith("JPY") else 0.0001
+    return instrument_metadata(inst).pip_size
 
 def pips_between(a: float, b: float, inst: str) -> float:
     return abs(float(a)-float(b))/pip_size(inst)
@@ -2896,73 +3015,58 @@ def candidate_patterns(r: Dict[str, Any]) -> Dict[str, str]:
     }
 
 
-def refresh_discovered_patterns() -> Dict[str, Any]:
-    """Re-evaluate candidate patterns from resolved samples; validates only after >=100 observations."""
-    c = conn()
-    rows = c.execute("""
+def refresh_discovered_patterns(instrument: Optional[str]=None) -> Dict[str, Any]:
+    """Re-evaluate discovery evidence within one instrument namespace.
+
+    The legacy global table remains untouched for historical diagnostics; execution
+    confidence reads only the instrument-scoped table.
+    """
+    instrument=InstrumentRegistry.normalize_symbol(instrument or PRIMARY_INSTRUMENT)
+    c=conn()
+    rows=c.execute("""
         SELECT ls.label, s.signal, s.alignment, s.features_json, s.filters_json
         FROM learning_samples ls JOIN signals s ON s.id=ls.signal_id
-        WHERE ls.label IN (0,1)
+        WHERE ls.label IN (0,1) AND ls.instrument=? AND s.instrument=?
         ORDER BY ls.id ASC
-    """).fetchall()
+    """,(instrument,instrument)).fetchall()
     if not rows:
-        c.close()
-        return {"resolved_samples": 0, "validated_patterns": 0}
-
-    global_wr = sum(int(x["label"]) for x in rows) / len(rows)
-    buckets: Dict[str, Dict[str, Any]] = {}
+        c.close(); return {"instrument":instrument,"resolved_samples":0,"validated_patterns":0}
+    instrument_wr=sum(int(x["label"]) for x in rows)/len(rows)
+    buckets: Dict[str,Dict[str,Any]]={}
     for row in rows:
-        rr = {
-            "signal": row["signal"], "alignment": row["alignment"],
-            "features": json.loads(row["features_json"] or "{}"),
-            "filters": json.loads(row["filters_json"] or "{}"),
-        }
-        for family, value in candidate_patterns(rr).items():
-            key = f"{family}={value}"
-            b = buckets.setdefault(key, {"family": family, "value": value, "samples": 0, "wins": 0})
-            b["samples"] += 1
-            b["wins"] += int(row["label"])
-
-    validated = 0
-    for key, b in buckets.items():
-        n, wins = b["samples"], b["wins"]
-        wr = wins / n
-        edge = wr - global_wr
-        # Shrink the observed edge toward zero to avoid overreacting.
-        weight = edge * (n / (n + DISCOVERY_SHRINKAGE))
-        is_valid = int(n >= DISCOVERY_MIN_SAMPLES and abs(edge) >= DISCOVERY_MIN_EDGE)
-        if is_valid:
-            validated += 1
-        c.execute("""
-            INSERT INTO discovered_patterns(pattern_key,family,value,samples,wins,win_rate,global_win_rate,edge,weight,validated,updated_ts)
-            VALUES(?,?,?,?,?,?,?,?,?,?,?)
-            ON CONFLICT(pattern_key) DO UPDATE SET
-              samples=excluded.samples,wins=excluded.wins,win_rate=excluded.win_rate,
-              global_win_rate=excluded.global_win_rate,edge=excluded.edge,weight=excluded.weight,
-              validated=excluded.validated,updated_ts=excluded.updated_ts
-        """, (key,b["family"],b["value"],n,wins,wr,global_wr,edge,weight,is_valid,now_iso()))
-    c.commit(); c.close()
-    return {"resolved_samples": len(rows), "validated_patterns": validated, "global_win_rate": global_wr}
-
+        rr={"signal":row["signal"],"alignment":row["alignment"],
+            "features":json.loads(row["features_json"] or "{}"),
+            "filters":json.loads(row["filters_json"] or "{}")}
+        for family,value in candidate_patterns(rr).items():
+            key=f"{family}={value}"
+            b=buckets.setdefault(key,{"family":family,"value":value,"samples":0,"wins":0})
+            b["samples"]+=1; b["wins"]+=int(row["label"])
+    validated=0
+    for key,b in buckets.items():
+        n,wins=b["samples"],b["wins"]; wr=wins/n; edge=wr-instrument_wr
+        weight=edge*(n/(n+DISCOVERY_SHRINKAGE))
+        is_valid=int(n>=DISCOVERY_MIN_SAMPLES and abs(edge)>=DISCOVERY_MIN_EDGE)
+        validated+=is_valid
+        c.execute("""INSERT INTO instrument_discovered_patterns(
+          instrument,pattern_key,family,value,samples,wins,win_rate,instrument_win_rate,edge,weight,validated,updated_ts)
+          VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+          ON CONFLICT(instrument,pattern_key) DO UPDATE SET samples=excluded.samples,wins=excluded.wins,
+          win_rate=excluded.win_rate,instrument_win_rate=excluded.instrument_win_rate,edge=excluded.edge,
+          weight=excluded.weight,validated=excluded.validated,updated_ts=excluded.updated_ts""",
+          (instrument,key,b["family"],b["value"],n,wins,wr,instrument_wr,edge,weight,is_valid,now_iso()))
+    c.commit();c.close()
+    return {"instrument":instrument,"resolved_samples":len(rows),"validated_patterns":validated,"instrument_win_rate":instrument_wr}
 
 def discovery_adjustment(r: Dict[str, Any]) -> Dict[str, Any]:
-    """Apply only validated patterns. Positive and negative evidence can both change confidence."""
-    pats = candidate_patterns(r)
-    c = conn()
-    rows = c.execute("SELECT * FROM discovered_patterns WHERE validated=1").fetchall()
-    c.close()
-    by_key = {x["pattern_key"]: dict(x) for x in rows}
-    matches = []
-    raw = 0.0
-    for family, value in pats.items():
-        key = f"{family}={value}"
+    """Apply validated patterns from this instrument only."""
+    pats=candidate_patterns(r); instrument=InstrumentRegistry.normalize_symbol(r.get("instrument") or PRIMARY_INSTRUMENT)
+    c=conn(); rows=c.execute("SELECT * FROM instrument_discovered_patterns WHERE instrument=? AND validated=1",(instrument,)).fetchall();c.close()
+    by_key={x["pattern_key"]:dict(x) for x in rows}; matches=[];raw=0.0
+    for family,value in pats.items():
+        key=f"{family}={value}"
         if key in by_key:
-            p = by_key[key]
-            raw += float(p["weight"])
-            matches.append({"pattern": key, "samples": p["samples"], "win_rate": p["win_rate"], "weight": p["weight"]})
-    # Multiple correlated patterns should not swing the probability wildly.
-    adjustment = clamp(raw * 0.35, -0.15, 0.15)
-    return {"adjustment": adjustment, "matches": matches, "candidate_patterns": pats}
+            item=by_key[key];raw+=float(item["weight"]);matches.append({"pattern":key,"instrument":instrument,"samples":item["samples"],"win_rate":item["win_rate"],"weight":item["weight"]})
+    return {"adjustment":clamp(raw*0.35,-0.15,0.15),"matches":matches,"candidate_patterns":pats,"instrument":instrument}
 
 def wilson_lower_bound(wins: int, total: int, z: float = 1.28) -> float:
     """Conservative lower bound (~80% two-sided) so small samples do not look overconfident."""
@@ -2975,11 +3079,12 @@ def wilson_lower_bound(wins: int, total: int, z: float = 1.28) -> float:
     return max(0.0, (center - margin) / den)
 
 
-def recent_performance() -> Dict[str, Any]:
+def recent_performance(instrument: Optional[str]=None) -> Dict[str, Any]:
+    instrument=InstrumentRegistry.normalize_symbol(instrument or PRIMARY_INSTRUMENT)
     c = conn()
     rows = c.execute(
-        "SELECT label FROM learning_samples WHERE executed=1 AND label IN (0,1) ORDER BY id DESC LIMIT ?",
-        (RECENT_PERFORMANCE_WINDOW,)
+        "SELECT label FROM learning_samples WHERE instrument=? AND executed=1 AND label IN (0,1) ORDER BY id DESC LIMIT ?",
+        (instrument,RECENT_PERFORMANCE_WINDOW)
     ).fetchall()
     c.close()
     n = len(rows)
@@ -3095,14 +3200,15 @@ def empirical_confidence(r: Dict[str, Any]) -> Dict[str, Any]:
     Uses global + setup-variant evidence with shrinkage and a conservative lower bound.
     It intentionally refuses to report very high confidence from tiny samples.
     """
+    instrument=InstrumentRegistry.normalize_symbol(r.get("instrument") or PRIMARY_INSTRUMENT)
     c = conn()
     # Adaptive execution confidence is intentionally based only on trades the bot
     # actually executed. Rejected/counterfactual samples remain research evidence.
     total = c.execute(
-        "SELECT COUNT(*) n FROM learning_samples WHERE executed=1 AND label IN (0,1)"
+        "SELECT COUNT(*) n FROM learning_samples WHERE instrument=? AND executed=1 AND label IN (0,1)",(instrument,)
     ).fetchone()["n"]
     wins = c.execute(
-        "SELECT COUNT(*) n FROM learning_samples WHERE executed=1 AND label=1"
+        "SELECT COUNT(*) n FROM learning_samples WHERE instrument=? AND executed=1 AND label=1",(instrument,)
     ).fetchone()["n"]
     variant = setup_variant(r)
 
@@ -3110,9 +3216,9 @@ def empirical_confidence(r: Dict[str, Any]) -> Dict[str, Any]:
         SELECT ls.label, s.setup_variant
         FROM learning_samples ls
         JOIN signals s ON s.id=ls.signal_id
-        WHERE ls.executed=1 AND ls.label IN (0,1)
+        WHERE ls.instrument=? AND s.instrument=? AND ls.executed=1 AND ls.label IN (0,1)
         ORDER BY ls.id DESC
-    """).fetchall()
+    """,(instrument,instrument)).fetchall()
     c.close()
 
     local = [int(x["label"]) for x in rows if x["setup_variant"] == variant]
@@ -3136,6 +3242,7 @@ def empirical_confidence(r: Dict[str, Any]) -> Dict[str, Any]:
             "samples": total,
             "local_samples": local_n,
             "variant": variant,
+            "instrument": instrument,
             "global_win_rate": (wins/total) if total else None,
             "local_win_rate": (local_w/local_n) if local_n else None,
             "lower_bound": None,
@@ -3165,6 +3272,7 @@ def empirical_confidence(r: Dict[str, Any]) -> Dict[str, Any]:
         "samples": total,
         "local_samples": local_n,
         "variant": variant,
+        "instrument": instrument,
         "global_win_rate": global_rate,
         "local_win_rate": (local_w/local_n) if local_n else None,
         "lower_bound": lb,
@@ -3189,7 +3297,7 @@ def dynamic_confidence(r: Dict[str, Any], mlp: Optional[float]) -> Dict[str, Any
         p = 0.80 * p + 0.20 * float(mlp)
         source += "+ML"
 
-    perf = recent_performance()
+    perf = recent_performance(r.get("instrument"))
     penalty = float(perf["penalty"])
     p = max(0.05, p - penalty * 0.5)
     required = min(0.90, EXECUTION_MIN_CONFIDENCE + penalty)
@@ -3407,8 +3515,9 @@ def _loss_streak(labels: List[int]) -> int:
         else: break
     return streak
 
-def _strategy_rows(variant: str, executed_only: bool=False, since_ts: Optional[str]=None) -> List[sqlite3.Row]:
-    where=["ls.label IN (0,1)","s.setup_variant=?"]; params=[variant]
+def _strategy_rows(variant: str, executed_only: bool=False, since_ts: Optional[str]=None, instrument: Optional[str]=None) -> List[sqlite3.Row]:
+    instrument=InstrumentRegistry.normalize_symbol(instrument or PRIMARY_INSTRUMENT)
+    where=["ls.label IN (0,1)","s.setup_variant=?","ls.instrument=?","s.instrument=?"]; params=[variant,instrument,instrument]
     if executed_only: where.append("ls.executed=1")
     if since_ts: where.append("s.ts>=?"); params.append(since_ts)
     c=conn(); rows=c.execute(f"""SELECT ls.label,ls.executed,ls.blocked,s.ts,s.candle_ts,s.setup_variant
@@ -3424,9 +3533,17 @@ def _health_transition(variant,old_status,new_status,evidence_mode,baseline_wr,r
                         (now_iso(),variant,old_status,new_status,evidence_mode,baseline_wr,recent_wr,recent_drop,
                          loss_streak,json.dumps(details or {},separators=(",",":")))); c.commit(); c.close()
 
-def strategy_health_snapshot(variant: str) -> Optional[Dict[str, Any]]:
-    c=conn(); row=c.execute("SELECT * FROM strategy_health WHERE setup_variant=?",(variant,)).fetchone(); c.close()
-    return dict(row) if row else None
+def _strategy_health_key(instrument: str, variant: str) -> str:
+    instrument=InstrumentRegistry.normalize_symbol(instrument)
+    return variant if instrument==PRIMARY_INSTRUMENT else f"{instrument}::{variant}"
+
+def strategy_health_snapshot(variant: str, instrument: Optional[str]=None) -> Optional[Dict[str, Any]]:
+    instrument=InstrumentRegistry.normalize_symbol(instrument or PRIMARY_INSTRUMENT)
+    key=_strategy_health_key(instrument,variant)
+    c=conn(); row=c.execute("SELECT * FROM strategy_health WHERE setup_variant=?",(key,)).fetchone(); c.close()
+    if not row:return None
+    out=dict(row);out["instrument"]=instrument;out["strategy_variant"]=variant
+    return out
 
 def all_strategy_health() -> List[Dict[str, Any]]:
     c=conn(); rows=c.execute("""SELECT * FROM strategy_health ORDER BY CASE status
@@ -3434,9 +3551,14 @@ def all_strategy_health() -> List[Dict[str, Any]]:
                                   WHEN 'RECOVERING' THEN 4 WHEN 'HEALTHY' THEN 5 ELSE 6 END, updated_ts DESC""").fetchall(); c.close()
     return [dict(x) for x in rows]
 
-def _evaluate_one_strategy_health(variant: str) -> Dict[str, Any]:
-    canonical=_strategy_rows(variant,False); executed=_strategy_rows(variant,True)
-    c=conn(); previous=c.execute("SELECT * FROM strategy_health WHERE setup_variant=?",(variant,)).fetchone(); c.close()
+def _evaluate_one_strategy_health(variant: str, instrument: Optional[str]=None) -> Dict[str, Any]:
+    instrument=InstrumentRegistry.normalize_symbol(instrument or PRIMARY_INSTRUMENT)
+    health_key=_strategy_health_key(instrument,variant)
+    if instrument==PRIMARY_INSTRUMENT:
+        canonical=_strategy_rows(variant,False); executed=_strategy_rows(variant,True)
+    else:
+        canonical=_strategy_rows(variant,False,None,instrument); executed=_strategy_rows(variant,True,None,instrument)
+    c=conn(); previous=c.execute("SELECT * FROM strategy_health WHERE setup_variant=?",(health_key,)).fetchone(); c.close()
     prev=dict(previous) if previous else None; old_status=prev['status'] if prev else None
     total=len(canonical); executed_total=len(executed)
     evidence_mode='EXECUTED' if executed_total>=STRATEGY_MIN_EXECUTED_TOTAL else 'CANONICAL_MONITOR'
@@ -3476,7 +3598,8 @@ def _evaluate_one_strategy_health(variant: str) -> Dict[str, Any]:
     if status=='PAUSED' and old_status not in ('PAUSED','RECOVERING'):
         paused_ts=now_iso(); pause_baseline=baseline_wr
     if old_status in ('PAUSED','RECOVERING') and paused_ts:
-        post=_strategy_rows(variant,False,paused_ts); labs=[int(x['label']) for x in post]
+        post=(_strategy_rows(variant,False,paused_ts) if instrument==PRIMARY_INSTRUMENT
+              else _strategy_rows(variant,False,paused_ts,instrument)); labs=[int(x['label']) for x in post]
         recovery_n=len(labs); recovery_wr=sum(labs)/recovery_n if recovery_n else None
         target=(float(pause_baseline)-STRATEGY_RECOVERY_TOLERANCE) if pause_baseline is not None else .50
         if recovery_n>=STRATEGY_RECOVERY_SAMPLES:
@@ -3501,24 +3624,36 @@ def _evaluate_one_strategy_health(variant: str) -> Dict[str, Any]:
       pause_baseline_win_rate=excluded.pause_baseline_win_rate,recovery_samples=excluded.recovery_samples,
       recovery_win_rate=excluded.recovery_win_rate,last_transition=excluded.last_transition,reason=excluded.reason,
       updated_ts=excluded.updated_ts""",
-      (variant,status,evidence_mode,total,executed_total,baseline_n,baseline_wr,recent_n,recent_wr,drop,loss_streak,
+      (health_key,status,evidence_mode,total,executed_total,baseline_n,baseline_wr,recent_n,recent_wr,drop,loss_streak,
        paused_ts,pause_baseline,recovery_n,recovery_wr,transition,reason,now_iso())); c.commit(); c.close()
-    _health_transition(variant,old_status,status,evidence_mode,baseline_wr,recent_wr,drop,loss_streak,
-                       {'reason':reason,'recovery_samples':recovery_n,'recovery_win_rate':recovery_wr})
-    return strategy_health_snapshot(variant) or {'setup_variant':variant,'status':status,'reason':reason}
+    _health_transition(health_key,old_status,status,evidence_mode,baseline_wr,recent_wr,drop,loss_streak,
+                       {'reason':reason,'recovery_samples':recovery_n,'recovery_win_rate':recovery_wr,'instrument':instrument,'strategy_variant':variant})
+    snapshot=(strategy_health_snapshot(variant) if instrument==PRIMARY_INSTRUMENT else strategy_health_snapshot(variant,instrument))
+    return snapshot or {'setup_variant':health_key,'strategy_variant':variant,'instrument':instrument,'status':status,'reason':reason}
 
-def evaluate_all_strategy_health() -> Dict[str, Any]:
+def evaluate_all_strategy_health(instrument: Optional[str]=None) -> Dict[str, Any]:
     if not STRATEGY_SELF_EVAL_ENABLED:return {'enabled':False,'strategies':[]}
-    c=conn(); variants=[x['setup_variant'] for x in c.execute("""SELECT DISTINCT setup_variant FROM signals
-                        WHERE setup_variant IS NOT NULL AND setup_variant NOT IN ('','WAIT')""").fetchall()]; c.close()
-    results=[_evaluate_one_strategy_health(v) for v in variants]
-    return {'enabled':True,'strategies':results,'paused':[x['setup_variant'] for x in results if x.get('status')=='PAUSED'],
-            'watch':[x['setup_variant'] for x in results if x.get('status')=='WATCH'],
-            'recovering':[x['setup_variant'] for x in results if x.get('status')=='RECOVERING']}
+    c=conn()
+    if instrument:
+        symbols=[InstrumentRegistry.normalize_symbol(instrument)]
+    else:
+        symbols=[x['instrument'] for x in c.execute("""SELECT DISTINCT instrument FROM signals
+                         WHERE instrument IS NOT NULL AND instrument!='' ORDER BY instrument""").fetchall()]
+    pairs=[]
+    for symbol in symbols:
+        variants=[x['setup_variant'] for x in c.execute("""SELECT DISTINCT setup_variant FROM signals
+                         WHERE instrument=? AND setup_variant IS NOT NULL AND setup_variant NOT IN ('','WAIT')""",(symbol,)).fetchall()]
+        pairs.extend((symbol,v) for v in variants)
+    c.close()
+    results=[_evaluate_one_strategy_health(v,symbol) for symbol,v in pairs]
+    return {'enabled':True,'strategies':results,
+            'paused':[{'instrument':x.get('instrument'),'setup_variant':x.get('strategy_variant') or x.get('setup_variant')} for x in results if x.get('status')=='PAUSED'],
+            'watch':[{'instrument':x.get('instrument'),'setup_variant':x.get('strategy_variant') or x.get('setup_variant')} for x in results if x.get('status')=='WATCH'],
+            'recovering':[{'instrument':x.get('instrument'),'setup_variant':x.get('strategy_variant') or x.get('setup_variant')} for x in results if x.get('status')=='RECOVERING']}
 
 def strategy_execution_gate(r: Dict[str, Any]) -> Dict[str, Any]:
     if not STRATEGY_SELF_EVAL_ENABLED:return {'ok':True,'reason':'self_eval_disabled'}
-    variant=setup_variant(r); health=strategy_health_snapshot(variant)
+    variant=setup_variant(r); health=strategy_health_snapshot(variant,r.get("instrument"))
     if not health:return {'ok':True,'reason':'strategy_not_yet_evaluated','variant':variant}
     if health['status'] in ('PAUSED','DEGRADED','RECOVERING'):
         return {'ok':False,'reason':f"strategy health {health['status']}: {health.get('reason','')}",
@@ -3526,17 +3661,18 @@ def strategy_execution_gate(r: Dict[str, Any]) -> Dict[str, Any]:
     return {'ok':True,'reason':f"strategy health {health['status']}",'variant':variant,'health':health}
 
 
-def _strategy_performance_summary(variant: str) -> Dict[str, Any]:
+def _strategy_performance_summary(variant: str, instrument: Optional[str]=None) -> Dict[str, Any]:
     """
     Historical/recent canonical strategy performance.
     Uses resolved learning samples, preserving the current architecture.
     """
+    instrument=InstrumentRegistry.normalize_symbol(instrument or PRIMARY_INSTRUMENT)
     c=conn()
     rows=c.execute("""SELECT ls.label,ls.executed,s.ts
                       FROM learning_samples ls
                       JOIN signals s ON s.id=ls.signal_id
-                      WHERE ls.label IN (0,1) AND s.setup_variant=?
-                      ORDER BY s.id ASC""",(variant,)).fetchall()
+                      WHERE ls.label IN (0,1) AND s.setup_variant=? AND ls.instrument=? AND s.instrument=?
+                      ORDER BY s.id ASC""",(variant,instrument,instrument)).fetchall()
     c.close()
 
     labels=[int(x["label"]) for x in rows]
@@ -3555,7 +3691,7 @@ def _strategy_performance_summary(variant: str) -> Dict[str, Any]:
     }
 
 
-def _strategy_regime_affinity(variant: str, current_regime: Optional[str]) -> Dict[str, Any]:
+def _strategy_regime_affinity(variant: str, current_regime: Optional[str], instrument: Optional[str]=None) -> Dict[str, Any]:
     """
     Learn whether a strategy historically behaves better/worse in the CURRENT regime.
     Uses stored market_regime_history nearest to each signal candle.
@@ -3564,12 +3700,13 @@ def _strategy_regime_affinity(variant: str, current_regime: Optional[str]) -> Di
     if not current_regime:
         return {"score":0.5,"samples":0,"win_rate":None,"reason":"no_current_regime"}
 
+    instrument=InstrumentRegistry.normalize_symbol(instrument or PRIMARY_INSTRUMENT)
     c=conn()
     rows=c.execute("""SELECT ls.label,s.candle_ts,s.instrument
                       FROM learning_samples ls
                       JOIN signals s ON s.id=ls.signal_id
-                      WHERE ls.label IN (0,1) AND s.setup_variant=?
-                      ORDER BY s.id DESC LIMIT 300""",(variant,)).fetchall()
+                      WHERE ls.label IN (0,1) AND s.setup_variant=? AND ls.instrument=? AND s.instrument=?
+                      ORDER BY s.id DESC LIMIT 300""",(variant,instrument,instrument)).fetchall()
 
     matched=[]
     for row in rows:
@@ -3635,15 +3772,15 @@ def ai_strategy_director_recommendation(
             "reasons":["AI Strategy Director disabled"]
         }
 
-    perf=_strategy_performance_summary(variant)
-    health=strategy_health_snapshot(variant) or {"status":"LEARNING"}
+    perf=_strategy_performance_summary(variant,instrument)
+    health=strategy_health_snapshot(variant,instrument) or {"status":"LEARNING"}
 
     market_regime=(regime or {}).get("market_regime")
     regime_conf=float((regime or {}).get("confidence") or 0.0)
     volatility_state=(regime or {}).get("volatility_state")
     trend_strength=float((regime or {}).get("trend_strength") or 0.0)
 
-    affinity=_strategy_regime_affinity(variant,market_regime)
+    affinity=_strategy_regime_affinity(variant,market_regime,instrument)
 
     hist_wr=perf["historical_win_rate"]
     recent_wr=perf["recent_win_rate"]
@@ -3890,19 +4027,20 @@ def _executed_loss_streak() -> int:
     return streak
 
 
-def _strategy_open_risk_proxy(variant: str) -> float:
+def _strategy_open_risk_proxy(variant: str, instrument: Optional[str]=None) -> float:
     """
     Conservative fraction-of-NAV proxy using REAL filled units when available.
     """
+    instrument=InstrumentRegistry.normalize_symbol(instrument or PRIMARY_INSTRUMENT)
     c=conn()
     try:
         rows=c.execute("""SELECT current_units FROM active_trade_management
-                          WHERE setup_variant=? AND closed=0""",(variant,)).fetchall()
+                          WHERE setup_variant=? AND instrument=? AND closed=0""",(variant,instrument)).fetchall()
         raw=sum((abs(float(x["current_units"] or UNITS))/max(abs(float(UNITS)),1.0))*float(managed_value("risk.max_trade_fraction",RISK_MAX_TRADE_FRACTION))
                 for x in rows)
     except sqlite3.OperationalError:
         n=c.execute("""SELECT COUNT(*) n FROM active_trade_management
-                       WHERE setup_variant=? AND closed=0""",(variant,)).fetchone()["n"]
+                       WHERE setup_variant=? AND instrument=? AND closed=0""",(variant,instrument)).fetchone()["n"]
         raw=int(n)*float(managed_value("risk.max_trade_fraction",RISK_MAX_TRADE_FRACTION))
     c.close()
     return float(min(float(managed_value("risk.max_strategy_fraction",RISK_MAX_STRATEGY_FRACTION)),raw))
@@ -3942,7 +4080,7 @@ async def build_broker_risk_context(client: httpx.AsyncClient) -> Dict[str, Any]
     ctx={
         "balance":None,"nav":None,"peak_nav":None,"current_drawdown":None,
         "margin_used":None,"margin_usage":None,"open_positions":0,
-        "portfolio_open_risk":0.0,"open_instruments":[],
+        "portfolio_open_risk":0.0,"open_instruments":[],"account_currency":None,
         "consecutive_losses":_executed_loss_streak(),
         "data_stale":False,"system_abnormal":False,
         "source":"OANDA_PRACTICE_READ_ONLY"
@@ -3953,6 +4091,7 @@ async def build_broker_risk_context(client: httpx.AsyncClient) -> Dict[str, Any]
         account=summary.get("account") or {}
         ctx["balance"]=_risk_float(account.get("balance"))
         ctx["nav"]=_risk_float(account.get("NAV"))
+        ctx["account_currency"]=str(account.get("currency") or "").upper() or None
         ctx["margin_used"]=_risk_float(account.get("marginUsed"),0.0)
         if ctx["nav"] and ctx["nav"]>0 and ctx["margin_used"] is not None:
             ctx["margin_usage"]=max(0.0,ctx["margin_used"]/ctx["nav"])
@@ -4054,15 +4193,15 @@ def adaptive_risk_recommendation(
     director_conf=_risk_float((director or {}).get("confidence"))
     strategy_conf=director_conf if director_conf is not None else (_risk_float(signal_confidence,0.5) or 0.5)
 
-    perf=_strategy_performance_summary(variant)
+    perf=_strategy_performance_summary(variant,instrument)
     recent_wr=perf.get("recent_win_rate")
-    health=strategy_health_snapshot(variant) or {"status":"LEARNING"}
+    health=strategy_health_snapshot(variant,instrument) or {"status":"LEARNING"}
     health_status=str(health.get("status") or "LEARNING").upper()
 
     dd=_risk_float(risk_context.get("current_drawdown"))
     margin_usage=_risk_float(risk_context.get("margin_usage"))
     portfolio_open_risk=_risk_float(risk_context.get("portfolio_open_risk"),0.0) or 0.0
-    strategy_open_risk=_strategy_open_risk_proxy(variant)
+    strategy_open_risk=_strategy_open_risk_proxy(variant,instrument)
     open_instruments=list(risk_context.get("open_instruments") or [])
     corr=_shared_currency_correlation(instrument,open_instruments)
     loss_streak=int(risk_context.get("consecutive_losses") or 0)
@@ -4962,19 +5101,12 @@ def _al_event(run_id: str, stage: str, status: str,
              stage,run_id,strategy_id,candidate_id,status)
 
 
-def _al_trade_rows(strategy: Optional[str]=None) -> List[Dict[str,Any]]:
-    c=conn()
-    if strategy:
-        rows=[dict(x) for x in c.execute(
-            """SELECT * FROM trade_memory WHERE status='CLOSED' AND strategy=?
-               AND COALESCE(execution_quality_compromised,0)=0
-               ORDER BY entry_ts,id""",(strategy,)).fetchall()]
-    else:
-        rows=[dict(x) for x in c.execute(
-            """SELECT * FROM trade_memory WHERE status='CLOSED'
-               AND COALESCE(execution_quality_compromised,0)=0
-               ORDER BY entry_ts,id""").fetchall()]
-    c.close()
+def _al_trade_rows(strategy: Optional[str]=None, instrument: Optional[str]=None) -> List[Dict[str,Any]]:
+    where=["status='CLOSED'","COALESCE(execution_quality_compromised,0)=0"];params=[]
+    if strategy:where.append("strategy=?");params.append(strategy)
+    if instrument:where.append("symbol=?");params.append(InstrumentRegistry.normalize_symbol(instrument))
+    c=conn();rows=[dict(x) for x in c.execute(
+        "SELECT * FROM trade_memory WHERE "+" AND ".join(where)+" ORDER BY entry_ts,id",tuple(params)).fetchall()];c.close()
     return rows
 
 
@@ -5216,17 +5348,17 @@ def _al_generate_proposals_for_strategy(run_id: str, strategy: str,
 def detect_adaptive_concept_drift() -> Dict[str,Any]:
     c=conn()
     pairs=[dict(x) for x in c.execute(
-        """SELECT DISTINCT strategy,market_regime_entry FROM trade_memory
+        """SELECT DISTINCT symbol,strategy,market_regime_entry FROM trade_memory
            WHERE status='CLOSED'"""
     ).fetchall()]
     c.close()
     results=[]
     for x in pairs:
-        strategy=x["strategy"];regime=x["market_regime_entry"]
-        rows=_tm_closed_rows(strategy=strategy,regime=regime)
+        instrument=InstrumentRegistry.normalize_symbol(x.get("symbol") or PRIMARY_INSTRUMENT);strategy=x["strategy"];regime=x["market_regime_entry"]
+        rows=_tm_closed_rows(strategy=strategy,regime=regime,symbol=instrument)
         d=al_concept_drift(rows,TRADE_MEMORY_DEGRADATION_RECENT,
                            TRADE_MEMORY_DEGRADATION_MIN_HISTORY)
-        scope=f"{strategy}::{regime or 'UNKNOWN'}"
+        scope=f"{instrument}::{strategy}::{regime or 'UNKNOWN'}"
         confidence=0.0
         if d["status"]=="POSSIBLE_CONCEPT_DRIFT":
             confidence=clamp(min(1.0,len(rows)/150.0)*0.7+0.3,0,1)
@@ -5239,13 +5371,13 @@ def detect_adaptive_concept_drift() -> Dict[str,Any]:
           confidence=excluded.confidence,historical_metrics_json=excluded.historical_metrics_json,
           previous_metrics_json=excluded.previous_metrics_json,recent_metrics_json=excluded.recent_metrics_json,
           reason=excluded.reason,auto_action=0""",
-          (scope,now_iso(),strategy,regime,d["status"],confidence,
+          (scope,now_iso(),f"{instrument}::{strategy}",regime,d["status"],confidence,
            _tm_json(d.get("historical") or {},{}),_tm_json(d.get("previous_window") or {},{}),
            _tm_json(d.get("current_window") or {},{}),
            "two consecutive recent windows materially weakened vs historical edge"
            if d["status"]=="POSSIBLE_CONCEPT_DRIFT" else d["status"]))
         c.commit();c.close()
-        results.append({"scope_key":scope,**d,"confidence":confidence})
+        results.append({"scope_key":scope,"instrument":instrument,"strategy":strategy,**d,"confidence":confidence})
         if d["status"]=="POSSIBLE_CONCEPT_DRIFT":
             log.warning("ADAPTIVE_LEARNING POSSIBLE_CONCEPT_DRIFT %s confidence=%.3f",scope,confidence)
     return {"results":results,"auto_action":False}
@@ -5288,23 +5420,24 @@ def run_adaptive_learning(force: bool=False) -> Dict[str,Any]:
     drift=detect_adaptive_concept_drift()
 
     c=conn()
-    strategies=[x["strategy"] for x in c.execute(
-        "SELECT DISTINCT strategy FROM trade_memory WHERE status='CLOSED'"
+    strategy_pairs=[(InstrumentRegistry.normalize_symbol(x["symbol"] or PRIMARY_INSTRUMENT),x["strategy"]) for x in c.execute(
+        "SELECT DISTINCT symbol,strategy FROM trade_memory WHERE status='CLOSED' AND strategy IS NOT NULL"
     ).fetchall()]
     c.close()
 
     accepted=[];rejected=[];insufficient=[];no_change=[]
-    for strategy in strategies:
-        rows=_al_trade_rows(strategy)
+    for instrument,base_strategy in strategy_pairs:
+        strategy=base_strategy if instrument==PRIMARY_INSTRUMENT else f"{instrument}::{base_strategy}"
+        rows=_al_trade_rows(base_strategy,instrument)
         if len(rows)<int(managed_value("adaptive_learning.min_trades",ADAPTIVE_LEARNING_MIN_TRADES)):
-            insufficient.append({"strategy":strategy,"samples":len(rows)})
+            insufficient.append({"strategy":strategy,"instrument":instrument,"samples":len(rows)})
             _al_event(run_id,"ANALYZE","INSUFFICIENT_DATA",strategy,None,
                       {"samples":len(rows)})
             continue
 
         proposals=_al_generate_proposals_for_strategy(run_id,strategy,rows)
         if not proposals:
-            no_change.append({"strategy":strategy,"status":"NO_CHANGE_RECOMMENDED"})
+            no_change.append({"strategy":strategy,"instrument":instrument,"status":"NO_CHANGE_RECOMMENDED"})
             _al_event(run_id,"GENERATE_CANDIDATE","NO_CHANGE_RECOMMENDED",strategy,None,
                       {"reason":"no robust bounded change identified"})
             continue
@@ -5501,7 +5634,10 @@ def _vp_candidate_spec(row: Dict[str,Any]) -> Dict[str,Any]:
 
 
 def _vp_rows(strategy: str) -> List[Dict[str,Any]]:
-    return _al_trade_rows(strategy)
+    if "::" in strategy:
+        instrument,base=strategy.split("::",1)
+        return _al_trade_rows(base,instrument)
+    return _al_trade_rows(strategy,PRIMARY_INSTRUMENT)
 
 
 def _vp_dataset_version(candidate: Dict[str,Any], rows: List[Dict[str,Any]], split: Dict[str,Any]) -> str:
@@ -5951,48 +6087,60 @@ def _shadow_model_acceptance(metrics: Dict[str,Any]) -> Dict[str,Any]:
             "roc_auc":auc,"accuracy":acc,"baseline_accuracy":baseline}
 
 
-def shadow_model_governance_status() -> Dict[str,Any]:
-    if not Path(MODEL_PATH).exists():
-        return {"ready":False,"reason":"model_artifact_missing"}
+def shadow_model_path(instrument: Optional[str]=None) -> str:
+    instrument=InstrumentRegistry.normalize_symbol(instrument or PRIMARY_INSTRUMENT)
+    # Preserve the exact historical artifact path for EUR/USD/primary baseline.
+    if instrument=="EUR_USD":
+        return MODEL_PATH
+    base=Path(MODEL_PATH)
+    suffix=base.suffix or ".joblib"
+    return str(base.with_name(f"{base.stem}.{instrument}{suffix}"))
+
+def shadow_model_governance_status(instrument: Optional[str]=None) -> Dict[str,Any]:
+    instrument=InstrumentRegistry.normalize_symbol(instrument or PRIMARY_INSTRUMENT)
+    model_path=shadow_model_path(instrument)
+    if not Path(model_path).exists():
+        return {"ready":False,"reason":"model_artifact_missing","instrument":instrument,"model_path":model_path}
     try:
-        artifact=joblib.load(MODEL_PATH)
+        artifact=joblib.load(model_path)
         samples=int(artifact.get("samples") or 0) if isinstance(artifact,dict) else 0
+        artifact_instrument=str(artifact.get("instrument") or instrument) if isinstance(artifact,dict) else instrument
+        if InstrumentRegistry.normalize_symbol(artifact_instrument)!=instrument:
+            return {"ready":False,"reason":"model_instrument_mismatch","instrument":instrument,"model_path":model_path}
         c=conn()
-        row=c.execute("SELECT id,samples,baseline_accuracy,accuracy,roc_auc,log_loss,accepted,trained_ts FROM model_runs WHERE samples=? ORDER BY id DESC LIMIT 1",(samples,)).fetchone() if samples else None
+        row=c.execute("""SELECT id,samples,baseline_accuracy,accuracy,roc_auc,log_loss,accepted,trained_ts,instrument
+                         FROM model_runs WHERE instrument=? AND samples=? ORDER BY id DESC LIMIT 1""",
+                      (instrument,samples)).fetchone() if samples else None
         c.close()
         if not row:
-            return {"ready":False,"reason":"validation_record_missing","samples":samples}
+            return {"ready":False,"reason":"validation_record_missing","samples":samples,"instrument":instrument,"model_path":model_path}
         gate=_shadow_model_acceptance(dict(row))
         return {"ready":bool(gate["accepted"]),"reason":gate["reason"],"samples":samples,"model_run_id":row["id"],
-                "stored_accepted":bool(row["accepted"]),"validation":gate}
+                "stored_accepted":bool(row["accepted"]),"validation":gate,"instrument":instrument,"model_path":model_path}
     except Exception as e:
-        return {"ready":False,"reason":"model_governance_error","error":str(e)}
+        return {"ready":False,"reason":"model_governance_error","error":str(e),"instrument":instrument,"model_path":model_path}
 
-
-def load_shadow_probability(features: Dict[str, Any]) -> Optional[float]:
-    if not ML_SHADOW or not Path(MODEL_PATH).exists():
+def load_shadow_probability(features: Dict[str, Any], instrument: Optional[str]=None) -> Optional[float]:
+    instrument=InstrumentRegistry.normalize_symbol(instrument or PRIMARY_INSTRUMENT)
+    model_path=shadow_model_path(instrument)
+    if not ML_SHADOW or not Path(model_path).exists():
         return None
-    governance=shadow_model_governance_status()
+    governance=shadow_model_governance_status(instrument)
     if not governance.get("ready"):
-        log.debug("shadow model disabled by validation governance: %s",governance.get("reason"))
+        log.debug("shadow model disabled by validation governance instrument=%s: %s",instrument,governance.get("reason"))
         return None
     try:
-        import joblib
-        artifact = joblib.load(MODEL_PATH)
+        artifact=joblib.load(model_path)
         if isinstance(artifact, dict):
-            model = artifact.get("model")
-            feature_names = artifact.get("features") or FEATURE_COLUMNS
+            model=artifact.get("model");feature_names=artifact.get("features") or FEATURE_COLUMNS
         else:
-            model = artifact
-            feature_names = FEATURE_COLUMNS
-
-        if model is None or not hasattr(model, "predict_proba"):
+            model=artifact;feature_names=FEATURE_COLUMNS
+        if model is None or not hasattr(model,"predict_proba"):
             raise TypeError("shadow model artifact does not contain a predict_proba-capable model")
-
-        vector = [features.get(name, 0.0) for name in feature_names]
+        vector=[features.get(name,0.0) for name in feature_names]
         return float(model.predict_proba([vector])[0][1])
     except Exception as e:
-        log.warning("shadow model prediction failed: %s", e)
+        log.warning("shadow model prediction failed instrument=%s: %s",instrument,e)
         return None
 
 
@@ -6001,9 +6149,6 @@ async def haspos(client: httpx.AsyncClient, inst: str) -> bool:
     return any(x.get("instrument") == inst for x in d.get("positions", []))
 
 
-
-def pip_size(instrument: str) -> float:
-    return 0.01 if "JPY" in instrument else 0.0001
 
 def calibration_report():
     c=conn(); rows=[dict(x) for x in c.execute("""SELECT s.dynamic_confidence,ls.label FROM signals s
@@ -6094,20 +6239,26 @@ async def recovery_startup_sequence() -> Dict[str,Any]:
         return {"status":"CRITICAL_FAILURE","stage":"CONNECT_DATABASE","error":str(e)}
 
     async with httpx.AsyncClient() as client:
-        market_ok=False;market_error=None;market_ts=None
+        market_ok=False;market_error=None;market_ts=None;market_by_instrument={}
         try:
-            m1=await candles(client,INSTRUMENTS[0],"M1",5)
-            if m1:
-                market_ts=m1[-1]["t"]
-                dt=_parse_iso(market_ts)
-                age=(datetime.now(timezone.utc)-dt).total_seconds() if dt else 999999
-                market_ok=age<=RECOVERY_MARKET_DATA_MAX_AGE_SECONDS or market_is_weekend_closed()
-                recovery_manager.market_data_update(market_ts,market_ok)
+            for startup_inst in INSTRUMENTS:
+                try:
+                    m1=await candles(client,startup_inst,"M1",5)
+                    ts=m1[-1]["t"] if m1 else None;dt=_parse_iso(ts) if ts else None
+                    age=(datetime.now(timezone.utc)-dt).total_seconds() if dt else 999999
+                    ok=bool(m1) and (age<=RECOVERY_MARKET_DATA_MAX_AGE_SECONDS or market_is_weekend_closed())
+                    market_by_instrument[startup_inst]={"ok":ok,"timestamp":str(ts) if ts else None,"age_seconds":age}
+                except Exception as inst_e:
+                    market_by_instrument[startup_inst]={"ok":False,"error":str(inst_e)}
+            market_ok=bool(market_by_instrument) and all(x.get("ok") for x in market_by_instrument.values())
+            primary_state=market_by_instrument.get(PRIMARY_INSTRUMENT) or {}
+            market_ts=primary_state.get("timestamp")
+            recovery_manager.market_data_update(market_ts,market_ok)
             recovery_manager.startup_stage("CONNECT_MARKET_DATA","OK" if market_ok else "ERROR",
-                                           {"timestamp":market_ts})
+                                           {"primary_timestamp":market_ts,"by_instrument":market_by_instrument})
         except Exception as e:
             market_error=str(e)
-            recovery_manager.startup_stage("CONNECT_MARKET_DATA","ERROR",{"error":market_error})
+            recovery_manager.startup_stage("CONNECT_MARKET_DATA","ERROR",{"error":market_error,"by_instrument":market_by_instrument})
 
         recovery_manager.startup_stage("CONNECT_BROKER")
         rr=await recovery_reconcile_primary(client,"startup")
@@ -6178,10 +6329,13 @@ async def recovery_price_preflight(client: httpx.AsyncClient, r: Dict[str,Any]) 
         ok=(age<=RECOVERY_MAX_QUOTE_AGE_SECONDS and spread<=RECOVERY_MAX_SPREAD_PIPS
             and deviation<=RECOVERY_MAX_PRICE_DEVIATION_PIPS
             and market_status not in ("non-tradeable","halted","closed"))
+        conversion_factors=q.get("quoteHomeConversionFactors") or {}
+        conversion=_risk_float(conversion_factors.get("negativeUnits") if r.get("signal")=="SELL" else conversion_factors.get("positiveUnits"))
         return {"ok":ok,"bid":bid,"ask":ask,"mid":mid,"last_price":mid,"spread_pips":spread,
                 "quote_age_seconds":age,"deviation_pips":deviation,"market_status":market_status,
                 "quote_time":q.get("time"),"available_liquidity":available_liquidity,
                 "bid_liquidity":bid_liquidity or None,"ask_liquidity":ask_liquidity or None,
+                "quote_home_conversion":conversion,"quote_home_conversion_factors":conversion_factors,
                 "reason":"OK" if ok else "REQUIRE_REVALIDATION"}
     except Exception as e:
         return {"ok":False,"reason":"PRICE_PREFLIGHT_ERROR","error":str(e)}
@@ -6207,6 +6361,19 @@ async def execute_recoverable(client: httpx.AsyncClient, r: Dict[str,Any],
         except Exception:
             pass
         return {"skipped":entry_gate["reason"],**payload}
+    mode=instrument_mode(r["instrument"])
+    if mode != "ENABLED":
+        return {"skipped":"INSTRUMENT_NOT_EXECUTION_ENABLED","instrument_mode":mode}
+    # Any newly PAPER-enabled secondary instrument must be verified against broker
+    # metadata before an order can be built. EUR/USD retains its established fallback
+    # during transient metadata outages, preserving the frozen baseline behavior.
+    if r["instrument"] != PRIMARY_INSTRUMENT and instrument_metadata(r["instrument"]).source != "OANDA":
+        try:
+            await refresh_instrument_metadata(client,[r["instrument"]],force=True)
+        except Exception as e:
+            return {"skipped":"INSTRUMENT_METADATA_UNVERIFIED","error":str(e)}
+        if instrument_metadata(r["instrument"]).source != "OANDA":
+            return {"skipped":"INSTRUMENT_METADATA_UNVERIFIED"}
     if SINGLE and await haspos(client,r["instrument"]):
         return {"skipped":"existing_position"}
     preflight=await recovery_price_preflight(client,r)
@@ -6216,13 +6383,21 @@ async def execute_recoverable(client: httpx.AsyncClient, r: Dict[str,Any],
         recovery_manager.journal("REJECT_EXECUTION",correlation_id,strategy_id=setup_variant(r),
                                  payload={"reason":"PRICE_PREFLIGHT","preflight":preflight})
         return {"skipped":"REQUIRE_REVALIDATION","price_preflight":preflight}
-    d=3 if "JPY" in r["instrument"] else 5
-    effective_units=min(UNITS,int(managed_value("execution.trade_units",UNITS)))
+    sizing=instrument_sizing(
+        r["instrument"],min(UNITS,int(managed_value("execution.trade_units",UNITS))),
+        r["entry"],r["stop"],risk_context=r.get("broker_risk_context"),
+        quote_home_conversion=preflight.get("quote_home_conversion"))
+    effective_units=float(sizing["effective_units"])
+    r["instrument_sizing"]=sizing
+    if effective_units <= 0:
+        return {"skipped":"INSTRUMENT_SIZE_BELOW_MINIMUM","sizing":sizing}
     if TRADING_ENVIRONMENT=="PRODUCTION" and PRODUCTION_READINESS_ENABLED:
         pst=production_readiness_gate.state();stage=pst.get("production_stage")
         if stage in production_readiness_gate.stage_limits:
             cap=float(production_readiness_gate.effective_stage_limits(stage,production_hard_limits()).get("risk_cap_multiplier") or 0.0)
-            effective_units=max(1,int(effective_units*cap))
+            effective_units=abs(float(normalize_instrument_units(r["instrument"],effective_units*cap,allow_zero=True)))
+            if effective_units <= 0:
+                return {"skipped":"PRODUCTION_SIZE_CAP_BELOW_MINIMUM","sizing":sizing}
     smart_intent=None; smart_snapshot=None; smart_shadow=None
     if SMART_EXECUTION_ENABLED:
         try:
@@ -6264,10 +6439,10 @@ async def execute_recoverable(client: httpx.AsyncClient, r: Dict[str,Any],
                             details={"mode":"SHADOW","existing_execution_unchanged":True})
     # Step 16 shadow boundary: actual order remains the existing safe MARKET/FOK path.
     u=effective_units if r["signal"]=="BUY" else -effective_units
-    body={"order":{"instrument":r["instrument"],"units":str(u),"type":"MARKET","timeInForce":"FOK",
+    body={"order":{"instrument":r["instrument"],"units":format_instrument_units(r["instrument"],u),"type":"MARKET","timeInForce":"FOK",
                    "positionFill":"DEFAULT",
-                   "stopLossOnFill":{"price":f"{r['stop']:.{d}f}","timeInForce":"GTC"},
-                   "takeProfitOnFill":{"price":f"{r.get('managed_target',r['target']):.{d}f}","timeInForce":"GTC"}}}
+                   "stopLossOnFill":{"price":format_instrument_price(r["instrument"],r["stop"]),"timeInForce":"GTC"},
+                   "takeProfitOnFill":{"price":format_instrument_price(r["instrument"],r.get("managed_target",r["target"])),"timeInForce":"GTC"}}}
     key=deterministic_intent_key(
         recovery_manager.account_scope,r["instrument"],r["signal"],setup_variant(r),
         r.get("candle_ts") or now_iso(),r["entry"],r["stop"],r.get("managed_target",r["target"]))
@@ -6304,6 +6479,16 @@ async def execute_recoverable(client: httpx.AsyncClient, r: Dict[str,Any],
 
 async def execute(client: httpx.AsyncClient, r: Dict[str, Any]):
     # Legacy/fallback execution path carries the same hard new-entry gates.
+    mode=instrument_mode(r["instrument"])
+    if mode != "ENABLED":
+        return {"skipped":"INSTRUMENT_NOT_EXECUTION_ENABLED","instrument_mode":mode}
+    if r["instrument"] != PRIMARY_INSTRUMENT and instrument_metadata(r["instrument"]).source != "OANDA":
+        try:
+            await refresh_instrument_metadata(client,[r["instrument"]],force=True)
+        except Exception as e:
+            return {"skipped":"INSTRUMENT_METADATA_UNVERIFIED","error":str(e)}
+        if instrument_metadata(r["instrument"]).source != "OANDA":
+            return {"skipped":"INSTRUMENT_METADATA_UNVERIFIED"}
     if market_is_weekend_closed():
         return {"skipped":"MARKET_CLOSED","reason":"MARKET_CLOSED","market_closed":True,"market_data_state":"MARKET_CLOSED"}
     entry_gate=new_entry_time_gate()
@@ -6311,12 +6496,15 @@ async def execute(client: httpx.AsyncClient, r: Dict[str, Any]):
         return {"skipped":entry_gate["reason"],"reason":entry_gate["reason"],"entry_time_gate":entry_gate}
     if SINGLE and await haspos(client, r["instrument"]):
         return {"skipped": "existing_position"}
-    d = 3 if "JPY" in r["instrument"] else 5
-    u = UNITS if r["signal"] == "BUY" else -UNITS
+    sizing=instrument_sizing(r["instrument"],UNITS,r["entry"],r["stop"],risk_context=r.get("broker_risk_context"))
+    effective_units=float(sizing["effective_units"]); r["instrument_sizing"]=sizing
+    if effective_units <= 0:
+        return {"skipped":"INSTRUMENT_SIZE_BELOW_MINIMUM","sizing":sizing}
+    u = effective_units if r["signal"] == "BUY" else -effective_units
     body = {"order": {
-        "instrument": r["instrument"], "units": str(u), "type": "MARKET", "timeInForce": "FOK", "positionFill": "DEFAULT",
-        "stopLossOnFill": {"price": f"{r['stop']:.{d}f}", "timeInForce": "GTC"},
-        "takeProfitOnFill": {"price": f"{r.get('managed_target', r['target']):.{d}f}", "timeInForce": "GTC"}
+        "instrument": r["instrument"], "units": format_instrument_units(r["instrument"],u), "type": "MARKET", "timeInForce": "FOK", "positionFill": "DEFAULT",
+        "stopLossOnFill": {"price": format_instrument_price(r["instrument"],r["stop"]), "timeInForce": "GTC"},
+        "takeProfitOnFill": {"price": format_instrument_price(r["instrument"],r.get("managed_target", r["target"])), "timeInForce": "GTC"}
     }}
     return await req(client, "POST", "/v3/accounts/{account}/orders", body=body)
 
@@ -7020,11 +7208,11 @@ def _auto_dataset():
     canonical=c.execute("""SELECT ls.label,s.candle_ts,s.instrument,s.signal,s.features_json,
                                   'CANONICAL' source,NULL variant
                            FROM learning_samples ls JOIN signals s ON s.id=ls.signal_id
-                           WHERE ls.label IN (0,1)""").fetchall()
+                           WHERE ls.label IN (0,1) AND s.instrument=?""",(PRIMARY_INSTRUMENT,)).fetchall()
     shadow=c.execute("""SELECT st.label,s.candle_ts,s.instrument,s.signal,s.features_json,
                                'SHADOW' source,st.variant variant
                         FROM shadow_trials st JOIN signals s ON s.id=st.signal_id
-                        WHERE st.label IN (0,1)""").fetchall()
+                        WHERE st.label IN (0,1) AND s.instrument=?""",(PRIMARY_INSTRUMENT,)).fetchall()
     c.close()
     raw=[]
     for row in list(canonical)+list(shadow):
@@ -7305,7 +7493,8 @@ def _canonical_rule_rows(limit=1000):
     c=conn()
     rows=c.execute("""SELECT ls.label,s.signal,s.features_json,s.filters_json,s.instrument,s.candle_ts,s.ts
                       FROM learning_samples ls JOIN signals s ON s.id=ls.signal_id
-                      WHERE ls.label IN (0,1) ORDER BY s.id DESC LIMIT ?""",(limit,)).fetchall()
+                      WHERE ls.label IN (0,1) AND s.instrument=? ORDER BY s.id DESC LIMIT ?""",
+                   (PRIMARY_INSTRUMENT,limit)).fetchall()
     c.close()
     return list(reversed(rows))
 
@@ -7500,6 +7689,10 @@ def promote_validated_research_rule():
     return {"promoted":bool(x["promoted"]),"promoted_rules":x["promoted"],"skipped":x["skipped"],"active_count":x["active_count"]}
 
 def evaluate_active_research_rules(r):
+    instrument=InstrumentRegistry.normalize_symbol((r or {}).get("instrument") or PRIMARY_INSTRUMENT)
+    if instrument != PRIMARY_INSTRUMENT:
+        return {"ok":True,"active":False,"rules":[],"vetoes":[],
+                "reason":"instrument_scoped_research_not_validated","instrument":instrument}
     rules=get_active_research_rules()
     if not rules:return {"ok":True,"active":False,"rules":[],"vetoes":[]}
     results=[];vetoes=[]
@@ -7522,7 +7715,8 @@ def _matching_rows_since(rule):
     c=conn()
     rows=c.execute("""SELECT ls.label,s.signal,s.features_json,s.filters_json,s.instrument,s.candle_ts,s.ts
                       FROM learning_samples ls JOIN signals s ON s.id=ls.signal_id
-                      WHERE ls.label IN (0,1) AND s.ts>=? ORDER BY s.id""",(rule["activated_ts"],)).fetchall()
+                      WHERE ls.label IN (0,1) AND s.instrument=? AND s.ts>=? ORDER BY s.id""",
+                   (PRIMARY_INSTRUMENT,rule["activated_ts"])).fetchall()
     c.close()
     return [r for r in rows if _signal_passes_rule_for_review(rule["source"],rule["rule_key"],r) is True]
 
@@ -7662,8 +7856,8 @@ def refresh_filter_hypotheses()->Dict[str,Any]:
     terminal=c.execute("""SELECT ls.label,ls.status,s.id signal_id,s.candle_ts,s.instrument,s.signal,
                                  s.features_json,s.filters_json
                           FROM learning_samples ls JOIN signals s ON s.id=ls.signal_id
-                          WHERE ls.status IN ('WIN','LOSS','TIMEOUT','AMBIGUOUS')
-                          ORDER BY s.candle_ts,s.id""").fetchall()
+                          WHERE ls.status IN ('WIN','LOSS','TIMEOUT','AMBIGUOUS') AND s.instrument=?
+                          ORDER BY s.candle_ts,s.id""",(PRIMARY_INSTRUMENT,)).fetchall()
     episodes=collapse_market_episodes(terminal,gap_minutes=RESEARCH_EPISODE_GAP_MINUTES)
     rows=[x for x in episodes if x.get("label") in (0,1)]
     unresolved=sum(1 for x in episodes if x.get("label") not in (0,1))
@@ -7695,17 +7889,19 @@ def refresh_filter_hypotheses()->Dict[str,Any]:
             "validated":counts["VALIDATED"],"rejected":counts["REJECTED"]}
 
 
-def should_retrain_model()->Dict[str,Any]:
+def should_retrain_model(instrument: Optional[str]=None)->Dict[str,Any]:
+    instrument=InstrumentRegistry.normalize_symbol(instrument or PRIMARY_INSTRUMENT)
     c=conn()
     rows=c.execute("""SELECT ls.label,s.candle_ts,s.instrument,s.signal
                       FROM learning_samples ls JOIN signals s ON s.id=ls.signal_id
-                      WHERE ls.label IN (0,1) ORDER BY s.candle_ts,s.id""").fetchall()
-    last=c.execute("SELECT samples FROM model_runs WHERE accepted=1 ORDER BY id DESC LIMIT 1").fetchone();c.close()
+                      WHERE ls.instrument=? AND s.instrument=? AND ls.label IN (0,1) ORDER BY s.candle_ts,s.id""",
+                   (instrument,instrument)).fetchall()
+    last=c.execute("SELECT samples FROM model_runs WHERE instrument=? AND accepted=1 ORDER BY id DESC LIMIT 1",(instrument,)).fetchone();c.close()
     labeled=len(collapse_market_episodes(rows,gap_minutes=RESEARCH_EPISODE_GAP_MINUTES))
     last_n=int(last["samples"]) if last else 0
     threshold=ML_MIN_SAMPLES if not last else last_n+MODEL_MIN_NEW_LABELS
     return {"ready":labeled>=threshold,"labeled":labeled,"last_model_samples":last_n,"next_training_at":threshold,
-            "sample_unit":"market_episode","episode_gap_minutes":RESEARCH_EPISODE_GAP_MINUTES}
+            "sample_unit":"market_episode","episode_gap_minutes":RESEARCH_EPISODE_GAP_MINUTES,"instrument":instrument}
 
 
 def resolve_one(sample: sqlite3.Row, m1: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
@@ -7858,40 +8054,55 @@ def learning_stats() -> Dict[str, Any]:
     }
 
 
-def train_shadow_model(force: bool = False) -> Dict[str, Any]:
-    c=conn(); rows=c.execute("SELECT features_json,label,resolved_ts FROM learning_samples WHERE label IN (0,1) ORDER BY resolved_ts,id").fetchall(); c.close()
-    if len(rows)<ML_MIN_SAMPLES and not force:return {"trained":False,"reason":f"need {ML_MIN_SAMPLES}, have {len(rows)}","samples":len(rows)}
-    if len(rows)<20:return {"trained":False,"reason":"need at least 20 resolved samples for temporal validation","samples":len(rows)}
-    X=[]; y=[]
+def train_shadow_model(force: bool=False, instrument: Optional[str]=None) -> Dict[str,Any]:
+    instrument=InstrumentRegistry.normalize_symbol(instrument or PRIMARY_INSTRUMENT)
+    model_path=shadow_model_path(instrument)
+    c=conn(); rows=c.execute("""SELECT features_json,label,resolved_ts FROM learning_samples
+                                 WHERE instrument=? AND label IN (0,1) ORDER BY resolved_ts,id""",
+                              (instrument,)).fetchall(); c.close()
+    if len(rows)<ML_MIN_SAMPLES and not force:return {"trained":False,"reason":f"need {ML_MIN_SAMPLES}, have {len(rows)}","samples":len(rows),"instrument":instrument}
+    if len(rows)<20:return {"trained":False,"reason":"need at least 20 resolved samples for temporal validation","samples":len(rows),"instrument":instrument}
+    X=[];y=[]
     for row in rows:
-        f=json.loads(row["features_json"]); X.append([float(f.get(k,0) or 0) for k in FEATURE_COLUMNS]); y.append(int(row["label"]))
-    X=np.asarray(X); y=np.asarray(y)
-    if len(set(y.tolist()))<2:return {"trained":False,"reason":"need WIN and LOSS labels","samples":len(y)}
-    folds=[]; splits=min(5,max(2,len(y)//20))
+        f=json.loads(row["features_json"]);X.append([float(f.get(k,0) or 0) for k in FEATURE_COLUMNS]);y.append(int(row["label"]))
+    X=np.asarray(X);y=np.asarray(y)
+    if len(set(y.tolist()))<2:return {"trained":False,"reason":"need WIN and LOSS labels","samples":len(y),"instrument":instrument}
+    folds=[];splits=min(5,max(2,len(y)//20))
     for tr,te in TimeSeriesSplit(n_splits=splits).split(X):
         if len(set(y[tr].tolist()))<2 or len(set(y[te].tolist()))<2:continue
         model=Pipeline([("scale",StandardScaler()),("clf",LogisticRegression(max_iter=1000,class_weight="balanced"))])
-        model.fit(X[tr],y[tr]); prob=model.predict_proba(X[te])[:,1]; pred=(prob>=.5).astype(int)
+        model.fit(X[tr],y[tr]);prob=model.predict_proba(X[te])[:,1];pred=(prob>=.5).astype(int)
         folds.append({"train":len(tr),"test":len(te),"accuracy":float(accuracy_score(y[te],pred)),
           "auc":float(roc_auc_score(y[te],prob)),"log_loss":float(log_loss(y[te],prob)),
           "brier":float(brier_score_loss(y[te],prob)),"baseline":float(max(np.mean(y[te]),1-np.mean(y[te])))})
-    if not folds:return {"trained":False,"reason":"insufficient class diversity across time folds","samples":len(y)}
-    final=Pipeline([("scale",StandardScaler()),("clf",LogisticRegression(max_iter=1000,class_weight="balanced"))]); final.fit(X,y)
+    if not folds:return {"trained":False,"reason":"insufficient class diversity across time folds","samples":len(y),"instrument":instrument}
+    final=Pipeline([("scale",StandardScaler()),("clf",LogisticRegression(max_iter=1000,class_weight="balanced"))]);final.fit(X,y)
     avg={k:float(np.mean([f[k] for f in folds])) for k in ["accuracy","auc","log_loss","brier","baseline"]}
     gate=_shadow_model_acceptance({"roc_auc":avg["auc"],"accuracy":avg["accuracy"],"baseline_accuracy":avg["baseline"]})
     accepted=bool(gate["accepted"])
     if accepted:
+        Path(model_path).parent.mkdir(parents=True,exist_ok=True)
         joblib.dump({"model":final,"features":FEATURE_COLUMNS,"trained_at":now_iso(),"samples":len(y),"walk_forward":folds,
-                     "validation_gate":gate},MODEL_PATH)
-    c=conn(); c.execute("""INSERT INTO model_runs(trained_ts,samples,train_samples,test_samples,win_rate,baseline_accuracy,accuracy,roc_auc,log_loss,accepted,model_path,note)
-      VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
-      (now_iso(),len(y),folds[-1]["train"],folds[-1]["test"],float(np.mean(y)),avg["baseline"],avg["accuracy"],avg["auc"],avg["log_loss"],int(accepted),MODEL_PATH if accepted else None,
-       json.dumps({"validation":"TimeSeriesSplit_walk_forward","folds":folds,"brier":avg["brier"],"acceptance_gate":gate}))); c.commit(); c.close()
-    return {"trained":True,"accepted":accepted,"acceptance_gate":gate,"samples":len(y),"validation":"TimeSeriesSplit_walk_forward","folds":folds,"average":avg}
+                     "validation_gate":gate,"instrument":instrument},model_path)
+    c=conn();c.execute("""INSERT INTO model_runs(trained_ts,samples,train_samples,test_samples,win_rate,baseline_accuracy,accuracy,roc_auc,log_loss,accepted,model_path,note,instrument)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+      (now_iso(),len(y),folds[-1]["train"],folds[-1]["test"],float(np.mean(y)),avg["baseline"],avg["accuracy"],avg["auc"],avg["log_loss"],int(accepted),model_path if accepted else None,
+       json.dumps({"validation":"TimeSeriesSplit_walk_forward","folds":folds,"brier":avg["brier"],"acceptance_gate":gate,"instrument":instrument}),instrument));c.commit();c.close()
+    return {"trained":True,"accepted":accepted,"acceptance_gate":gate,"samples":len(y),"validation":"TimeSeriesSplit_walk_forward","folds":folds,"average":avg,"instrument":instrument,"model_path":model_path}
 
 
 async def replace_trade_stop(client: httpx.AsyncClient, trade_id: str, price: float) -> Dict[str, Any]:
-    body = {"stopLoss": {"price": f"{price:.5f}", "timeInForce": "GTC"}}
+    # Preserve the hardened public call signature while resolving precision from
+    # the persisted trade namespace. Existing callers/tests therefore remain
+    # compatible and GBP/JPY do not inherit EUR/USD formatting.
+    instrument="EUR_USD"
+    try:
+        c=conn(); row=c.execute("SELECT instrument FROM active_trade_management WHERE trade_id=?",(str(trade_id),)).fetchone(); c.close()
+        if row and row["instrument"]:
+            instrument=str(row["instrument"])
+    except Exception:
+        pass
+    body = {"stopLoss": {"price": format_instrument_price(instrument,price), "timeInForce": "GTC"}}
     # IMPORTANT: req()'s fourth positional argument is params, not body. Always
     # pass protective-order updates explicitly as JSON body.
     return await req(client, "PUT", f"/v3/accounts/{{account}}/trades/{trade_id}/orders", body=body)
@@ -8295,22 +8506,29 @@ async def observability_startup_health_check() -> Dict[str,Any]:
         observability_manager.recover("PERSISTENT_STORAGE_NOT_CONFIGURED","Persistent learning/model storage is configured",storage)
     async with httpx.AsyncClient() as client:
         broker=await observability_broker_snapshot(client);checks["broker"]={"ok":bool(broker.get("ok")),"latency_ms":broker.get("latency_ms")}
-        # Market data on first configured instrument.
-        try:
-            t=time.perf_counter();m1=await candles(client,INSTRUMENTS[0],"M1",60);lat=(time.perf_counter()-t)*1000
-            mh=observability_market_data_update(INSTRUMENTS[0],m1,lat)
-            # Closed-market research is a valid startup state, but report it
-            # explicitly rather than pretending old candles are fresh.
-            checks["market_data"]={"ok":(not mh["stale"]),**mh}
-        except Exception as e:
-            checks["market_data"]={"ok":False,"error":str(e)};_obs_module("Market Data","ERROR",errors=[str(e)])
-            observability_manager.alert("STARTUP_MARKET_DATA","CRITICAL","Market Data","STARTUP_HEALTH_FAILURE","Startup market data check failed",details={"error":str(e)})
+        # Every execution-enabled instrument is critical; shadow-only symbols are
+        # observed separately and cannot take EUR/USD offline when unavailable.
+        market_checks={}
+        for startup_inst in INSTRUMENTS:
+            try:
+                t=time.perf_counter();m1=await candles(client,startup_inst,"M1",60);lat=(time.perf_counter()-t)*1000
+                mh=observability_market_data_update(startup_inst,m1,lat)
+                market_checks[startup_inst]={"ok":(not mh["stale"]),**mh}
+            except Exception as e:
+                market_checks[startup_inst]={"ok":False,"error":str(e)}
+        checks["market_data"]={"ok":bool(market_checks) and all(x.get("ok") for x in market_checks.values()),"by_instrument":market_checks}
+        for shadow_inst in SHADOW_INSTRUMENTS:
+            try:
+                t=time.perf_counter();sm1=await candles(client,shadow_inst,"M1",60);slat=(time.perf_counter()-t)*1000
+                checks.setdefault("shadow_market_data",{})[shadow_inst]={"ok":True,**observability_market_data_update(shadow_inst,sm1,slat)}
+            except Exception as e:
+                checks.setdefault("shadow_market_data",{})[shadow_inst]={"ok":False,"error":str(e)}
     # Positions reconciliation is broker source of truth when available.
     reconciliation=broker.get("reconciliation") or {"status":"UNKNOWN"}
     checks["positions_reconciled"]={"ok":reconciliation.get("status")=="CONSISTENT","detail":reconciliation}
     # Risk Engine readiness: pure calculation with conservative startup context.
     try:
-        test=adaptive_risk_recommendation(INSTRUMENTS[0],"STARTUP_HEALTH",
+        test=adaptive_risk_recommendation(PRIMARY_INSTRUMENT,"STARTUP_HEALTH",
             {"market_regime":"RANGE","confidence":.5,"volatility_state":"NORMAL","trend_strength":0},
             {"confidence":.5},.5,
             {"nav":broker.get("equity"),"current_drawdown":broker.get("drawdown"),"margin_usage":broker.get("margin_usage"),
@@ -8734,7 +8952,7 @@ async def scan(client: httpx.AsyncClient, inst: str) -> Dict[str, Any]:
         # These research/learning refreshes are synchronous SQLite/CPU work too.
         # Keep their original order and await completion, but execute them outside
         # the asyncio thread so trade management/watchdogs remain responsive.
-        await asyncio.to_thread(refresh_discovered_patterns)
+        await asyncio.to_thread(refresh_discovered_patterns, inst)
         await asyncio.to_thread(refresh_filter_hypotheses)
         await asyncio.to_thread(refresh_external_hypotheses)
         await asyncio.to_thread(autonomous_discovery_refresh)
@@ -8745,11 +8963,12 @@ async def scan(client: httpx.AsyncClient, inst: str) -> Dict[str, Any]:
         # Close the learning loop as soon as enough labeled outcomes exist instead
         # of waiting for the hourly maintenance tick. Training still enforces its
         # own minimum sample and temporal-validation requirements.
-        retrain=await asyncio.to_thread(should_retrain_model)
+        retrain=await asyncio.to_thread(should_retrain_model,inst)
         if retrain["ready"]:
             try:
-                trained=await asyncio.to_thread(train_shadow_model, force=False)
-                state["learning"]={**trained,"last_train":now_iso(),"model_ready":bool(shadow_model_governance_status().get("ready")),"retrain_policy":retrain}
+                trained=await asyncio.to_thread(train_shadow_model,False,inst)
+                state.setdefault("learning_by_instrument",{})[inst]={**trained,"last_train":now_iso(),"model_ready":bool(shadow_model_governance_status(inst).get("ready")),"retrain_policy":retrain}
+                if inst==PRIMARY_INSTRUMENT: state["learning"]=state["learning_by_instrument"][inst]
             except Exception as e: log.exception("evidence-gated learning refresh failed: %s",e)
     # V3.19: autonomous research cannot self-activate rules.
     if AUTO_PROMOTE_RESEARCH:
@@ -8803,13 +9022,13 @@ async def scan(client: httpx.AsyncClient, inst: str) -> Dict[str, Any]:
         r["managed_target"]=target_plan["target"]
         r["trend_runner"]=target_plan["runner"]
         r["trend_score"]=target_plan["trend_score"]
-    mlp = load_shadow_probability(r["features"]) if r["signal"] != "WAIT" else None
+    mlp = load_shadow_probability(r["features"],inst) if r["signal"] != "WAIT" else None
     conf = dynamic_confidence(r, mlp) if r["signal"] != "WAIT" else {
         "probability": None, "source": "WAIT", "samples": 0, "local_samples": 0,
         "variant": "WAIT", "mature": False, "recent_win_rate": None,
         "performance_penalty": 0.0, "required_confidence": EXECUTION_MIN_CONFIDENCE
     }
-    r["strategy_health"]=strategy_health_snapshot(setup_variant(r)) if r["signal"]!="WAIT" else None
+    r["strategy_health"]=strategy_health_snapshot(setup_variant(r),inst) if r["signal"]!="WAIT" else None
     r["research_governance"]={
         "auto_promote":AUTO_PROMOTE_RESEARCH,
         "min_samples":AUTO_PROMOTE_MIN_SAMPLES,
@@ -8861,6 +9080,7 @@ async def scan(client: httpx.AsyncClient, inst: str) -> Dict[str, Any]:
     # Read-only broker context; the recommendation is NOT passed into execution_decision().
     try:
         broker_risk_context = await build_broker_risk_context(client)
+        r["broker_risk_context"]=broker_risk_context
         persist_portfolio_risk_context(broker_risk_context)
     except Exception as e:
         broker_risk_context = {
@@ -8903,6 +9123,9 @@ async def scan(client: httpx.AsyncClient, inst: str) -> Dict[str, Any]:
     r["adaptive_risk_decision_id"] = risk_shadow_id
 
     decision = execution_decision(r, conf)
+    r["instrument_mode"]=instrument_mode(inst)
+    if r["instrument_mode"] != "ENABLED":
+        decision={"execute":False,"reason":f"INSTRUMENT_{r['instrument_mode']}: signal/research only; order authority disabled"}
     if RECOVERY_MANAGER_ENABLED and not recovery_manager.new_trades_allowed():
         decision={"execute":False,"reason":"RECOVERY_SAFE_MODE: broker/internal state not sufficiently certain"}
     if OBSERVABILITY_STARTUP_BLOCK_TRADING and not state.get("system_ready"):
@@ -9253,6 +9476,40 @@ def scanner_health_snapshot() -> Dict[str, Any]:
     }
 
 
+async def scan_instruments_once(client: httpx.AsyncClient) -> bool:
+    """Run one instrument pass with strict per-symbol failure isolation."""
+    cycle_ok=True
+    for inst in SCAN_INSTRUMENTS:
+        try:
+            if WEEKEND_RESEARCH_ENABLED and market_is_weekend_closed():
+                snap=await collect_weekend_news_snapshot(client,inst)
+                state.setdefault("weekend_research",{})[inst]=snap
+            result=await scan(client,inst)
+            state["last_results"][inst]=result
+            state.setdefault("instrument_state",{})[inst]={
+                "instrument":inst,"mode":instrument_mode(inst),"last_scan":now_iso(),"ok":True,
+                "last_candle":result.get("candle_ts") if isinstance(result,dict) else None,
+                "metadata":instrument_metadata(inst).as_dict(),
+            }
+            if OBSERVABILITY_ENABLED:
+                observability_manager.recover(f"SCAN_FAILURE:{inst}",f"{inst} scan recovered")
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            cycle_ok=False
+            state["last_results"][inst]={"error":str(e)}
+            state.setdefault("instrument_state",{})[inst]={
+                "instrument":inst,"mode":instrument_mode(inst),"last_scan":now_iso(),"ok":False,"error":str(e),
+                "metadata":instrument_metadata(inst).as_dict(),
+            }
+            state["last_error"]=str(e)
+            if OBSERVABILITY_ENABLED:
+                observability_manager.alert(f"SCAN_FAILURE:{inst}","HIGH","Execution Engine","SCAN_FAILURE",
+                                            f"Scan failed for {inst}",details={"error":str(e),"instrument":inst})
+            log.exception("scan failed for %s",inst)
+    return cycle_ok
+
+
 async def worker():
     state["worker_running"] = True
     state["worker_started_at"] = now_iso()
@@ -9270,22 +9527,7 @@ async def worker():
             state["worker_last_heartbeat"] = state["last_scan"]
             cycle_ok = True
             async with httpx.AsyncClient() as client:
-                for inst in INSTRUMENTS:
-                    try:
-                        if WEEKEND_RESEARCH_ENABLED and market_is_weekend_closed():
-                            snap=await collect_weekend_news_snapshot(client,inst)
-                            state.setdefault("weekend_research",{})[inst]=snap
-                        state["last_results"][inst] = await scan(client, inst)
-                    except asyncio.CancelledError:
-                        raise
-                    except Exception as e:
-                        cycle_ok = False
-                        state["last_results"][inst] = {"error": str(e)}
-                        state["last_error"] = str(e)
-                        if OBSERVABILITY_ENABLED:
-                            observability_manager.alert(f"SCAN_FAILURE:{inst}","HIGH","Execution Engine","SCAN_FAILURE",
-                                                        f"Scan failed for {inst}",details={"error":str(e),"instrument":inst})
-                        log.exception("scan failed for %s", inst)
+                cycle_ok = await scan_instruments_once(client)
                 if OBSERVABILITY_ENABLED:
                     obs_broker=await observability_broker_snapshot(client)
             if OBSERVABILITY_ENABLED:
@@ -9320,15 +9562,18 @@ async def worker():
                 state["last_successful_scan"] = now_iso()
                 state["last_error"] = None
                 if OBSERVABILITY_ENABLED:
-                    for inst in INSTRUMENTS: observability_manager.recover(f"SCAN_FAILURE:{inst}",f"{inst} scan recovered")
+                    for inst in SCAN_INSTRUMENTS: observability_manager.recover(f"SCAN_FAILURE:{inst}",f"{inst} scan recovered")
                     if OBSERVABILITY_STARTUP_BLOCK_TRADING and not state.get("system_ready"):
                         try: await observability_startup_health_check()
                         except Exception as e: log.warning("startup health recheck failed: %s",e)
             if datetime.now(timezone.utc) - last_train_check >= timedelta(hours=1):
                 try:
-                    retrain=should_retrain_model()
-                    result=train_shadow_model(force=False) if retrain["ready"] else {"trained":False,"reason":f"waiting for evidence: {retrain['labeled']}/{retrain['next_training_at']}","samples":retrain["labeled"]}
-                    state["learning"]={**result,"last_train":now_iso(),"model_ready":bool(shadow_model_governance_status().get("ready")),"retrain_policy":retrain}
+                    state.setdefault("learning_by_instrument",{})
+                    for learning_inst in SCAN_INSTRUMENTS:
+                        retrain=should_retrain_model(learning_inst)
+                        result=train_shadow_model(False,learning_inst) if retrain["ready"] else {"trained":False,"reason":f"waiting for evidence: {retrain['labeled']}/{retrain['next_training_at']}","samples":retrain["labeled"],"instrument":learning_inst}
+                        state["learning_by_instrument"][learning_inst]={**result,"last_train":now_iso(),"model_ready":bool(shadow_model_governance_status(learning_inst).get("ready")),"retrain_policy":retrain}
+                    state["learning"]=state["learning_by_instrument"].get(PRIMARY_INSTRUMENT,{})
                 except Exception as e:
                     log.exception("learning cycle failed")
                     state["learning"] = {"trained": False, "last_train": now_iso(), "model_ready": Path(MODEL_PATH).exists(), "error": str(e)}
@@ -10940,18 +11185,17 @@ async def adaptive_risk_refresh(authorization: Optional[str]=Header(None)):
     persist_portfolio_risk_context(ctx)
     results=[]
     c=conn()
-    variants=[x["setup_variant"] for x in c.execute(
-        """SELECT DISTINCT setup_variant FROM signals
-           WHERE setup_variant IS NOT NULL AND setup_variant NOT IN ('','WAIT')"""
+    pairs=[(x["instrument"],x["setup_variant"]) for x in c.execute(
+        """SELECT DISTINCT instrument,setup_variant FROM signals
+           WHERE setup_variant IS NOT NULL AND setup_variant NOT IN ('','WAIT') AND instrument IS NOT NULL"""
     ).fetchall()]
     c.close()
-    for inst in INSTRUMENTS:
+    for inst,variant in pairs:
         regime=state.get("market_regimes",{}).get(inst)
-        for variant in variants:
-            director=ai_strategy_director_recommendation(inst,variant,regime,None)
-            d=adaptive_risk_recommendation(inst,variant,regime,director,None,ctx,UNITS)
-            log_adaptive_risk_decision(d)
-            results.append(d)
+        director=ai_strategy_director_recommendation(inst,variant,regime,None)
+        d=adaptive_risk_recommendation(inst,variant,regime,director,None,ctx,UNITS)
+        log_adaptive_risk_decision(d)
+        results.append(d)
     result={"shadow_mode":True,"risk_context":ctx,"results":results}
     security_manager.audit(actor,"ADAPTIVE_RISK_REFRESH","risk.engine.shadow",None,
                            {"strategies":len(results)},"manual shadow-risk refresh","COMPLETED")
@@ -10971,22 +11215,18 @@ async def ai_strategy_director_refresh(authorization: Optional[str]=Header(None)
     using the latest regime snapshot. No trading authority.
     """
     c=conn()
-    variants=[x["setup_variant"] for x in c.execute(
-        """SELECT DISTINCT setup_variant FROM signals
-           WHERE setup_variant IS NOT NULL AND setup_variant NOT IN ('','WAIT')"""
-    ).fetchall()]
-    instruments=[x["instrument"] for x in c.execute(
-        "SELECT DISTINCT instrument FROM signals WHERE instrument IS NOT NULL"
+    pairs=[(x["instrument"],x["setup_variant"]) for x in c.execute(
+        """SELECT DISTINCT instrument,setup_variant FROM signals
+           WHERE setup_variant IS NOT NULL AND setup_variant NOT IN ('','WAIT') AND instrument IS NOT NULL"""
     ).fetchall()]
     c.close()
 
     results=[]
-    for inst in instruments or INSTRUMENTS:
+    for inst,variant in pairs:
         regime=state.get("market_regimes",{}).get(inst)
-        for variant in variants:
-            d=ai_strategy_director_recommendation(inst,variant,regime,None)
-            log_ai_director_decision(d)
-            results.append(d)
+        d=ai_strategy_director_recommendation(inst,variant,regime,None)
+        log_ai_director_decision(d)
+        results.append(d)
     result={"observation_only":True,"results":results}
     security_manager.audit(actor,"AI_DIRECTOR_REFRESH","ai_strategy_director",None,
                            {"strategies":len(results)},"manual director observation refresh","COMPLETED")
@@ -11141,7 +11381,7 @@ async def discovery():
 async def home():
     return """<!doctype html><html lang='es'><meta name='viewport' content='width=device-width'><title>Market Alert V3.27</title>
 <style>body{font-family:system-ui;background:#0b1020;color:#eef2ff;max-width:1050px;margin:auto;padding:24px}.c{background:#151c32;border:1px solid #2c3656;border-radius:16px;padding:18px;margin:12px 0}pre{white-space:pre-wrap;word-break:break-word;background:#080c17;padding:14px;border-radius:12px}.tag{display:inline-block;padding:5px 9px;border-radius:999px;background:#25304f;margin-right:6px}</style>
-<h1>Market Alert V3.35.2 · Historical Execution + OOS + Storage Lifecycle Hardening</h1><div class=c><span class=tag>OANDA PRACTICE ONLY</span><span class=tag>24/7</span><span class=tag>Sin límite diario</span><span class=tag>Confianza calibrada</span>
+<h1>BotsTrader V3.36.0 · Multi-Asset Foundation</h1><div class=c><span class=tag>OANDA PRACTICE ONLY</span><span class=tag>24/7</span><span class=tag>Sin límite diario</span><span class=tag>Confianza calibrada</span>
 <p><b>Quality Score ≠ probabilidad.</b> La confianza dinámica se calibra con resultados reales. Con poca muestra se limita deliberadamente y el 90% requiere evidencia sustancial.</p></div>
 <div class=c><h2>Estado</h2><pre id=s>Cargando…</pre></div><div class=c><h2>Aprendizaje</h2><pre id=l>Cargando…</pre></div><div class=c><h2>Última decisión</h2><pre id=d>Cargando…</pre></div><div class=c><h2>Últimas señales</h2><pre id=h>Cargando…</pre></div>
 <script>async function u(){s.textContent=JSON.stringify(await fetch('/api/status').then(r=>r.json()),null,2);l.textContent=JSON.stringify(await fetch('/api/learning').then(r=>r.json()),null,2);d.textContent=JSON.stringify(await fetch('/api/decisions?limit=5').then(r=>r.json()),null,2);h.textContent=JSON.stringify(await fetch('/api/signals?limit=15').then(r=>r.json()),null,2)}u();setInterval(u,15000)</script></html>"""

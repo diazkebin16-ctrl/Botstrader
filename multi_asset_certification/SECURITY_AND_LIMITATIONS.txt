@@ -1,0 +1,18 @@
+SECURITY / RUNTIME INTEGRITY
+- VERSION_TAG: 3.36.0
+- instrument_registry.py included in SecurityManager critical file hashes.
+- instrument_registry.py included in production release fingerprint.
+- No manual verified=1, manifest deletion, or baseline manipulation.
+- No leverage or hard/global risk ceiling increase.
+
+SECRET SCAN
+- Real credential findings: 0.
+- Intentional synthetic secret fixture: test_security_manager.py Bearer redaction test.
+- .env/runtime DB/venv/archive intended for commit: 0.
+
+LIMITATIONS
+- GBP_USD is implemented but disabled by default.
+- GBP_USD is OFFLINE/SHADOW scenario validated, NOT PAPER validated.
+- No live OANDA Practice metadata call was made in this offline certification environment.
+- No GBP_USD historical replay is claimed.
+- Railway was not touched.

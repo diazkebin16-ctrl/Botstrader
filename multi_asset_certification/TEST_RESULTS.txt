@@ -1,0 +1,18 @@
+BotsTrader V3.36.0 Multi-Asset Foundation
+
+PHASE 0 BASELINE (ZIP + VERSION_TAG 3.35.3 only)
+compileall: PASS
+pytest: 223 passed, 3 failed, 4 warnings (226 collected)
+3 failures: stale version expectations hard-coded to 3.35.2; same stale expectations confirmed in GitHub commit 6d7f2bc.
+
+V3.36 MULTI-ASSET FOCUSED
+23 passed, 0 failed, 4 warnings
+
+CRITICAL DOMAIN SUITES
+120 passed, 0 failed, 4 warnings
+Domains: security, recovery, governance, integration, smart execution, observability, anomaly, trade management, event-loop hardening, forward release, multi-asset.
+
+FINAL FULL REGRESSION
+249 passed, 0 failed, 4 warnings
+compileall: PASS
+Warnings: FastAPI on_event deprecation only.
