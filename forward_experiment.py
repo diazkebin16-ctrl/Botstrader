@@ -1,4 +1,4 @@
-"""Instrument-scoped PAPER forward experiment policy for EUR/USD and GBP/USD.
+"""Instrument-scoped PAPER forward experiment policy for EUR/USD, GBP/USD, and USD/JPY.
 
 This module is deliberately pure: it has no broker, database, network, outcome,
 or future-data dependency. Runtime authority is granted only by server.py after
@@ -10,10 +10,12 @@ from typing import Any, Dict, Mapping
 
 EUR_FORWARD_EXPERIMENT_ID = "EUR_PHASE2_FORWARD_V1"
 GBP_FORWARD_EXPERIMENT_ID = "GBP_PHASE2_FORWARD_V1"
+USDJPY_FORWARD_EXPERIMENT_ID = "USDJPY_PHASE2_FORWARD_V1"
 
 EUR_LEGACY_DIRECTIONAL_SCORE_MIN = 31.0
 GBP_EXTENSION_ATR_MAX = 1.4985678822167452
 GBP_LEGACY_BUY_SCORE_MIN = 16.400000000000002
+USDJPY_CHOSEN_LEGACY_SCORE_MIN = 33.0
 
 
 def normalize_symbol(symbol: Any) -> str:
@@ -42,6 +44,17 @@ def forward_policy(symbol: Any) -> Dict[str, Any]:
             # DISC002 is stricter than the existing 1.50 ATR quality ceiling and
             # therefore can coexist with it without changing the frozen rule.
             "bypass_quality_extension": False,
+        }
+    if instrument == "USD_JPY":
+        return {
+            "instrument": instrument,
+            "experiment_id": USDJPY_FORWARD_EXPERIMENT_ID,
+            # USD/JPY Phase 1 recovered its target strategic WIN population only
+            # after opening canonical M1 confirmation and QUALITY:EXTENSION.
+            # Safety/global protections are intentionally not represented here.
+            "bypass_m1_confirmation": True,
+            "bypass_low_room_vetoes": False,
+            "bypass_quality_extension": True,
         }
     return {
         "instrument": instrument,
@@ -87,6 +100,51 @@ def evaluate_forward_experiment(symbol: Any, features: Mapping[str, Any]) -> Dic
             "legacy_v331_directional_score": directional,
             "legacy_v331_chosen_direction": chosen,
             "threshold": EUR_LEGACY_DIRECTIONAL_SCORE_MIN,
+            "pass": passed,
+        }
+
+    if instrument == "USD_JPY":
+        required = ("chosen_direction", "legacy_v331_buy_score", "legacy_v331_sell_score")
+        missing = [k for k in required if k not in f or f.get(k) is None]
+        if missing:
+            return {
+                "ok": False,
+                "instrument": instrument,
+                "experiment_id": USDJPY_FORWARD_EXPERIMENT_ID,
+                "reason": "USDJPY_EXPERIMENTAL_CHOSEN_LEGACY_SCORE_FEATURES_MISSING",
+                "missing": missing,
+            }
+        direction = str(f["chosen_direction"]).upper()
+        buy_score = float(f["legacy_v331_buy_score"])
+        sell_score = float(f["legacy_v331_sell_score"])
+        if direction == "BUY":
+            chosen_score = buy_score
+        elif direction == "SELL":
+            chosen_score = sell_score
+        else:
+            return {
+                "ok": False,
+                "instrument": instrument,
+                "experiment_id": USDJPY_FORWARD_EXPERIMENT_ID,
+                "reason": "USDJPY_EXPERIMENTAL_CHOSEN_DIRECTION_INVALID",
+                "chosen_direction": direction,
+                "legacy_v331_buy_score": buy_score,
+                "legacy_v331_sell_score": sell_score,
+                "threshold": USDJPY_CHOSEN_LEGACY_SCORE_MIN,
+                "pass": False,
+            }
+        passed = chosen_score >= USDJPY_CHOSEN_LEGACY_SCORE_MIN
+        return {
+            "ok": passed,
+            "instrument": instrument,
+            "experiment_id": USDJPY_FORWARD_EXPERIMENT_ID,
+            "reason": "USDJPY_EXPERIMENTAL_CHOSEN_LEGACY_SCORE_PASS" if passed else "USDJPY_EXPERIMENTAL_CHOSEN_LEGACY_SCORE",
+            "chosen_direction": direction,
+            "legacy_v331_buy_score": buy_score,
+            "legacy_v331_sell_score": sell_score,
+            "chosen_legacy_score": chosen_score,
+            "threshold": USDJPY_CHOSEN_LEGACY_SCORE_MIN,
+            "score_pass": passed,
             "pass": passed,
         }
 

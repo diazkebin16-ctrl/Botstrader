@@ -302,7 +302,7 @@ TREND_RUNNER_MIN_SCORE = max(0.0, float(os.getenv("TREND_RUNNER_MIN_SCORE", "0.6
 TREND_RUNNER_TP_R = max(2.0, float(os.getenv("TREND_RUNNER_TP_R", "3.0")))
 TREND_RUNNER_TRAIL_START_R = max(1.5, float(os.getenv("TREND_RUNNER_TRAIL_START_R", "1.75")))
 TREND_RUNNER_TRAIL_DISTANCE_R = max(0.40, float(os.getenv("TREND_RUNNER_TRAIL_DISTANCE_R", "0.90")))
-VERSION_TAG = "3.38.1"
+VERSION_TAG = "3.39.0"
 ENTRY_TIMING_ENABLED = os.getenv("ENTRY_TIMING_ENABLED", "true").lower() == "true"
 MAX_ENTRY_EXTENSION_ATR = max(0.5, float(os.getenv("MAX_ENTRY_EXTENSION_ATR", "1.50")))
 MIN_ROOM_TO_BARRIER_R = max(1.0, float(os.getenv("MIN_ROOM_TO_BARRIER_R", "1.50")))
@@ -2982,9 +2982,13 @@ def forward_experiment_gate(r: Dict[str, Any]) -> Dict[str, Any]:
     symbol=InstrumentRegistry.normalize_symbol((r or {}).get("instrument") or PRIMARY_INSTRUMENT)
     if not _forward_experiment_active(symbol):
         return {"ok":True,"active":False,"instrument":symbol,"experiment_id":None,"reason":"FORWARD_EXPERIMENT_INACTIVE"}
-    out=evaluate_forward_experiment(symbol,(r or {}).get("features") or {})
-    out=dict(out); out["active"]=True
     runtime_signal=str((r or {}).get("signal") or "").upper()
+    experiment_features=dict((r or {}).get("features") or {})
+    # USD/JPY's frozen Phase-2 semantic is the legacy score corresponding to
+    # the actually selected live direction, not the GBP BUY-side counterfactual.
+    experiment_features["chosen_direction"]=runtime_signal
+    out=evaluate_forward_experiment(symbol,experiment_features)
+    out=dict(out); out["active"]=True
     out["direction"]=runtime_signal
     if symbol=="EUR_USD" and out.get("legacy_v331_chosen_direction"):
         out["legacy_direction_matches_runtime"]=bool(out.get("legacy_v331_chosen_direction")==runtime_signal)
@@ -4699,6 +4703,9 @@ def record_trade_memory_entry(
         "score":r.get("score"),
         "features":r.get("features") or {},
         "filters":r.get("filters") or {},
+        # Persist the pre-entry experimental identity/gate result with the trade
+        # so later broker-confirmed outcomes can be attributed without inference.
+        "forward_experiment":forward_experiment_gate(r),
         "news_alignment":r.get("alignment"),
         "market_regime":regime,
         "strategy_confidence":{
@@ -6180,7 +6187,8 @@ def candidate_registry_snapshot() -> List[Dict[str,Any]]:
     c=conn();rows=c.execute("SELECT * FROM candidate_registry ORDER BY created_ts,id" if False else "SELECT * FROM candidate_registry ORDER BY created_ts,candidate_id").fetchall();c.close()
     return [dict(x) for x in rows]
 
-def forward_observation_snapshot(r: Dict[str, Any], conf: Dict[str, Any]) -> Dict[str, Any]:
+def forward_observation_snapshot(r: Dict[str, Any], conf: Dict[str, Any], *,
+                                 executed: Optional[bool]=None, final_reason: Optional[str]=None) -> Dict[str, Any]:
     """Observational-only snapshot for forward attribution and filter-stacking audits.
 
     This function has no execution authority. It records every relevant gate independently
@@ -6218,6 +6226,19 @@ def forward_observation_snapshot(r: Dict[str, Any], conf: Dict[str, Any]) -> Dic
     }
     experiment_policy=forward_policy(symbol) if _forward_experiment_active(symbol) else forward_policy("")
     experiment_eval=forward_experiment_gate(r)
+    try:
+        quality_snapshot=quality_entry_gate(r,conf)
+    except Exception as e:
+        quality_snapshot={"ok":False,"reason":"QUALITY_SNAPSHOT_ERROR:"+str(e)}
+    strategic_eligible=bool(
+        str(r.get("signal") or "").upper() in ("BUY","SELL")
+        and not bool(r.get("blocked"))
+        and quality_snapshot.get("ok")
+        and experiment_eval.get("ok")
+    )
+    time_gate_snapshot=r.get("new_entry_time_gate")
+    if not isinstance(time_gate_snapshot,dict):
+        time_gate_snapshot={"recorded":False,"reason":"NOT_RECORDED_AT_STRATEGIC_SNAPSHOT"}
     if experiment_policy.get("bypass_low_room_vetoes"):
         effective_vetoes["low_room_low_rr"]=False
         effective_vetoes["low_room_extended"]=False
@@ -6240,6 +6261,20 @@ def forward_observation_snapshot(r: Dict[str, Any], conf: Dict[str, Any]) -> Dic
         "forward_experiment_active":bool(experiment_eval.get("active")),
         "forward_experiment_policy":experiment_policy,
         "forward_experiment":experiment_eval,
+        "experiment_id":experiment_eval.get("experiment_id"),
+        "chosen_direction":str(r.get("signal") or "").upper(),
+        "chosen_legacy_score":experiment_eval.get("chosen_legacy_score"),
+        "experiment_threshold":experiment_eval.get("threshold",experiment_eval.get("score_threshold")),
+        "experiment_score_gate_pass":experiment_eval.get("score_pass",experiment_eval.get("pass")),
+        "m1_bypass_active":bool(experiment_policy.get("bypass_m1_confirmation")),
+        "extension_bypass_active":bool(experiment_policy.get("bypass_quality_extension")),
+        "global_entry_time_gate":time_gate_snapshot,
+        "safety_pass":bool(str(r.get("signal") or "").upper() in ("BUY","SELL") and not bool(r.get("blocked"))),
+        "quality_gate":quality_snapshot,
+        "final_strategic_eligibility":strategic_eligible,
+        "executed":executed,
+        "rejection_reason":None if executed else final_reason,
+        "final_reason":final_reason,
         "legacy_v331_buy_score":f.get("legacy_v331_buy_score"),
         "legacy_v331_sell_score":f.get("legacy_v331_sell_score"),
         "legacy_v331_directional_score":f.get("legacy_v331_directional_score"),
@@ -6312,7 +6347,10 @@ def save_decision(r: Dict[str, Any], conf: Dict[str, Any], executed: int, reason
     # not merely the low-level price/risk safety checks.
     hard_ok=bool(safety_ok and quality_ok)
     try:
-        forward_audit=json.dumps(forward_observation_snapshot(r,conf),separators=(",",":"),sort_keys=True)
+        forward_audit=json.dumps(
+            forward_observation_snapshot(r,conf,executed=bool(executed),final_reason=reason),
+            separators=(",",":"),sort_keys=True
+        )
     except Exception as e:
         forward_audit=json.dumps({"schema":"FORWARD_ATTRIBUTION_V1","observational_only":True,"error":str(e)},separators=(",",":"))
     c.execute("""

@@ -1,0 +1,125 @@
+{
+  "base_commit": "fc1cdd09742f29be404f69de742e4213a417480e",
+  "determinism": "PASS",
+  "experiment": {
+    "experiment_id": "USDJPY_PHASE2_FORWARD_V1",
+    "instrument": "USD_JPY",
+    "low_room_veto_bypass": false,
+    "m1_bypass": true,
+    "paper_practice_only": true,
+    "quality_extension_bypass": true,
+    "rule": "chosen_legacy_score >= 33.0",
+    "semantics": "BUY -> legacy_v331_buy_score; SELL -> legacy_v331_sell_score"
+  },
+  "external": {
+    "deployment": "NOT DEPLOYED",
+    "github_remote_modifications": 0,
+    "oanda_write_operations": 0,
+    "railway_modifications": 0
+  },
+  "historical_equivalence": {
+    "boundary": "2026-08-19T08:27:00+00:00",
+    "discovery": {
+      "ambiguous_kept": 0,
+      "loss_blocked": 10,
+      "loss_kept": 69,
+      "pending_kept": 0,
+      "population": 141,
+      "timeout_blocked": 0,
+      "timeout_kept": 14,
+      "win_blocked": 4,
+      "win_kept": 44
+    },
+    "eligible_counts": {
+      "AMBIGUOUS": 0,
+      "LOSS": 139,
+      "PENDING": 0,
+      "TIMEOUT": 21,
+      "WIN": 76
+    },
+    "embargo_minutes": 30,
+    "experiment_id": "USDJPY_PHASE2_FORWARD_V1",
+    "holdout": {
+      "ambiguous_kept": 0,
+      "loss_blocked": 12,
+      "loss_kept": 46,
+      "pending_kept": 0,
+      "population": 93,
+      "timeout_blocked": 0,
+      "timeout_kept": 7,
+      "win_blocked": 4,
+      "win_kept": 24
+    },
+    "input_cache_sha256": "8732fbbbeb987de586f5344934bb6535fca6a68ec44bb9f01154e59394f00964",
+    "instrument": "USD_JPY",
+    "look_ahead": false,
+    "mutable_historical_state": "NOT_HISTORICALLY_RECONSTRUCTABLE",
+    "outcome_horizon_minutes": 240,
+    "outcome_used_as_feature": false,
+    "phase1_package_sha256": "d4f8bdc49588d10e55a02030039424baf1329190fdc6ec9661dd64b0fdc776d3",
+    "phase1_policy": {
+      "bypass_low_room_vetoes": false,
+      "bypass_m1_confirmation": true,
+      "bypass_quality_extension": true,
+      "experiment_id": "USDJPY_PHASE2_FORWARD_V1",
+      "instrument": "USD_JPY"
+    },
+    "phase2_package_sha256": "623d6ccf4e54a0e150619bb4cd0deced49fb43d1162eb8b7421b135937f89b5e",
+    "rule": "chosen_legacy_score >= 33.0",
+    "semantics": "BUY uses legacy BUY score; SELL uses legacy SELL score corresponding to chosen direction",
+    "status": "PASS"
+  },
+  "input_cache_sha256": "8732fbbbeb987de586f5344934bb6535fca6a68ec44bb9f01154e59394f00964",
+  "look_ahead": "PASS",
+  "new_version": "3.39.0",
+  "old_version": "3.38.1",
+  "phase1_package_sha256": "d4f8bdc49588d10e55a02030039424baf1329190fdc6ec9661dd64b0fdc776d3",
+  "phase2_package_sha256": "623d6ccf4e54a0e150619bb4cd0deced49fb43d1162eb8b7421b135937f89b5e",
+  "production_modifications": [
+    "server.py",
+    "forward_experiment.py"
+  ],
+  "protected_function_hashes": {
+    "daily_exit_cutoff_reached": "ad13ef1a329460d3be07984b96454533eae3cff562838de5370e5961fe08e589",
+    "execute": "7b17c6e13aed9b02329b318b288259629e4aabb0fc02864548f0917c84bf9c32",
+    "execute_ranked_candidate": "da9aa3f9481efe769ac56b23a6be644983a0eaa423881ab8e38865c8f51ff095",
+    "execute_recoverable": "e56848745b84f505e3f7d37bd4446b00b96b151458a5180eb6078bd8f59934c9",
+    "execution_decision": "84634013d83ba2365c25310b3c4883397123c1188181e3560cadd7f92e0065d8",
+    "instrument_sizing": "7eece9e565d7c8100e9c852b14e71290fafe00f936397a13acce0e386580a8c4",
+    "manage_open_trades": "879b568baf7ed43de9b55cc8b7d7deb423da00d7768c8af10e26011f3c333d9d",
+    "new_entry_time_gate": "8526d28d64ec600e701e6fa7c3573e1938f4d3479b8ed9cb4c74ca727cb77871",
+    "portfolio_execution_guard": "c45dc752b0cf7a2af5d8f7048f92aed73814d9be16190f57cf2e20b77d49f1f4",
+    "post_fill_protection_geometry": "34f2824c1452206c8d28ac13f0530a109de847c6c6cac5787d2ccded9c6e94f9",
+    "quality_entry_gate": "0baefaf08ea2a89dd4580a3b359407f71a51a4cc05461ca541c7d7d6f86a943b",
+    "reanchor_post_fill_protection": "bfb4caeacbc7747f23bf265b091f05b7296c3cbc79a0f64329a38a9396bcb78a",
+    "register_trade_management": "226d15610b7d181c26cec5096f8c5e16b3c0e19e30eaee192c25bdc45dc79591",
+    "replace_trade_protection": "6e716b244dd0ccc9fe33c7a4f0571359ab578d7cb72c6f30e87b741b9d7719d6",
+    "verify_trade_protection": "4a9efaefdbab14d64c07ccb764d9416e050d581be67abd6809567ae323b80f70"
+  },
+  "protected_function_hashes_match_base": true,
+  "research_test_modifications": [
+    "forward_experiment.py",
+    "server.py",
+    "test_forward_experiment_v3380.py",
+    "test_multi_asset_paper_isolation_v3361.py",
+    "test_security_integration.py",
+    "test_v327_runtime_hardening.py",
+    "USDJPY_FORWARD_HISTORICAL_EQUIVALENCE_V3.39.0.json",
+    "run_usdjpy_forward_historical_equivalence.py",
+    "test_usdjpy_forward_experiment_v3390.py"
+  ],
+  "severity": {
+    "CRITICAL": 0,
+    "HIGH": 0,
+    "LOW": 1,
+    "MEDIUM": 1
+  },
+  "tests": {
+    "compileall": "PASS",
+    "execution_risk_recovery": "81 passed / 0 failed",
+    "existing_forward_experiment": "14 passed / 0 failed",
+    "focused_usdjpy": "15 passed / 0 failed",
+    "full_regression": "457 passed / 0 failed / 4 warnings",
+    "post_fill": "32 passed / 0 failed"
+  }
+}

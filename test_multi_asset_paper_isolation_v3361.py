@@ -39,7 +39,7 @@ def _signal(symbol="EUR_USD", *, m1=True, room=.8, rr=1.2, ext=.5):
 
 
 def test_release_and_primary_instrument_contract():
-    assert server.VERSION_TAG == "3.38.1"
+    assert server.VERSION_TAG == "3.39.0"
     assert server.PRIMARY_INSTRUMENT == "EUR_USD"
     # V3.37 hardening changed only the config default: secondary instruments
     # remain profiled/PAPER-capable but now require explicit INSTRUMENTS config.
@@ -86,7 +86,7 @@ def test_forward_eur_veto_is_not_authoritative_for_gbp_or_jpy(monkeypatch):
     assert server.forward_entry_pattern_flags(_signal("GBP_USD",room=.3,rr=.9)["features"])["low_room_low_rr"] is True
 
 
-def test_phase1_m1_open_is_forward_scoped_to_eur_and_gbp(monkeypatch):
+def test_phase1_m1_open_is_forward_scoped_to_eur_gbp_and_usdjpy(monkeypatch):
     monkeypatch.setattr(server,"ENTRY_TIMING_ENABLED",False)
     conf={"probability":.5}
     eur=server.quality_entry_gate(_signal("EUR_USD",m1=False),conf)
@@ -94,7 +94,10 @@ def test_phase1_m1_open_is_forward_scoped_to_eur_and_gbp(monkeypatch):
     jpy=server.quality_entry_gate(_signal("USD_JPY",m1=False),conf)
     assert eur["ok"] is True
     assert gbp["ok"] is True
-    assert jpy["ok"] is False and "excepción específica no autorizada" in jpy["reason"]
+    assert jpy["ok"] is True
+    for symbol in ("AUD_USD","USD_CAD"):
+        other=server.quality_entry_gate(_signal(symbol,m1=False),conf)
+        assert other["ok"] is False and "excepción específica no autorizada" in other["reason"]
 
 
 def test_minimum_rr_and_barrier_room_remain_global_strategy_base(monkeypatch):

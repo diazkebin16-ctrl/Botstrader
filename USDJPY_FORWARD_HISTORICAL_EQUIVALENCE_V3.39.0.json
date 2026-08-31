@@ -1,0 +1,52 @@
+{
+  "boundary": "2026-08-19T08:27:00+00:00",
+  "discovery": {
+    "ambiguous_kept": 0,
+    "loss_blocked": 10,
+    "loss_kept": 69,
+    "pending_kept": 0,
+    "population": 141,
+    "timeout_blocked": 0,
+    "timeout_kept": 14,
+    "win_blocked": 4,
+    "win_kept": 44
+  },
+  "eligible_counts": {
+    "AMBIGUOUS": 0,
+    "LOSS": 139,
+    "PENDING": 0,
+    "TIMEOUT": 21,
+    "WIN": 76
+  },
+  "embargo_minutes": 30,
+  "experiment_id": "USDJPY_PHASE2_FORWARD_V1",
+  "holdout": {
+    "ambiguous_kept": 0,
+    "loss_blocked": 12,
+    "loss_kept": 46,
+    "pending_kept": 0,
+    "population": 93,
+    "timeout_blocked": 0,
+    "timeout_kept": 7,
+    "win_blocked": 4,
+    "win_kept": 24
+  },
+  "input_cache_sha256": "8732fbbbeb987de586f5344934bb6535fca6a68ec44bb9f01154e59394f00964",
+  "instrument": "USD_JPY",
+  "look_ahead": false,
+  "mutable_historical_state": "NOT_HISTORICALLY_RECONSTRUCTABLE",
+  "outcome_horizon_minutes": 240,
+  "outcome_used_as_feature": false,
+  "phase1_package_sha256": "d4f8bdc49588d10e55a02030039424baf1329190fdc6ec9661dd64b0fdc776d3",
+  "phase1_policy": {
+    "bypass_low_room_vetoes": false,
+    "bypass_m1_confirmation": true,
+    "bypass_quality_extension": true,
+    "experiment_id": "USDJPY_PHASE2_FORWARD_V1",
+    "instrument": "USD_JPY"
+  },
+  "phase2_package_sha256": "623d6ccf4e54a0e150619bb4cd0deced49fb43d1162eb8b7421b135937f89b5e",
+  "rule": "chosen_legacy_score >= 33.0",
+  "semantics": "BUY uses legacy BUY score; SELL uses legacy SELL score corresponding to chosen direction",
+  "status": "PASS"
+}

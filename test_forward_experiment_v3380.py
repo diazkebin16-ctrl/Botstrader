@@ -124,7 +124,12 @@ def test_gbp_score_boundary_exact_and_buy_side_semantics():
 def test_instrument_isolation_policy():
     assert forward_policy("EUR_USD")["experiment_id"] == "EUR_PHASE2_FORWARD_V1"
     assert forward_policy("GBP_USD")["experiment_id"] == "GBP_PHASE2_FORWARD_V1"
-    for symbol in ("USD_JPY", "AUD_USD", "USD_CAD"):
+    usd = forward_policy("USD_JPY")
+    assert usd["experiment_id"] == "USDJPY_PHASE2_FORWARD_V1"
+    assert usd["bypass_m1_confirmation"] is True
+    assert usd["bypass_low_room_vetoes"] is False
+    assert usd["bypass_quality_extension"] is True
+    for symbol in ("AUD_USD", "USD_CAD"):
         p = forward_policy(symbol)
         assert p["experiment_id"] is None
         assert p["bypass_m1_confirmation"] is False
@@ -160,7 +165,7 @@ def test_gbp_m1_open_is_paper_scoped_but_extension_protection_remains(monkeypatc
 def test_non_target_instrument_keeps_canonical_m1(monkeypatch):
     _paper_practice(monkeypatch)
     r = {
-        "instrument": "USD_JPY", "rr_raw": 1.5, "barrier_class": "WEAK",
+        "instrument": "AUD_USD", "rr_raw": 1.5, "barrier_class": "WEAK",
         "filters": {"m1_confirmation": False}, "features": {"extension_atr": 0.2},
     }
     out = server.quality_entry_gate(r, {})

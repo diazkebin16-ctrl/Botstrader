@@ -1,0 +1,49 @@
+{
+  "added": [
+    "AUTHORITY_STATEMENT_V3.39.0.md",
+    "CHANGELOG_V3.39.0.md",
+    "DIFF_AUDIT_V3.39.0.json",
+    "INTEGRATION_REPORT_V3.39.0.md",
+    "KNOWN_LIMITATIONS_V3.39.0.md",
+    "MODIFIED_FILES_MANIFEST_V3.39.0.json",
+    "TEST_EVIDENCE_V3.39.0.json",
+    "USDJPY_FORWARD_HISTORICAL_EQUIVALENCE_V3.39.0.json",
+    "run_usdjpy_forward_historical_equivalence.py",
+    "test_usdjpy_forward_experiment_v3390.py"
+  ],
+  "base_package": "BotsTrader_V3.38.1_EUR_GBP_FORWARD_POSTFILL_PREDEPLOYMENT_CANDIDATE.zip",
+  "base_sha256": "5778e05a09a80868662736e9d53f5c1a783f2741dd89d7b58a7c368ddcf7cc67",
+  "comparison": "actual extracted canonical V3.38.1 package vs cleaned V3.39.0 tree",
+  "expected_added": [
+    "AUTHORITY_STATEMENT_V3.39.0.md",
+    "CHANGELOG_V3.39.0.md",
+    "DIFF_AUDIT_V3.39.0.json",
+    "INTEGRATION_REPORT_V3.39.0.md",
+    "KNOWN_LIMITATIONS_V3.39.0.md",
+    "MODIFIED_FILES_MANIFEST_V3.39.0.json",
+    "TEST_EVIDENCE_V3.39.0.json",
+    "USDJPY_FORWARD_HISTORICAL_EQUIVALENCE_V3.39.0.json",
+    "run_usdjpy_forward_historical_equivalence.py",
+    "test_usdjpy_forward_experiment_v3390.py"
+  ],
+  "expected_modified": [
+    "forward_experiment.py",
+    "server.py",
+    "test_forward_experiment_v3380.py",
+    "test_multi_asset_paper_isolation_v3361.py",
+    "test_security_integration.py",
+    "test_v327_runtime_hardening.py"
+  ],
+  "modified": [
+    "forward_experiment.py",
+    "server.py",
+    "test_forward_experiment_v3380.py",
+    "test_multi_asset_paper_isolation_v3361.py",
+    "test_security_integration.py",
+    "test_v327_runtime_hardening.py"
+  ],
+  "removed": [],
+  "status": "PASS",
+  "unchanged_count": 132,
+  "unexpected": []
+}
