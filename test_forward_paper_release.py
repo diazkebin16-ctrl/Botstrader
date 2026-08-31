@@ -16,6 +16,10 @@ def _base_signal(room=0.8, rr=1.2, ext=0.5, m1=True):
             "m1_ema9_side_ok":1,
             "m1_candle_color_ok":1,
             "m1_exception_shadow":0,
+            "legacy_v331_buy_score":40.0,
+            "legacy_v331_sell_score":20.0,
+            "legacy_v331_directional_score":40.0,
+            "legacy_v331_chosen_direction":"BUY",
         },
     }
 
@@ -42,12 +46,16 @@ def test_paper_forward_filter_rules(monkeypatch):
     monkeypatch.setattr(server,"OANDA","https://api-fxpractice.oanda.com")
     monkeypatch.setattr(server,"PAPER_FORWARD_FILTERS_ENABLED",True)
     conf={"probability":0.5}
-    a=server.quality_entry_gate(_base_signal(room=.30,rr=.90,ext=.50),conf)
-    b=server.quality_entry_gate(_base_signal(room=.50,rr=1.20,ext=.90),conf)
+    sig_a=_base_signal(room=.30,rr=.90,ext=.50); sig_a["instrument"]="EUR_USD"
+    sig_b=_base_signal(room=.50,rr=1.20,ext=.90); sig_b["instrument"]="EUR_USD"
+    a=server.quality_entry_gate(sig_a,conf)
+    b=server.quality_entry_gate(sig_b,conf)
     normal=server.quality_entry_gate(_base_signal(),conf)
-    assert not a["ok"] and "LOW_ROOM_LOW_RR" in a["reason"]
-    assert not b["ok"] and "LOW_ROOM_EXTENDED" in b["reason"]
-    assert normal["ok"]
+    # V3.38 EUR forward experiment preserves these patterns in observability but
+    # Phase1 opened both strategic vetoes for the Phase2 test population.
+    assert server.forward_entry_pattern_flags(sig_a["features"])["low_room_low_rr"] is True
+    assert server.forward_entry_pattern_flags(sig_b["features"])["low_room_extended"] is True
+    assert a["ok"] and b["ok"] and normal["ok"]
 
 
 def test_forward_filters_have_no_production_authority(monkeypatch):

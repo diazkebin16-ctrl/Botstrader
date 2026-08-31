@@ -1,0 +1,19 @@
+{
+  "EVIDENCE_REQUIRED": [
+    "PREDEPLOYMENT_HISTORICAL_EQUIVALENCE_V3.38.1.json",
+    "PREDEPLOYMENT_CLOSURE_EVIDENCE_V3.38.1.json",
+    "PREDEPLOYMENT_CLOSURE_REPORT_V3.38.1.md"
+  ],
+  "POST_FILL_OR_STRATEGY_PRODUCTION_LOGIC_CHANGED": false,
+  "TEST_REQUIRED": [
+    "test_security_integration.py",
+    "test_multi_asset_paper_isolation_v3361.py",
+    "test_v327_runtime_hardening.py",
+    "test_v3370_five_pair_execution.py",
+    "test_global_entry_time_gate_repro_v3381.py"
+  ],
+  "UNEXPECTED": [],
+  "VERSION_REQUIRED": [
+    "server.py"
+  ]
+}

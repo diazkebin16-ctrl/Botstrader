@@ -1,0 +1,67 @@
+{
+  "base_sha256": "9903e4226bef9390de16cb6528a780460c7abb42a55a0991809e1efbe65defba",
+  "files": [
+    {
+      "base_sha256": null,
+      "classification": "DOCUMENTATION_REQUIRED",
+      "path": "AUTHORITY_STATEMENT_V3.38.1.md",
+      "sha256": "5ff922935114ef170a26d9557442c44a3cc60bd0ff7c2ca7a96e8b283bdec4be"
+    },
+    {
+      "base_sha256": null,
+      "classification": "DOCUMENTATION_REQUIRED",
+      "path": "CHANGELOG_V3.38.1.md",
+      "sha256": "745987d67ab0c754c0eb38161c8e4091be6934323f6603f89f255c99ffeaa6c5"
+    },
+    {
+      "base_sha256": null,
+      "classification": "DOCUMENTATION_REQUIRED",
+      "path": "DIFF_AUDIT_V3.38.1.json",
+      "sha256": "cd430aa1dae7773d0f04292eb1c4cb38e1681240a0c8ba9231cf3bcaeb9d7cd5"
+    },
+    {
+      "base_sha256": null,
+      "classification": "DOCUMENTATION_REQUIRED",
+      "path": "HISTORICAL_EQUIVALENCE_EVIDENCE_V3.38.1.json",
+      "sha256": "6ac7c1788f254883b930be1c1e419750b849da22f025db9ebacb3462a7af1b9e"
+    },
+    {
+      "base_sha256": null,
+      "classification": "DOCUMENTATION_REQUIRED",
+      "path": "INTEGRATION_REPORT_V3.38.1.md",
+      "sha256": "bcb8ee2a5e97b9aafa1b9ef1fa7b02231999dfda61daa174a1563d3c223a04b6"
+    },
+    {
+      "base_sha256": null,
+      "classification": "DOCUMENTATION_REQUIRED",
+      "path": "KNOWN_LIMITATIONS_V3.38.1.md",
+      "sha256": "e3af16e8f13f842c42fb7f76e392c39db727c500d5d71b77d08f915b0706d05f"
+    },
+    {
+      "base_sha256": null,
+      "classification": "DOCUMENTATION_REQUIRED",
+      "path": "TEST_EVIDENCE_V3.38.1.json",
+      "sha256": "2d530a4542e57ea8832a09232373aa756ff698a08661fe4b2ffdb4ecba700552"
+    },
+    {
+      "base_sha256": "40377713d546ec769c1fc6e7ba7c2f1092e2e819a9bd88ba2cc112711d723f69",
+      "classification": "POST_FILL_REQUIRED",
+      "path": "server.py",
+      "sha256": "71e4ffac80d0bdad90c4e9c3b0e545c8edbbfcdafac2853d6e3a643d8e7a7caf"
+    },
+    {
+      "base_sha256": null,
+      "classification": "TEST_REQUIRED",
+      "path": "test_post_fill_integration_v3381.py",
+      "sha256": "fa0314f6b39c6c6221d9c1ad97506d479dae6838709f92235ca317276fbcbb98"
+    },
+    {
+      "base_sha256": null,
+      "classification": "TEST_REQUIRED",
+      "path": "test_post_fill_protection_reanchor_v3370.py",
+      "sha256": "6e4c674497562f3af06e7627d5ad90a5a3613f6d0c9fc6ce05c18bf68f54fc86"
+    }
+  ],
+  "source_sha256": "9b54c4991dd3fd297a0f45f648d1a334ab23d3007b6b569cf388864ac58c62a5",
+  "unexpected_changes": []
+}

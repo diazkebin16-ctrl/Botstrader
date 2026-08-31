@@ -36,6 +36,8 @@ from slot_allocator import slot_policy
 from opportunity_ranker import rank_opportunities
 from broker_risk import OandaBrokerRiskAdapter
 from counterfactual_tracker import CounterfactualTracker
+from legacy_v331_scoring import legacy_v331_score, choose_legacy_v331_direction
+from forward_experiment import forward_policy, evaluate_forward_experiment
 from observability import (
     ObservabilityManager, DEPENDENCY_CRITICAL, DEPENDENCY_IMPORTANT, DEPENDENCY_NON_CRITICAL,
     stale_status as observability_stale_status, reconciliation_status as observability_reconciliation_status,
@@ -300,7 +302,7 @@ TREND_RUNNER_MIN_SCORE = max(0.0, float(os.getenv("TREND_RUNNER_MIN_SCORE", "0.6
 TREND_RUNNER_TP_R = max(2.0, float(os.getenv("TREND_RUNNER_TP_R", "3.0")))
 TREND_RUNNER_TRAIL_START_R = max(1.5, float(os.getenv("TREND_RUNNER_TRAIL_START_R", "1.75")))
 TREND_RUNNER_TRAIL_DISTANCE_R = max(0.40, float(os.getenv("TREND_RUNNER_TRAIL_DISTANCE_R", "0.90")))
-VERSION_TAG = "3.37.0"
+VERSION_TAG = "3.38.1"
 ENTRY_TIMING_ENABLED = os.getenv("ENTRY_TIMING_ENABLED", "true").lower() == "true"
 MAX_ENTRY_EXTENSION_ATR = max(0.5, float(os.getenv("MAX_ENTRY_EXTENSION_ATR", "1.50")))
 MIN_ROOM_TO_BARRIER_R = max(1.0, float(os.getenv("MIN_ROOM_TO_BARRIER_R", "1.50")))
@@ -2939,10 +2941,66 @@ def log_market_regime(instrument: str, regime: Dict[str, Any]) -> None:
                  float(m.get("abnormality_score") or 0))
 
 
+def _legacy_v331_runtime_score(hyp: Dict[str, Any], m5: List[Dict[str, Any]], sig: str) -> float:
+    """Reproduce the V331 replay score from decision-time hypothesis state only."""
+    f=hyp.get("filters") or {}
+    m=hyp.get("metrics") or {}
+    sign=1.0 if sig=="BUY" else -1.0
+    hg=float(m.get("h1_gap_atr",0) or 0); hs=float(m.get("h1_slope_atr",0) or 0)
+    mg=float(m.get("m15_gap_atr",0) or 0); ms=float(m.get("m15_slope_atr",0) or 0)
+    h1_opposes=(-sign*hg>.12 and -sign*hs>.05)
+    m15_opposes=(-sign*mg>.15 and -sign*ms>.07)
+    m5_momentum=sign*float(m.get("m5_momentum",0) or 0)>0
+    m1_momentum=sign*float(m.get("m1_momentum",0) or 0)>0
+    e5=ema([x["c"] for x in m5],20)
+    pc,pr=pullbacks(m5,e5,sig)
+    components={
+        "h1_support":bool(f.get("h1_context")),"m15_support":bool(f.get("m15_context")),
+        "h1_opposes":h1_opposes,"m15_opposes":m15_opposes,
+        "m5_structure":bool(f.get("m5_structure")),"m5_momentum":m5_momentum,
+        "confirm":bool(f.get("m1_confirmation")),"m1_momentum":m1_momentum,
+        "second":bool(f.get("second_pullback")),"pc":pc,"pr":pr,
+        "rr_raw":float(hyp.get("rr_raw",0) or 0),"min_rr":float(MIN_RR),
+        "vol":float(m.get("volatility_ratio",0) or 0),"ext":float(m.get("extension_atr",0) or 0),
+        "session_ok":bool((m.get("session") or {}).get("ok")),
+        "broken":len((hyp.get("structure_context") or {}).get("broken_levels",[])),
+    }
+    return legacy_v331_score(components)
+
+
+def _forward_experiment_active(instrument: str) -> bool:
+    symbol=InstrumentRegistry.normalize_symbol(instrument or PRIMARY_INSTRUMENT)
+    return bool(
+        forward_policy(symbol).get("experiment_id")
+        and TRADING_ENVIRONMENT=="PAPER"
+        and PRIMARY_OANDA_ENV=="practice"
+        and OANDA.endswith("fxpractice.oanda.com")
+    )
+
+
+def forward_experiment_gate(r: Dict[str, Any]) -> Dict[str, Any]:
+    symbol=InstrumentRegistry.normalize_symbol((r or {}).get("instrument") or PRIMARY_INSTRUMENT)
+    if not _forward_experiment_active(symbol):
+        return {"ok":True,"active":False,"instrument":symbol,"experiment_id":None,"reason":"FORWARD_EXPERIMENT_INACTIVE"}
+    out=evaluate_forward_experiment(symbol,(r or {}).get("features") or {})
+    out=dict(out); out["active"]=True
+    runtime_signal=str((r or {}).get("signal") or "").upper()
+    out["direction"]=runtime_signal
+    if symbol=="EUR_USD" and out.get("legacy_v331_chosen_direction"):
+        out["legacy_direction_matches_runtime"]=bool(out.get("legacy_v331_chosen_direction")==runtime_signal)
+    return out
+
+
 def analyze(h1, m15, m5, m1, inst) -> Dict[str, Any]:
     regime=detect_market_regime(h1,m15,m5,m1,inst)
     buy=_direction_hypothesis(h1,m15,m5,m1,inst,"BUY")
     sell=_direction_hypothesis(h1,m15,m5,m1,inst,"SELL")
+
+    legacy_v331_buy_score=_legacy_v331_runtime_score(buy,m5,"BUY")
+    legacy_v331_sell_score=_legacy_v331_runtime_score(sell,m5,"SELL")
+    legacy_v331_chosen_direction,legacy_v331_directional_score=choose_legacy_v331_direction(
+        legacy_v331_buy_score,legacy_v331_sell_score
+    )
 
     buy_score=float(buy["direction_score"])
     sell_score=float(sell["direction_score"])
@@ -2987,6 +3045,11 @@ def analyze(h1, m15, m5, m1, inst) -> Dict[str, Any]:
         "blocked":0,"hour_ny":float(sess["hour"]),
         # Diagnostic fields for both hypotheses:
         "buy_score":buy_score,"sell_score":sell_score,"direction_edge":edge,
+        # Frozen V331 research semantics used only by instrument-scoped forward experiments.
+        "legacy_v331_buy_score":float(legacy_v331_buy_score),
+        "legacy_v331_sell_score":float(legacy_v331_sell_score),
+        "legacy_v331_directional_score":float(legacy_v331_directional_score),
+        "legacy_v331_chosen_direction":legacy_v331_chosen_direction,
         "h1_gap_atr":mt["h1_gap_atr"],"h1_slope_atr":mt["h1_slope_atr"],
         "transition_state":1 if chosen["transition"] else 0,
         "session_direction":mt.get("session_regime",{}).get("direction","NEUTRAL"),
@@ -3006,6 +3069,10 @@ def analyze(h1, m15, m5, m1, inst) -> Dict[str, Any]:
     return {
         "instrument":inst,"signal":sig,"technical":tech,"score":tech,
         "buy_score":buy_score,"sell_score":sell_score,"direction_edge":edge,
+        "legacy_v331_buy_score":float(legacy_v331_buy_score),
+        "legacy_v331_sell_score":float(legacy_v331_sell_score),
+        "legacy_v331_directional_score":float(legacy_v331_directional_score),
+        "legacy_v331_chosen_direction":legacy_v331_chosen_direction,
         "direction_state":"TRANSITION" if chosen["transition"] else "COUNTERTREND" if chosen["countertrend"] else "TREND",
         "entry":chosen["entry"],"stop":chosen["stop"],"target":chosen["target"],
         "rr":chosen["rr"],"rr_raw":chosen["rr_raw"],
@@ -3523,13 +3590,15 @@ def desired_target_for_trade(r: Dict[str, Any]) -> Dict[str, Any]:
 
 def quality_entry_gate(r: Dict[str, Any], conf: Dict[str, Any]) -> Dict[str, Any]:
     rr = float(r.get("rr_raw",0) or 0)
+    symbol=InstrumentRegistry.normalize_symbol(r.get("instrument") or PRIMARY_INSTRUMENT)
+    experiment_policy=forward_policy(symbol) if _forward_experiment_active(symbol) else forward_policy("")
     if rr < MIN_ENTRY_RR and r.get("barrier_class")=="STRONG":
         return {"ok":False,"reason":f"barrera fuerte deja solo {rr:.2f}R < {MIN_ENTRY_RR:.2f}R de admisión"}
 
     # M1 remains the execution trigger, but validated admission evidence can
     # substitute for the stricter canonical swing/strong-momentum confirmation.
-    if M1_CONFIRMATION_REQUIRED and not bool((r.get("filters") or {}).get("m1_confirmation")):
-        symbol=InstrumentRegistry.normalize_symbol(r.get("instrument") or PRIMARY_INSTRUMENT)
+    if (M1_CONFIRMATION_REQUIRED and not experiment_policy.get("bypass_m1_confirmation")
+        and not bool((r.get("filters") or {}).get("m1_confirmation"))):
         profile=instrument_profile(symbol)
         if not profile.has_exception("M1_ALTERNATIVE_ADMISSION"):
             return {"ok":False,"reason":"falta confirmación M1 canónica; excepción específica no autorizada para este instrumento"}
@@ -3555,7 +3624,7 @@ def quality_entry_gate(r: Dict[str, Any], conf: Dict[str, Any]) -> Dict[str, Any
 
     # The two forward filters are active only in PAPER/practice. The same pure
     # conditions also populate shadow telemetry for prospective audit.
-    if paper_forward_filters_active(r.get("instrument")):
+    if paper_forward_filters_active(r.get("instrument")) and not experiment_policy.get("bypass_low_room_vetoes"):
         flags = forward_entry_pattern_flags(f)
         room_raw = f.get("room_to_barrier_r")
         room = None if room_raw is None else float(room_raw)
@@ -3584,7 +3653,7 @@ def quality_entry_gate(r: Dict[str, Any], conf: Dict[str, Any]) -> Dict[str, Any
         return {"ok":True,"reason":"quality_ok"}
 
     ext=float(f.get("extension_atr",0) or 0)
-    if ext > MAX_ENTRY_EXTENSION_ATR:
+    if ext > MAX_ENTRY_EXTENSION_ATR and not experiment_policy.get("bypass_quality_extension"):
         return {"ok":False,"reason":f"entrada tardía/chasing: {ext:.2f} ATR > {MAX_ENTRY_EXTENSION_ATR:.2f}"}
 
     # Confidence no longer creates an extra extension veto inside the normal
@@ -4597,7 +4666,8 @@ def record_trade_memory_entry(
     pre_execution_reason: str,
     fill: Dict[str, Any],
     fill_price: float,
-    entry_slippage_pips: Optional[float]
+    entry_slippage_pips: Optional[float],
+    protection_reanchor: Optional[Dict[str,Any]]=None
 ) -> Optional[int]:
     """
     Freeze PRE-TRADE context at entry.
@@ -4657,12 +4727,33 @@ def record_trade_memory_entry(
     }
 
     # Fill/protection information is entry execution data, separate from decision context.
+    reanchor_supplied=protection_reanchor is not None
+    protection_reanchor=protection_reanchor or {}
+    reanchor_geometry=protection_reanchor.get("geometry") or {}
+    reanchor_verification=protection_reanchor.get("verification") or {}
+    effective_stop=protection_reanchor.get("effective_stop")
+    effective_target=protection_reanchor.get("effective_target")
+    persisted_stop=(float(effective_stop) if effective_stop is not None else
+                    (None if reanchor_supplied else (float(r.get("stop")) if r.get("stop") is not None else None)))
+    persisted_target=(float(effective_target) if effective_target is not None else
+                      (None if reanchor_supplied else (float(r.get("managed_target",r.get("target"))) if r.get("target") is not None else None)))
     execution_context={
         "fill_transaction_id":fill.get("id"),
         "fill_time":fill.get("time"),
         "actual_fill_price":fill_price,
         "units":units,
         "entry_slippage_pips":entry_slippage_pips,
+        "initial_stop_on_fill":r.get("stop"),
+        "initial_target_on_fill":r.get("managed_target",r.get("target")),
+        "protection_reanchor_status":protection_reanchor.get("status"),
+        "protection_reanchor_confirmed":bool(protection_reanchor.get("confirmed")),
+        "applied_stop":effective_stop,
+        "applied_target":effective_target,
+        "expected_reanchored_stop":reanchor_geometry.get("applied_stop"),
+        "expected_reanchored_target":reanchor_geometry.get("applied_target"),
+        "broker_verified_stop":reanchor_verification.get("broker_stop"),
+        "broker_verified_target":reanchor_verification.get("broker_target"),
+        "protection_verification_status":reanchor_verification.get("status"),
         "smart_execution_shadow":r.get("smart_execution_shadow") or {},
         "smart_execution_actual":r.get("smart_execution_actual") or {},
         "smart_execution_mode":"SHADOW" if SMART_EXECUTION_ENABLED else "DISABLED"
@@ -4696,8 +4787,7 @@ def record_trade_memory_entry(
       (
        str(trade_id),int(signal_id),str(order_id or ""),setup_variant(r),r["instrument"],direction,
        fill.get("time") or now_iso(),float(fill_price),units,
-       float(r.get("stop")) if r.get("stop") is not None else None,
-       float(r.get("managed_target",r.get("target"))) if r.get("target") is not None else None,
+       persisted_stop,persisted_target,
        regime.get("market_regime"),regime.get("confidence"),regime.get("volatility_state"),
        regime.get("trend_strength"),conf.get("probability"),
        director.get("recommended_state"),director.get("confidence"),
@@ -6126,6 +6216,11 @@ def forward_observation_snapshot(r: Dict[str, Any], conf: Dict[str, Any]) -> Dic
         "low_room_low_rr":bool(vetoes["low_room_low_rr"] and profile.has_veto("LOW_ROOM_LOW_RR")),
         "low_room_extended":bool(vetoes["low_room_extended"] and profile.has_veto("LOW_ROOM_EXTENDED")),
     }
+    experiment_policy=forward_policy(symbol) if _forward_experiment_active(symbol) else forward_policy("")
+    experiment_eval=forward_experiment_gate(r)
+    if experiment_policy.get("bypass_low_room_vetoes"):
+        effective_vetoes["low_room_low_rr"]=False
+        effective_vetoes["low_room_extended"]=False
     return {
         "schema":"FORWARD_ATTRIBUTION_V1",
         "observational_only":True,
@@ -6142,6 +6237,13 @@ def forward_observation_snapshot(r: Dict[str, Any], conf: Dict[str, Any]) -> Dic
         "effective_vetoes":effective_vetoes,
         "instrument_specific_vetoes":sorted(profile.specific_vetoes),
         "paper_forward_filters_active":paper_forward_filters_active(symbol),
+        "forward_experiment_active":bool(experiment_eval.get("active")),
+        "forward_experiment_policy":experiment_policy,
+        "forward_experiment":experiment_eval,
+        "legacy_v331_buy_score":f.get("legacy_v331_buy_score"),
+        "legacy_v331_sell_score":f.get("legacy_v331_sell_score"),
+        "legacy_v331_directional_score":f.get("legacy_v331_directional_score"),
+        "legacy_v331_chosen_direction":f.get("legacy_v331_chosen_direction"),
         "confidence":conf.get("probability"),"required_confidence":conf.get("required_confidence"),
         "confidence_samples":conf.get("samples"),
     }
@@ -6156,6 +6258,11 @@ def execution_decision(r: Dict[str, Any], conf: Dict[str, Any]) -> Dict[str, Any
     q = quality_entry_gate(r, conf)
     if not q["ok"]:
         return {"execute": False, "reason": "Quality veto: " + q["reason"]}
+
+    experimental_gate=forward_experiment_gate(r)
+    if not experimental_gate["ok"]:
+        return {"execute":False,"reason":"Experimental forward veto: "+str(experimental_gate.get("reason")),
+                "forward_experiment":experimental_gate}
 
     research_gate=evaluate_active_research_rules(r)
     if not research_gate["ok"]:
@@ -6341,15 +6448,183 @@ def threshold_report():
         out.append({"threshold":t,"samples":len(x),"precision_win_rate":sum(r["label"] for r in x)/len(x) if x else None})
     return out
 
-async def verify_trade_protection(client, trade_id: str):
-    if not trade_id:return {"status":"PROTECTION_ERROR","sl_ok":False,"tp_ok":False,"detail":"No trade ID returned"}
+def _protection_price_tolerance(instrument: str) -> float:
+    meta=instrument_metadata(instrument)
+    price_quantum=10.0**(-int(meta.display_precision))
+    return max(price_quantum*0.51,pip_size(instrument)*1e-6,1e-12)
+
+
+def post_fill_protection_geometry(instrument: str, side: str, planned_entry: float,
+                                  planned_stop: float, planned_target: float,
+                                  fill_price: float) -> Dict[str,Any]:
+    """Re-anchor planned risk/reward distances to the broker-confirmed fill.
+
+    This is execution geometry only. It does not alter strategy, sizing or risk
+    authority. Prices are normalized through the instrument registry.
+    """
+    instrument=InstrumentRegistry.normalize_symbol(instrument)
+    side=str(side or "").upper()
+    pe=float(planned_entry); ps=float(planned_stop); pt=float(planned_target); fill=float(fill_price)
+    risk_distance=abs(pe-ps); reward_distance=abs(pt-pe)
+    if side not in ("BUY","SELL"):
+        raise ValueError("INVALID_SIDE")
+    if not all(math.isfinite(x) for x in (pe,ps,pt,fill,risk_distance,reward_distance)):
+        raise ValueError("NON_FINITE_PROTECTION_GEOMETRY")
+    if risk_distance<=0 or reward_distance<=0:
+        raise ValueError("INVALID_PROTECTION_DISTANCE")
+    raw_stop=fill-risk_distance if side=="BUY" else fill+risk_distance
+    raw_target=fill+reward_distance if side=="BUY" else fill-reward_distance
+    stop=float(format_instrument_price(instrument,raw_stop))
+    target=float(format_instrument_price(instrument,raw_target))
+    if side=="BUY" and not (stop<fill<target):
+        raise ValueError("ROUNDED_BUY_PROTECTION_ORIENTATION_INVALID")
+    if side=="SELL" and not (target<fill<stop):
+        raise ValueError("ROUNDED_SELL_PROTECTION_ORIENTATION_INVALID")
+    return {
+        "instrument":instrument,"side":side,"planned_entry":pe,"planned_stop":ps,"planned_target":pt,
+        "fill_price":fill,"planned_risk_distance":risk_distance,"planned_reward_distance":reward_distance,
+        "applied_stop":stop,"applied_target":target,
+        "risk_pips":abs(fill-stop)/pip_size(instrument),
+        "reward_pips":abs(target-fill)/pip_size(instrument),
+        "rr":abs(target-fill)/max(abs(fill-stop),1e-18),
+    }
+
+
+async def replace_trade_protection(client: httpx.AsyncClient, trade_id: str, instrument: str,
+                                   stop_price: float, target_price: float) -> Dict[str,Any]:
+    instrument=InstrumentRegistry.normalize_symbol(instrument)
+    if not trade_id:
+        raise ValueError("MISSING_TRADE_ID")
+    body={
+        "stopLoss":{"price":format_instrument_price(instrument,stop_price),"timeInForce":"GTC"},
+        "takeProfit":{"price":format_instrument_price(instrument,target_price),"timeInForce":"GTC"},
+    }
+    # One atomic protective-order replacement. req() passes writes to Recovery
+    # Manager with allow_retry=False; never convert this to params or split writes.
+    return await req(client,"PUT",f"/v3/accounts/{{account}}/trades/{trade_id}/orders",body=body)
+
+
+async def verify_trade_protection(client, trade_id: str, instrument: Optional[str]=None,
+                                  expected_stop: Optional[float]=None,
+                                  expected_target: Optional[float]=None):
+    if not trade_id:
+        return {"status":"PROTECTION_ERROR","sl_ok":False,"tp_ok":False,"stop_match":False,"target_match":False,
+                "detail":"No trade ID returned","expected_stop":expected_stop,"expected_target":expected_target}
     try:
         d=await req(client,"GET",f"/v3/accounts/{{account}}/trades/{trade_id}")
-        tr=d.get("trade",{}); sl=bool(tr.get("stopLossOrder")); tp=bool(tr.get("takeProfitOrder"))
-        return {"status":"OK" if sl and tp else "PROTECTION_ERROR","sl_ok":sl,"tp_ok":tp,
-                "detail":f"stopLossOrder={sl}; takeProfitOrder={tp}"}
+        tr=d.get("trade",{}); sl_order=tr.get("stopLossOrder") or {}; tp_order=tr.get("takeProfitOrder") or {}
+        broker_stop=_risk_float(sl_order.get("price")); broker_target=_risk_float(tp_order.get("price"))
+        sl=bool(sl_order); tp=bool(tp_order)
+        if instrument is None or expected_stop is None or expected_target is None:
+            return {"status":"PROTECTION_PRESENT_UNVERIFIED" if sl and tp else "PROTECTION_ERROR",
+                    "sl_ok":sl,"tp_ok":tp,"stop_match":False,"target_match":False,
+                    "expected_stop":expected_stop,"broker_stop":broker_stop,
+                    "expected_target":expected_target,"broker_target":broker_target,
+                    "detail":"expected instrument/stop/target required for exact protection verification"}
+        instrument=InstrumentRegistry.normalize_symbol(instrument)
+        tol=_protection_price_tolerance(instrument)
+        stop_match=bool(sl and broker_stop is not None and abs(float(broker_stop)-float(expected_stop))<=tol)
+        target_match=bool(tp and broker_target is not None and abs(float(broker_target)-float(expected_target))<=tol)
+        ok=bool(sl and tp and stop_match and target_match)
+        return {"status":"OK" if ok else "PROTECTION_ERROR","sl_ok":bool(sl and stop_match),
+                "tp_ok":bool(tp and target_match),"stop_exists":sl,"target_exists":tp,
+                "expected_stop":float(expected_stop),"broker_stop":broker_stop,"stop_match":stop_match,
+                "expected_target":float(expected_target),"broker_target":broker_target,"target_match":target_match,
+                "tolerance":tol,
+                "detail":f"stop_exists={sl}; stop_match={stop_match}; target_exists={tp}; target_match={target_match}"}
     except Exception as e:
-        return {"status":"PROTECTION_ERROR","sl_ok":False,"tp_ok":False,"detail":str(e)}
+        return {"status":"PROTECTION_ERROR","sl_ok":False,"tp_ok":False,"stop_match":False,"target_match":False,
+                "expected_stop":expected_stop,"expected_target":expected_target,"detail":str(e)}
+
+
+def _post_fill_protection_observability(event: str, correlation_id: Optional[str], details: Dict[str,Any],
+                                        *, severity: str="HIGH") -> None:
+    log.error("%s trade=%s instrument=%s detail=%s",event,details.get("trade_id"),details.get("instrument"),details)
+    try:
+        if RECOVERY_MANAGER_ENABLED:
+            recovery_manager.journal(event,correlation_id,payload=details)
+    except Exception:
+        pass
+    try:
+        if OBSERVABILITY_ENABLED:
+            observability_manager.alert(f"{event}:{details.get('trade_id') or correlation_id}",severity,
+                "Execution Engine",event,event.replace("_"," ").title(),correlation_id=correlation_id,details=details)
+    except Exception:
+        pass
+
+
+async def reanchor_post_fill_protection(client: httpx.AsyncClient, r: Dict[str,Any], trade_id: str,
+                                        fill_price: float, correlation_id: Optional[str]=None) -> Dict[str,Any]:
+    """Replace and broker-verify SL+TP after a confirmed MARKET fill.
+
+    Initial stopLossOnFill/takeProfitOnFill remain in place until OANDA atomically
+    replaces both levels. No write retry is performed here or by req().
+    """
+    inst=InstrumentRegistry.normalize_symbol(r.get("instrument"))
+    planned_target=float(r.get("managed_target",r.get("target")))
+    base={"instrument":inst,"trade_id":str(trade_id or ""),"planned_entry":float(r.get("entry")),
+          "fill_price":float(fill_price),"planned_stop":float(r.get("stop")),"planned_target":planned_target}
+    try:
+        geometry=post_fill_protection_geometry(inst,r.get("signal"),base["planned_entry"],base["planned_stop"],
+                                               planned_target,float(fill_price))
+    except Exception as e:
+        details={**base,"error":str(e)}
+        if RECOVERY_MANAGER_ENABLED:
+            recovery_manager.enter_safe_mode(f"Post-fill protection geometry invalid for {inst}: {e}",
+                                             correlation_id=correlation_id,severity="CRITICAL")
+        _post_fill_protection_observability("POST_FILL_PROTECTION_REANCHOR_FAILED",correlation_id,details,severity="CRITICAL")
+        return {"status":"INVALID_GEOMETRY","confirmed":False,"geometry":None,"verification":None,
+                "effective_stop":None,"effective_target":None,"error":str(e)}
+    details={**base,"applied_stop":geometry["applied_stop"],"applied_target":geometry["applied_target"],
+             "slippage_pips":(float(fill_price)-float(r.get("entry")))/pip_size(inst)}
+    if r.get("signal")=="SELL":details["slippage_pips"]=-details["slippage_pips"]
+    try:
+        put_response=await replace_trade_protection(client,trade_id,inst,geometry["applied_stop"],geometry["applied_target"])
+    except (httpx.TimeoutException,httpx.TransportError,asyncio.TimeoutError) as e:
+        # req()/RecoveryManager already marks uncertain writes safe-mode. Preserve
+        # that state; do not retry the PUT. A GET may observe current broker levels.
+        if RECOVERY_MANAGER_ENABLED:
+            recovery_manager.enter_safe_mode(f"Post-fill protection reanchor outcome unknown for {inst}: {e}",
+                                             correlation_id=correlation_id,severity="CRITICAL")
+        verification=await verify_trade_protection(client,trade_id,inst,geometry["applied_stop"],geometry["applied_target"])
+        event_details={**details,"error":str(e),"verification":verification}
+        _post_fill_protection_observability("POST_FILL_PROTECTION_REANCHOR_UNKNOWN",correlation_id,event_details,severity="CRITICAL")
+        return {"status":"UNKNOWN","confirmed":False,"geometry":geometry,"verification":verification,
+                "effective_stop":verification.get("broker_stop"),"effective_target":verification.get("broker_target"),
+                "error":str(e)}
+    except Exception as e:
+        # Known rejection: original on-fill protections remain. Enter safe mode
+        # because planned R could not be restored, then observe actual broker state.
+        if RECOVERY_MANAGER_ENABLED:
+            recovery_manager.enter_safe_mode(f"Post-fill protection reanchor failed for {inst}: {e}",
+                                             correlation_id=correlation_id,severity="CRITICAL")
+        verification=await verify_trade_protection(client,trade_id,inst,geometry["applied_stop"],geometry["applied_target"])
+        event_details={**details,"error":str(e),"verification":verification}
+        _post_fill_protection_observability("POST_FILL_PROTECTION_REANCHOR_FAILED",correlation_id,event_details,severity="CRITICAL")
+        return {"status":"FAILED","confirmed":False,"geometry":geometry,"verification":verification,
+                "effective_stop":verification.get("broker_stop"),"effective_target":verification.get("broker_target"),
+                "error":str(e)}
+
+    verification=await verify_trade_protection(client,trade_id,inst,geometry["applied_stop"],geometry["applied_target"])
+    if verification.get("status")!="OK":
+        if RECOVERY_MANAGER_ENABLED:
+            recovery_manager.enter_safe_mode(f"Post-fill protection verification mismatch for {inst}",
+                                             correlation_id=correlation_id,severity="CRITICAL")
+        event_details={**details,"put_response":put_response,"verification":verification}
+        _post_fill_protection_observability("POST_FILL_PROTECTION_VERIFY_MISMATCH",correlation_id,event_details,severity="CRITICAL")
+        return {"status":"VERIFY_MISMATCH","confirmed":False,"geometry":geometry,"verification":verification,
+                "effective_stop":verification.get("broker_stop"),"effective_target":verification.get("broker_target")}
+    event_details={**details,"verification":verification}
+    try:
+        if RECOVERY_MANAGER_ENABLED:
+            recovery_manager.journal("POST_FILL_PROTECTION_REANCHOR_OK",correlation_id,payload=event_details)
+    except Exception:
+        pass
+    log.info("POST_FILL_PROTECTION_REANCHOR_OK %s trade=%s fill=%s stop=%s target=%s",
+             inst,trade_id,fill_price,geometry["applied_stop"],geometry["applied_target"])
+    return {"status":"OK","confirmed":True,"geometry":geometry,"verification":verification,
+            "effective_stop":verification.get("broker_stop"),"effective_target":verification.get("broker_target"),
+            "put_response":put_response}
 
 async def recovery_reconcile_primary(client: httpx.AsyncClient, reason: str="periodic") -> Dict[str,Any]:
     if not RECOVERY_MANAGER_ENABLED:
@@ -8288,31 +8563,35 @@ async def replace_trade_stop(client: httpx.AsyncClient, trade_id: str, price: fl
 
 def register_trade_management(trade_id: str, r: Dict[str, Any], target: float,
                               filled_units: Optional[float]=None,
-                              entry_price: Optional[float]=None):
+                              entry_price: Optional[float]=None,
+                              applied_stop: Optional[float]=None,
+                              applied_target: Optional[float]=None):
     if not trade_id:
         return
     tscore=trend_runner_score(r)
     policy="BE_PROFIT_TRAIL"
-    # Manage R from the broker-confirmed fill whenever available. The planned
-    # entry remains in the signal/trade-memory context for execution-quality
-    # analysis, but must not shift BE/profit-lock/trailing thresholds.
+    # Broker-confirmed fill is the real entry. When post-fill protection has
+    # been broker-observed, store that effective geometry so R calculations use
+    # the same SL/TP that OANDA actually holds.
     management_entry=float(entry_price if entry_price is not None else r["entry"])
+    management_stop=float(applied_stop if applied_stop is not None else r["stop"])
+    management_target=float(applied_target if applied_target is not None else target)
     c=conn()
     try:
         c.execute("""INSERT OR REPLACE INTO active_trade_management(
           trade_id,instrument,side,entry,initial_stop,initial_target,current_stop,setup_variant,policy,trend_score,
           opened_ts,last_r,last_action,updated_ts,closed,current_units)
           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,?)""",
-          (trade_id,r["instrument"],r["signal"],management_entry,float(r["stop"]),float(target),
-           float(r["stop"]),setup_variant(r),policy,tscore,now_iso(),0.0,"OPEN",now_iso(),
+          (trade_id,r["instrument"],r["signal"],management_entry,management_stop,management_target,
+           management_stop,setup_variant(r),policy,tscore,now_iso(),0.0,"OPEN",now_iso(),
            abs(float(filled_units if filled_units is not None else UNITS))))
     except sqlite3.OperationalError:
         c.execute("""INSERT OR REPLACE INTO active_trade_management(
           trade_id,instrument,side,entry,initial_stop,initial_target,current_stop,setup_variant,policy,trend_score,
           opened_ts,last_r,last_action,updated_ts,closed)
           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,0)""",
-          (trade_id,r["instrument"],r["signal"],management_entry,float(r["stop"]),float(target),
-           float(r["stop"]),setup_variant(r),policy,tscore,now_iso(),0.0,"OPEN",now_iso()))
+          (trade_id,r["instrument"],r["signal"],management_entry,management_stop,management_target,
+           management_stop,setup_variant(r),policy,tscore,now_iso(),0.0,"OPEN",now_iso()))
     c.execute("""INSERT OR IGNORE INTO trade_forward_observations(
       trade_id,instrument,side,opened_ts,be_trigger_r,be_lock_r,max_r_seen,updated_ts)
       VALUES(?,?,?,?,?,?,0,?)""",
@@ -9439,8 +9718,13 @@ async def scan(client: httpx.AsyncClient, inst: str, *, batch_collect: bool=Fals
                     observability_manager.alert("BROKER_LATENCY","WARNING","Broker Connection","BROKER_LATENCY_HIGH",
                         "Broker order acknowledgement latency is elevated",correlation_id=obs_trace_id,details={"latency_ms":obs_broker_ms})
                 else:observability_manager.recover("BROKER_LATENCY","Broker order latency recovered",{"latency_ms":obs_broker_ms})
-            protection=await verify_trade_protection(client,trade_id)
-            if protection["status"]!="OK": decision["reason"] += "; PROTECTION_ERROR"
+            protection_reanchor=await reanchor_post_fill_protection(client,r,trade_id,fill_price,obs_trace_id)
+            protection_verification=protection_reanchor.get("verification") or {}
+            protection={**protection_verification,
+                        "status":"OK" if protection_reanchor.get("confirmed") else "PROTECTION_ERROR",
+                        "reanchor_status":protection_reanchor.get("status"),
+                        "detail":f"reanchor={protection_reanchor.get('status')}; {protection_verification.get('detail','')}"}
+            if protection["status"]!="OK": decision["reason"] += f"; PROTECTION_REANCHOR_{protection_reanchor.get('status')}"
             actual_filled_units=_risk_float((fill.get("tradeOpened") or {}).get("units"))
             if actual_filled_units is None:
                 actual_filled_units=_risk_float(x.get("filled_units"),UNITS)
@@ -9466,7 +9750,16 @@ async def scan(client: httpx.AsyncClient, inst: str, *, batch_collect: bool=Fals
                         observability_manager.alert(f"SMART_EXECUTION_RECORD:{oid or obs_trace_id}","WARNING","Smart Execution Engine",
                             "SMART_EXECUTION_TCA_RECORD_FAILED","Smart Execution shadow/TCA recording failed; existing execution state is unchanged",
                             correlation_id=obs_trace_id,details={"error":str(e)})
-            register_trade_management(trade_id,r,float(r.get("managed_target",r["target"])),actual_filled_units,fill_price)
+            effective_stop=protection_reanchor.get("effective_stop")
+            effective_target=protection_reanchor.get("effective_target")
+            if trade_id and effective_stop is not None and effective_target is not None:
+                register_trade_management(trade_id,r,float(r.get("managed_target",r["target"])),actual_filled_units,fill_price,
+                                          applied_stop=float(effective_stop),applied_target=float(effective_target))
+            elif trade_id:
+                if RECOVERY_MANAGER_ENABLED:
+                    recovery_manager.enter_safe_mode("Post-fill broker protection geometry unavailable for trade management",
+                                                     correlation_id=obs_trace_id,severity="CRITICAL")
+                decision["reason"] += "; TRADE_MANAGEMENT_GEOMETRY_UNVERIFIED"
             log.info("EXECUTED %s %s quality=%s confidence=%s order=%s slippage=%.2f protection=%s",
                      r["signal"], inst, r["score"], conf.get("probability"), oid, slippage, protection["status"])
         elif x and x.get("skipped"):
@@ -9580,7 +9873,8 @@ async def scan(client: httpx.AsyncClient, inst: str, *, batch_collect: bool=Fals
             trade_id=trade_id,signal_id=signal_id,order_id=oid,r=r,conf=conf,
             director=director,risk_shadow=risk_shadow,
             pre_execution_reason=pre_execution_reason,fill=fill,
-            fill_price=float(fill_price),entry_slippage_pips=slippage
+            fill_price=float(fill_price),entry_slippage_pips=slippage,
+            protection_reanchor=locals().get("protection_reanchor")
         )
         if obs_trace_id: observability_manager.trace_phase(obs_trace_id,"trade_memory",trade_id=trade_id)
         if TRADING_ENVIRONMENT=="PRODUCTION" and PRODUCTION_READINESS_ENABLED:
@@ -9918,9 +10212,26 @@ async def execute_ranked_candidate(client: httpx.AsyncClient, candidate: Dict[st
     actual_units=_risk_float((fill.get("tradeOpened") or {}).get("units"))
     if actual_units is None:
         actual_units=_risk_float(x.get("filled_units"),UNITS)
-    protection=await verify_trade_protection(client,trade_id) if trade_id else {"status":"UNKNOWN","sl_ok":False,"tp_ok":False,"detail":"missing trade id"}
     if trade_id:
-        register_trade_management(trade_id,candidate,float(candidate.get("managed_target",candidate.get("target"))),actual_units,fill_price)
+        protection_reanchor=await reanchor_post_fill_protection(client,candidate,trade_id,fill_price,trace_id)
+        protection_verification=protection_reanchor.get("verification") or {}
+        protection={**protection_verification,
+                    "status":"OK" if protection_reanchor.get("confirmed") else "PROTECTION_ERROR",
+                    "reanchor_status":protection_reanchor.get("status"),
+                    "detail":f"reanchor={protection_reanchor.get('status')}; {protection_verification.get('detail','')}"}
+        effective_stop=protection_reanchor.get("effective_stop")
+        effective_target=protection_reanchor.get("effective_target")
+        if effective_stop is not None and effective_target is not None:
+            register_trade_management(trade_id,candidate,float(candidate.get("managed_target",candidate.get("target"))),actual_units,fill_price,
+                                      applied_stop=float(effective_stop),applied_target=float(effective_target))
+        elif RECOVERY_MANAGER_ENABLED:
+            recovery_manager.enter_safe_mode("Post-fill broker protection geometry unavailable for trade management",
+                                             correlation_id=trace_id,severity="CRITICAL")
+    else:
+        protection_reanchor={"status":"MISSING_TRADE_ID","confirmed":False,"verification":None,
+                             "effective_stop":None,"effective_target":None}
+        protection={"status":"PROTECTION_ERROR","sl_ok":False,"tp_ok":False,"detail":"missing trade id",
+                    "reanchor_status":"MISSING_TRADE_ID"}
     slip=(fill_price-float(candidate.get("entry")))/pip_size(inst)
     if candidate.get("signal")=="SELL": slip=-slip
     if signal_id:
@@ -9939,7 +10250,8 @@ async def execute_ranked_candidate(client: httpx.AsyncClient, candidate: Dict[st
         record_trade_memory_entry(
             trade_id=trade_id,signal_id=int(signal_id),order_id=order_id,r=candidate,conf=conf,
             director=director,risk_shadow=risk_shadow,pre_execution_reason=f"BATCH_SELECTED cycle={cycle_id}",
-            fill=fill,fill_price=float(fill_price),entry_slippage_pips=slip
+            fill=fill,fill_price=float(fill_price),entry_slippage_pips=slip,
+            protection_reanchor=protection_reanchor
         )
     save_decision(candidate,conf,1,f"BATCH_SELECTED cycle={cycle_id}; broker fill confirmed")
     if trace_id:
@@ -9948,10 +10260,11 @@ async def execute_ranked_candidate(client: httpx.AsyncClient, candidate: Dict[st
       stop_loss_ok,take_profit_ok,protection_status,detail) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
       (now_iso(),signal_id,inst,order_id,trade_id,candidate.get("entry"),fill_price,slip,
        int(bool(protection.get("sl_ok"))),int(bool(protection.get("tp_ok"))),protection.get("status"),
-       f"V3.37 batch cycle={cycle_id}; {protection.get('detail')}"))
+       f"V3.37 batch cycle={cycle_id}; reanchor={protection_reanchor.get('status')}; {protection.get('detail')}"))
     c.commit();c.close()
     return {"executed":True,"instrument":inst,"order_id":order_id,"trade_id":trade_id,
-            "fill_price":fill_price,"slippage_pips":slip,"protection":protection,"cycle_id":cycle_id,
+            "fill_price":fill_price,"slippage_pips":slip,"protection":protection,
+            "protection_reanchor":protection_reanchor,"cycle_id":cycle_id,
             "intent":intent_obj,"intent_state":intent_state or "FILLED","fallback_allowed":False}
 
 

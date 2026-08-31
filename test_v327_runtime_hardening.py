@@ -162,7 +162,7 @@ def test_timeseries_pipeline_can_fit_small_binary_dataset():
 
 
 def test_runtime_version_and_dashboard_are_v327():
-    assert server.VERSION_TAG == "3.37.0"
+    assert server.VERSION_TAG == "3.38.1"
     src=open(server.__file__,encoding="utf-8").read()
     assert "BotsTrader V3.37.0 · IBKR Multi-Asset Preparation" in src
 
@@ -245,5 +245,5 @@ def test_status_learning_uses_unambiguous_sample_names(monkeypatch):
         assert "training_labeled_samples" in learn
         assert "research_samples_total" in learn
         assert "pending_samples" in learn
-        assert out["version"]=="3.37.0"
+        assert out["version"]=="3.38.1"
     asyncio.run(run())

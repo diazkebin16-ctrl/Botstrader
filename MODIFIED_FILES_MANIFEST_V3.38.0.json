@@ -1,0 +1,101 @@
+{
+  "added": [
+    {
+      "path": "AUTHORITY_STATEMENT_V3.38.0.md",
+      "sha256": "e77efc35232894e25a5ddb421a60d27ba85c0c3da42a0a82f301034f91ff0dc2"
+    },
+    {
+      "path": "CHANGELOG_V3.38.0.md",
+      "sha256": "3fee54959fca408492f4c05e86bb188589b98c0c2d5506d544d2054e988bbfbe"
+    },
+    {
+      "path": "HISTORICAL_EQUIVALENCE_EVIDENCE_V3.38.0.json",
+      "sha256": "6ac7c1788f254883b930be1c1e419750b849da22f025db9ebacb3462a7af1b9e"
+    },
+    {
+      "path": "INTEGRATION_REPORT_V3.38.0.md",
+      "sha256": "4163fa5509ccd425b320c7ad8003067b4bb8e8ed21da08e47040e360cb4c99d9"
+    },
+    {
+      "path": "KNOWN_LIMITATIONS_V3.38.0.md",
+      "sha256": "1be471242c6616f0a0b3e34e07af6cf71ef0d4f792e5f686018790f98eac42fb"
+    },
+    {
+      "path": "TEST_EVIDENCE_V3.38.0.json",
+      "sha256": "aa0187e0cb2733f9349b8521bd68bbf9709c41cd4fcbcfe8e9dd214b742daf64"
+    },
+    {
+      "path": "forward_experiment.py",
+      "sha256": "a6a36225b0efec282764fab5f62d26aa36c5debc406cb610002e1fe882eee451"
+    },
+    {
+      "path": "legacy_v331_scoring.py",
+      "sha256": "6b1487137cfe058ff708ebd9f891744327a59fb6ae4ba0434f75dc5961f6e99c"
+    },
+    {
+      "path": "run_forward_experiment_historical_equivalence.py",
+      "sha256": "04e70e029a362b503bd21f9e7c6bd13cfb2f5069d7b6d314f49211b13519b2fc"
+    },
+    {
+      "path": "test_forward_experiment_v3380.py",
+      "sha256": "ffc8b0afa398ea82bcaf9378fb6e1cedadc386d426501eefdf7bd97b05c05878"
+    }
+  ],
+  "base_sha256": "f648f95b246573de67726d7874a0d51d7ead58e61d208fe11473a3f740af5c25",
+  "inputs": {
+    "base_zip": {
+      "name": "BotsTrader_V3.37.0_RAILWAY_PREDEPLOYMENT_FINAL.zip",
+      "sha256": "f648f95b246573de67726d7874a0d51d7ead58e61d208fe11473a3f740af5c25"
+    },
+    "eur_dataset": {
+      "name": "eurusd_replay_enriched_v2_2026-07-29_2026-08-29.json",
+      "sha256": "0d848028e64b8f9590100de73c048795857efb4ea7480cbfdf1a91ab49bf4474"
+    },
+    "eur_phase2": {
+      "name": "BotsTrader_EURUSD_PHASE2_RESEARCH_RUN1.zip",
+      "sha256": "8763b9302c40fbcdfb4a92a278052dfc55c756352723c9a05316d499c35424d8"
+    },
+    "gbp_dataset": {
+      "name": "gbpusd_replay_m1diag_v2_2026-07-29_2026-08-29.json",
+      "sha256": "f7360988947b76743f5abdf594a22ccba22e2b4440684608b9c51809d6a35fef"
+    },
+    "gbp_phase2": {
+      "name": "BotsTrader_GBPUSD_PHASE2_RESEARCH_RUN1.zip",
+      "sha256": "d0d078134e6f0a614e55463c09774d3f3bebe4fb9f3e75fbac5a8b701ad7ae7f"
+    }
+  },
+  "modified": [
+    {
+      "base_sha256": "05ee1120effbe38837944b0034abbef940356de4c4938e76e14fb5e998d4642e",
+      "candidate_sha256": "e422de434a0bf49ebec9e50e3fc9c95d103b94b0aa4fe831bb047233f3b44e1b",
+      "path": "historical_replay.py"
+    },
+    {
+      "base_sha256": "be66a8bf87b48c0a504d68a3af328ab2b0db7db53b6a502c79440c2c37747b97",
+      "candidate_sha256": "40377713d546ec769c1fc6e7ba7c2f1092e2e819a9bd88ba2cc112711d723f69",
+      "path": "server.py"
+    },
+    {
+      "base_sha256": "a920eba210885a86a46dd20eb1d936303b0d8bd2521886103ec4ef4ce600d975",
+      "candidate_sha256": "f58517961e6195fbfea7a5c14ef19d6a5b05d5569e85348ea4c2b6b947fe9c13",
+      "path": "test_forward_paper_release.py"
+    },
+    {
+      "base_sha256": "c325f54b68edb7057b330212287a462f27a99fd6e215f2442a645f735724f1af",
+      "candidate_sha256": "9a42c2d0f0fd9d5801da62f1de1bb0532d1e6c55e6703dd408b575efcda1ce4d",
+      "path": "test_multi_asset_paper_isolation_v3361.py"
+    },
+    {
+      "base_sha256": "a70ea92f162131e06b09bc3ba5c9e9c224619b53492fbf678aa440670df078f7",
+      "candidate_sha256": "247e61c0d4bfed2cec499dce5181ec11664bea2f504b231f043cf53098b0f852",
+      "path": "test_security_integration.py"
+    },
+    {
+      "base_sha256": "6d3b7cc29b3c70f0487f358e31a965dbbb5be917c813acdc995458d9672cbb85",
+      "candidate_sha256": "0fe4f73e1ee715f814caf90136804f8ef53dfba3b6fb32a99fe454e7f21a3dbd",
+      "path": "test_v327_runtime_hardening.py"
+    }
+  ],
+  "removed": [],
+  "version": "3.38.0"
+}

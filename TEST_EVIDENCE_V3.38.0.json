@@ -1,0 +1,136 @@
+{
+  "compileall": {
+    "status": "PASS"
+  },
+  "critical_invariant_files": {
+    "broker_risk.py": {
+      "base_sha256": "04ae573f6600f3f0a75c3449178fb25f74e65130f6706a3945f4eccf2b868e3b",
+      "candidate_sha256": "04ae573f6600f3f0a75c3449178fb25f74e65130f6706a3945f4eccf2b868e3b",
+      "unchanged": true
+    },
+    "instrument_profiles.py": {
+      "base_sha256": "3983a6a6c9dedaaf76fd8f4b269d4a382f8ae2144ba69b845f597385fca021f2",
+      "candidate_sha256": "3983a6a6c9dedaaf76fd8f4b269d4a382f8ae2144ba69b845f597385fca021f2",
+      "unchanged": true
+    },
+    "order_state.py": {
+      "base_sha256": "bbd4a1e2593c434299f27c0e295a550349fa3ca04e5abac7503ba179e8c35cec",
+      "candidate_sha256": "bbd4a1e2593c434299f27c0e295a550349fa3ca04e5abac7503ba179e8c35cec",
+      "unchanged": true
+    },
+    "recovery_manager.py": {
+      "base_sha256": "4635dc51fefa9405b06aec23e5506027006e47ed9e38c3e442451e867f23e8bc",
+      "candidate_sha256": "4635dc51fefa9405b06aec23e5506027006e47ed9e38c3e442451e867f23e8bc",
+      "unchanged": true
+    },
+    "smart_execution.py": {
+      "base_sha256": "baf0525db84c4bbacdcd5d6fd2cf767a5229577bae6627a6cb3c32909cbd7b49",
+      "candidate_sha256": "baf0525db84c4bbacdcd5d6fd2cf767a5229577bae6627a6cb3c32909cbd7b49",
+      "unchanged": true
+    }
+  },
+  "critical_server_function_bodies": {
+    "adaptive_risk_recommendation": {
+      "base_sha256": "ded86947d09a771c2922f4c512bc2312c97c01950b7503b273d9cebc45f00054",
+      "candidate_sha256": "ded86947d09a771c2922f4c512bc2312c97c01950b7503b273d9cebc45f00054",
+      "unchanged": true
+    },
+    "adaptive_stop_price": {
+      "base_sha256": "dd98ebe48e83d32eace32a2a1a8da22b236eaee51fe69a1e718d83aae5df0ce3",
+      "candidate_sha256": "dd98ebe48e83d32eace32a2a1a8da22b236eaee51fe69a1e718d83aae5df0ce3",
+      "unchanged": true
+    },
+    "daily_exit_cutoff_reached": {
+      "base_sha256": "a96d0b45df497b642c24b56d63bad2274429923873ab4a3cc48c6fdd7be8dca7",
+      "candidate_sha256": "a96d0b45df497b642c24b56d63bad2274429923873ab4a3cc48c6fdd7be8dca7",
+      "unchanged": true
+    },
+    "execute": {
+      "base_sha256": "b1b239198258b7c21883af0be48cec94bc68989d0f226eb6b1b983a91ef270e2",
+      "candidate_sha256": "b1b239198258b7c21883af0be48cec94bc68989d0f226eb6b1b983a91ef270e2",
+      "unchanged": true
+    },
+    "execute_ranked_candidate": {
+      "base_sha256": "f66b241e2cf82858be8ba01f936eee8644fe08595959528eb0aa73c1528ec409",
+      "candidate_sha256": "f66b241e2cf82858be8ba01f936eee8644fe08595959528eb0aa73c1528ec409",
+      "unchanged": true
+    },
+    "execute_recoverable": {
+      "base_sha256": "bec3f93fa21556bfc8326a8d1cffebadccecf67f2fa45b00b1592fa5143c95e9",
+      "candidate_sha256": "bec3f93fa21556bfc8326a8d1cffebadccecf67f2fa45b00b1592fa5143c95e9",
+      "unchanged": true
+    },
+    "format_instrument_units": {
+      "base_sha256": "40da392f13f26ed0bd1843554e77c9f19f93ab39dca3d6491acec46e41093556",
+      "candidate_sha256": "40da392f13f26ed0bd1843554e77c9f19f93ab39dca3d6491acec46e41093556",
+      "unchanged": true
+    },
+    "instrument_sizing": {
+      "base_sha256": "91fada904ca81096bd5eee49de5c199f6052f7f6cfb0f7a80ee1252d94777135",
+      "candidate_sha256": "91fada904ca81096bd5eee49de5c199f6052f7f6cfb0f7a80ee1252d94777135",
+      "unchanged": true
+    },
+    "manage_open_trades": {
+      "base_sha256": "81ae542defa5fca971f16d57702b9ca05ab7e6fb040c7505491a8560dd79856f",
+      "candidate_sha256": "81ae542defa5fca971f16d57702b9ca05ab7e6fb040c7505491a8560dd79856f",
+      "unchanged": true
+    },
+    "new_entry_time_gate": {
+      "base_sha256": "b18106bcf0731f096ba8cab524127bd73687742d91f621553b7ba04ca243b63c",
+      "candidate_sha256": "b18106bcf0731f096ba8cab524127bd73687742d91f621553b7ba04ca243b63c",
+      "unchanged": true
+    },
+    "normalize_instrument_units": {
+      "base_sha256": "0ede0840847d4560b7bcf9fb523af2b3c3c7d8a26ba8d5cc85963a37d3e59ab6",
+      "candidate_sha256": "0ede0840847d4560b7bcf9fb523af2b3c3c7d8a26ba8d5cc85963a37d3e59ab6",
+      "unchanged": true
+    },
+    "portfolio_execution_guard": {
+      "base_sha256": "ff0d9884935485378df422ac017ab76b5c897e2fac79d41e90e12b625d3e5b79",
+      "candidate_sha256": "ff0d9884935485378df422ac017ab76b5c897e2fac79d41e90e12b625d3e5b79",
+      "unchanged": true
+    },
+    "security_risk_limits_valid": {
+      "base_sha256": "9a0b00d7abc54a9c820b39885c40ee453aae82ae28a4ee9a453a578b327c9cb1",
+      "candidate_sha256": "9a0b00d7abc54a9c820b39885c40ee453aae82ae28a4ee9a453a578b327c9cb1",
+      "unchanged": true
+    }
+  },
+  "dedicated_tests": {
+    "failed": 0,
+    "file": "test_forward_experiment_v3380.py",
+    "passed": 14,
+    "status": "PASS"
+  },
+  "determinism": "PASS",
+  "full_regression": {
+    "chunks": [
+      {
+        "failed": 0,
+        "passed": 133
+      },
+      {
+        "failed": 0,
+        "passed": 84
+      },
+      {
+        "failed": 0,
+        "passed": 191
+      }
+    ],
+    "collected": 408,
+    "errors": 0,
+    "execution_note": "Entire 408-test suite executed in three isolated pytest chunks because monolithic invocation exceeded the tool runtime limit; each chunk completed with zero failures.",
+    "failed": 0,
+    "passed": 408,
+    "skipped": 0,
+    "status": "PASS",
+    "warnings": "4 recurring FastAPI on_event deprecation warnings per pytest process; pre-existing/non-functional."
+  },
+  "historical_equivalence": {
+    "evidence_file": "HISTORICAL_EQUIVALENCE_EVIDENCE_V3.38.0.json",
+    "status": "PASS"
+  },
+  "look_ahead": "PASS",
+  "outcome_dependency": "NONE"
+}

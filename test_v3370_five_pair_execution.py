@@ -186,6 +186,8 @@ def test_execute_ranked_candidate_rebuilds_fresh_context(monkeypatch):
     monkeypatch.setattr(server,'_oanda_batch_broker_guard',lambda *args:{'allow':True})
     monkeypatch.setattr(server,'AUTO',False)
     monkeypatch.setattr(server.recovery_manager,'new_trades_allowed',lambda: True)
+    # This test exercises fresh broker-risk context/slot behavior, not the wall-clock entry gate.
+    monkeypatch.setattr(server,'new_entry_time_gate',lambda *args,**kwargs:{'allowed':True,'reason':'ALLOWED','ny_time':'CONTROLLED_TEST','window':None,'blocked_windows':['07:00-10:00','15:00-19:00'],'timezone':'America/New_York'})
     first=asyncio.run(server.execute_ranked_candidate(object(),c('EUR_USD',90),'cycle',max_slots=2))
     second=asyncio.run(server.execute_ranked_candidate(object(),c('GBP_USD',89),'cycle',max_slots=2))
     assert first['reason']=='AUTO_TRADE=false'
@@ -228,6 +230,8 @@ def test_secondary_execute_path_can_continue_after_oanda_metadata_verification(m
     monkeypatch.setattr(server,'refresh_instrument_metadata',refresh)
     monkeypatch.setattr(server.recovery_manager,'new_trades_allowed',lambda: True)
     monkeypatch.setattr(server,'AUTO',False)
+    # This test exercises metadata verification, not the wall-clock entry gate.
+    monkeypatch.setattr(server,'new_entry_time_gate',lambda *args,**kwargs:{'allowed':True,'reason':'ALLOWED','ny_time':'CONTROLLED_TEST','window':None,'blocked_windows':['07:00-10:00','15:00-19:00'],'timezone':'America/New_York'})
     out=asyncio.run(server.execute_ranked_candidate(object(),c(inst,90),'cycle',max_slots=1))
     assert registry.get(inst).source=='OANDA'
     assert out['reason']=='AUTO_TRADE=false'

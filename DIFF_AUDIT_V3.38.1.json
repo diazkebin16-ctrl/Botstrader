@@ -1,0 +1,76 @@
+{
+  "base_sha256": "9903e4226bef9390de16cb6528a780460c7abb42a55a0991809e1efbe65defba",
+  "changed_files": [
+    {
+      "classification": "POST_FILL_REQUIRED",
+      "path": "server.py",
+      "reason": "semantic transfer of hardened post-fill/reanchor functions and execution-path wiring"
+    },
+    {
+      "classification": "TEST_REQUIRED",
+      "path": "test_post_fill_protection_reanchor_v3370.py",
+      "reason": "original hardened source tests, copied unchanged"
+    },
+    {
+      "classification": "TEST_REQUIRED",
+      "path": "test_post_fill_integration_v3381.py",
+      "reason": "V3.38 integration/cross-invariant tests"
+    },
+    {
+      "classification": "DOCUMENTATION_REQUIRED",
+      "path": "HISTORICAL_EQUIVALENCE_EVIDENCE_V3.38.1.json",
+      "reason": "re-run EUR/GBP exact historical equivalence evidence"
+    },
+    {
+      "classification": "DOCUMENTATION_REQUIRED",
+      "path": "INTEGRATION_REPORT_V3.38.1.md",
+      "reason": "integration audit"
+    },
+    {
+      "classification": "DOCUMENTATION_REQUIRED",
+      "path": "CHANGELOG_V3.38.1.md",
+      "reason": "candidate changelog"
+    },
+    {
+      "classification": "DOCUMENTATION_REQUIRED",
+      "path": "AUTHORITY_STATEMENT_V3.38.1.md",
+      "reason": "authority boundary"
+    },
+    {
+      "classification": "DOCUMENTATION_REQUIRED",
+      "path": "KNOWN_LIMITATIONS_V3.38.1.md",
+      "reason": "known limitations"
+    },
+    {
+      "classification": "DOCUMENTATION_REQUIRED",
+      "path": "TEST_EVIDENCE_V3.38.1.json",
+      "reason": "test evidence"
+    },
+    {
+      "classification": "DOCUMENTATION_REQUIRED",
+      "path": "DIFF_AUDIT_V3.38.1.json",
+      "reason": "self describing diff audit"
+    },
+    {
+      "classification": "DOCUMENTATION_REQUIRED",
+      "path": "MODIFIED_FILES_MANIFEST_V3.38.1.json",
+      "reason": "hash manifest"
+    }
+  ],
+  "merge_method": "DIFFERENTIAL_SEMANTIC",
+  "post_fill_functions_identified": [
+    "_protection_price_tolerance",
+    "post_fill_protection_geometry",
+    "replace_trade_protection",
+    "verify_trade_protection",
+    "_post_fill_protection_observability",
+    "reanchor_post_fill_protection",
+    "record_trade_memory_entry",
+    "register_trade_management",
+    "scan",
+    "execute_ranked_candidate"
+  ],
+  "source_sha256": "9b54c4991dd3fd297a0f45f648d1a334ab23d3007b6b569cf388864ac58c62a5",
+  "unexpected_changes": [],
+  "unexpected_count": 0
+}

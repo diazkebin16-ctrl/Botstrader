@@ -1,0 +1,237 @@
+{
+  "actual": {
+    "eur": {
+      "discovery": {
+        "baseline": {
+          "loss": 79,
+          "total": 106,
+          "win": 27
+        },
+        "blocked": {
+          "loss": 10,
+          "total": 10,
+          "win": 0
+        },
+        "kept": {
+          "loss": 69,
+          "total": 96,
+          "win": 27
+        }
+      },
+      "holdout": {
+        "baseline": {
+          "loss": 37,
+          "total": 53,
+          "win": 16
+        },
+        "blocked": {
+          "loss": 7,
+          "total": 9,
+          "win": 2
+        },
+        "kept": {
+          "loss": 30,
+          "total": 44,
+          "win": 14
+        }
+      }
+    },
+    "gbp": {
+      "discovery": {
+        "baseline": {
+          "loss": 93,
+          "total": 118,
+          "win": 25
+        },
+        "blocked": {
+          "loss": 50,
+          "total": 55,
+          "win": 5
+        },
+        "kept": {
+          "loss": 43,
+          "total": 63,
+          "win": 20
+        }
+      },
+      "holdout": {
+        "baseline": {
+          "loss": 60,
+          "total": 86,
+          "win": 26
+        },
+        "blocked": {
+          "loss": 22,
+          "total": 26,
+          "win": 4
+        },
+        "kept": {
+          "loss": 38,
+          "total": 60,
+          "win": 22
+        }
+      }
+    }
+  },
+  "checks": [
+    {
+      "actual": 27,
+      "expected": 27,
+      "field": "eur.discovery.kept.win",
+      "pass": true
+    },
+    {
+      "actual": 69,
+      "expected": 69,
+      "field": "eur.discovery.kept.loss",
+      "pass": true
+    },
+    {
+      "actual": 0,
+      "expected": 0,
+      "field": "eur.discovery.blocked.win",
+      "pass": true
+    },
+    {
+      "actual": 10,
+      "expected": 10,
+      "field": "eur.discovery.blocked.loss",
+      "pass": true
+    },
+    {
+      "actual": 14,
+      "expected": 14,
+      "field": "eur.holdout.kept.win",
+      "pass": true
+    },
+    {
+      "actual": 30,
+      "expected": 30,
+      "field": "eur.holdout.kept.loss",
+      "pass": true
+    },
+    {
+      "actual": 2,
+      "expected": 2,
+      "field": "eur.holdout.blocked.win",
+      "pass": true
+    },
+    {
+      "actual": 7,
+      "expected": 7,
+      "field": "eur.holdout.blocked.loss",
+      "pass": true
+    },
+    {
+      "actual": 20,
+      "expected": 20,
+      "field": "gbp.discovery.kept.win",
+      "pass": true
+    },
+    {
+      "actual": 43,
+      "expected": 43,
+      "field": "gbp.discovery.kept.loss",
+      "pass": true
+    },
+    {
+      "actual": 5,
+      "expected": 5,
+      "field": "gbp.discovery.blocked.win",
+      "pass": true
+    },
+    {
+      "actual": 50,
+      "expected": 50,
+      "field": "gbp.discovery.blocked.loss",
+      "pass": true
+    },
+    {
+      "actual": 22,
+      "expected": 22,
+      "field": "gbp.holdout.kept.win",
+      "pass": true
+    },
+    {
+      "actual": 38,
+      "expected": 38,
+      "field": "gbp.holdout.kept.loss",
+      "pass": true
+    },
+    {
+      "actual": 4,
+      "expected": 4,
+      "field": "gbp.holdout.blocked.win",
+      "pass": true
+    },
+    {
+      "actual": 22,
+      "expected": 22,
+      "field": "gbp.holdout.blocked.loss",
+      "pass": true
+    }
+  ],
+  "datasets": {
+    "EUR_USD": {
+      "sha256": "0d848028e64b8f9590100de73c048795857efb4ea7480cbfdf1a91ab49bf4474"
+    },
+    "GBP_USD": {
+      "sha256": "f7360988947b76743f5abdf594a22ccba22e2b4440684608b9c51809d6a35fef"
+    }
+  },
+  "eur_phase2_population": {
+    "duplicate_opportunity_ids": 0,
+    "loss": 116,
+    "total": 159,
+    "win": 43
+  },
+  "expected": {
+    "eur": {
+      "discovery": {
+        "blocked": {
+          "loss": 10,
+          "win": 0
+        },
+        "kept": {
+          "loss": 69,
+          "win": 27
+        }
+      },
+      "holdout": {
+        "blocked": {
+          "loss": 7,
+          "win": 2
+        },
+        "kept": {
+          "loss": 30,
+          "win": 14
+        }
+      }
+    },
+    "gbp": {
+      "discovery": {
+        "blocked": {
+          "loss": 50,
+          "win": 5
+        },
+        "kept": {
+          "loss": 43,
+          "win": 20
+        }
+      },
+      "holdout": {
+        "blocked": {
+          "loss": 22,
+          "win": 4
+        },
+        "kept": {
+          "loss": 38,
+          "win": 22
+        }
+      }
+    }
+  },
+  "look_ahead": false,
+  "outcome_used_as_feature": false,
+  "status": "PASS"
+}

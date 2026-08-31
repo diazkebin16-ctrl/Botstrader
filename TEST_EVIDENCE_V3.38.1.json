@@ -1,0 +1,45 @@
+{
+  "base_sha256": "9903e4226bef9390de16cb6528a780460c7abb42a55a0991809e1efbe65defba",
+  "compileall": "PASS",
+  "controlled_off_blackout_recheck": {
+    "failed": 0,
+    "passed": 3,
+    "shim_in_candidate": false,
+    "status": "PASS"
+  },
+  "cross_regression": {
+    "failed": 0,
+    "passed": 116,
+    "status": "PASS"
+  },
+  "determinism": "PASS",
+  "eur_historical_equivalence": "PASS",
+  "full_regression_real_clock": {
+    "baseline_same_three_failures": true,
+    "cause": "GLOBAL_ENTRY_TIME_GATE 15:00-19:00 ET",
+    "failed": 3,
+    "passed": 437,
+    "status": "BASELINE_PARITY"
+  },
+  "gbp_historical_equivalence": "PASS",
+  "look_ahead": "PASS",
+  "merged_post_fill_tests": {
+    "failed": 0,
+    "passed": 24,
+    "status": "PASS"
+  },
+  "original_post_fill_source_tests": {
+    "failed": 0,
+    "passed": 24,
+    "status": "PASS",
+    "warnings": 4
+  },
+  "outcome_dependency": "NONE",
+  "post_fill_source_sha256": "9b54c4991dd3fd297a0f45f648d1a334ab23d3007b6b569cf388864ac58c62a5",
+  "postfill_plus_integration": {
+    "failed": 0,
+    "passed": 32,
+    "status": "PASS"
+  },
+  "source_identity": "PASS"
+}

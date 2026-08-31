@@ -1,0 +1,59 @@
+{
+  "base_candidate": {
+    "filename": "BotsTrader_V3.38.1_EUR_GBP_FORWARD_POSTFILL_CANDIDATE.zip",
+    "sha256": "17a9f1a9981a4ae78bf220f51a6ebed195d4013935b3748da7e688d84960f351"
+  },
+  "compileall": "PASS",
+  "external_changes": {
+    "GitHub_remote": false,
+    "OANDA": false,
+    "Railway": false,
+    "deployment": false
+  },
+  "historical_equivalence": {
+    "EUR_USD": "PASS exact",
+    "GBP_USD": "PASS exact",
+    "evidence_file": "PREDEPLOYMENT_HISTORICAL_EQUIVALENCE_V3.38.1.json"
+  },
+  "post_fill_tests": "32 passed / 0 failed / 4 warnings",
+  "production_diff": {
+    "changed_functions": [],
+    "files": [
+      "server.py"
+    ],
+    "statement": "Only VERSION_TAG constant changed; no production function body changed."
+  },
+  "runtime_version": {
+    "after": "3.38.1",
+    "before": "3.38.0",
+    "remaining_non_document_3_38_0_refs": 0,
+    "server_line": "VERSION_TAG = \"3.38.1\""
+  },
+  "scope": "PRE_DEPLOYMENT_MINIMAL_CLOSURE",
+  "time_dependent_tests": {
+    "deterministic_gate_evidence": {
+      "checks": [
+        "06:59 ET allowed",
+        "07:00 ET blocked",
+        "10:00 ET allowed",
+        "14:59 ET allowed",
+        "15:00 ET blocked",
+        "19:00 ET allowed"
+      ],
+      "file": "test_global_entry_time_gate_repro_v3381.py"
+    },
+    "focused_validation": "45 passed / 0 failed / 4 warnings",
+    "full_regression": "442 passed / 0 failed / 4 warnings",
+    "minimal_test_fix": "Those non-time-gate tests now monkeypatch new_entry_time_gate to deterministic allowed=True. Production gate code is unchanged.",
+    "original_real_clock_reproduction": {
+      "environment": "Executed during active 15:00-19:00 America/New_York blackout",
+      "failure_reason": "GLOBAL_ENTRY_TIME_GATE returned before tests reached AUTO_TRADE=false",
+      "node_ids": [
+        "test_v3370_five_pair_execution.py::test_execute_ranked_candidate_rebuilds_fresh_context",
+        "test_v3370_five_pair_execution.py::test_secondary_execute_path_can_continue_after_oanda_metadata_verification[AUD_USD]",
+        "test_v3370_five_pair_execution.py::test_secondary_execute_path_can_continue_after_oanda_metadata_verification[USD_CAD]"
+      ],
+      "result": "437 passed / 3 failed / 4 warnings"
+    }
+  }
+}

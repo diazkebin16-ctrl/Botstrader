@@ -23,6 +23,7 @@ import math
 from research_evidence import collapse_market_episodes
 from historical_execution import HistoricalExecutionConfig, resolve_executed_outcome
 from replay_validation import ReplayValidationConfig, chronological_holdout, walk_forward_splits
+from legacy_v331_scoring import legacy_v331_score
 
 
 BAR_SECONDS = {"M1": 60, "M5": 300, "M15": 900, "H1": 3600}
@@ -121,18 +122,8 @@ def _common_components(server: Any, hyp: Mapping[str, Any], m5: Sequence[Mapping
 
 def _legacy_v331_score(server: Any, hyp: Mapping[str,Any], m5: Sequence[Mapping[str,Any]], sig: str) -> Tuple[float,bool,bool]:
     x=_common_components(server,hyp,m5,sig)
-    s=0.0
-    s += 16 if x["h1_support"] else (-10 if x["h1_opposes"] else 3)
-    s += 20 if x["m15_support"] else (-12 if x["m15_opposes"] else 4)
-    s += 18 if x["m5_structure"] else (7 if x["m5_momentum"] else 0)
-    s += 16 if x["confirm"] else (6 if x["m1_momentum"] else 0)
-    s += 8 if x["second"] else (4 if x["pc"]>=1 and x["pr"] else 0)
-    s += 8 if x["rr_raw"]>=2 else (6 if x["rr_raw"]>=server.MIN_RR else 0)
-    s += 5 if .65<=x["vol"]<=2 else 0
-    s += 5 if x["ext"]<=1.20 else (2 if x["ext"]<=1.60 else 0)
-    s += 4 if x["session_ok"] else 0
-    s += min(6,2*x["broken"])
-    s=float(server.clamp(s,0,100))
+    x["min_rr"]=float(server.MIN_RR)
+    s=legacy_v331_score(x)
     countertrend=x["h1_opposes"] and x["m15_opposes"]
     transition=(x["h1_opposes"] or x["m15_opposes"]) and (x["m5_structure"] or x["confirm"])
     return s,countertrend,transition

@@ -31,13 +31,15 @@ def _signal(symbol="EUR_USD", *, m1=True, room=.8, rr=1.2, ext=.5):
         "features":{
             "room_to_barrier_r":room,"rr_raw":rr,"extension_atr":ext,"m1_momentum":0.001,
             "m1_ema9_side_ok":1,"m1_candle_color_ok":1,"m1_exception_shadow":1,
+            "legacy_v331_buy_score":40.0,"legacy_v331_sell_score":20.0,
+            "legacy_v331_directional_score":40.0,"legacy_v331_chosen_direction":"BUY",
         },
         "broker_risk_context":_risk_ctx(),
     }
 
 
 def test_release_and_primary_instrument_contract():
-    assert server.VERSION_TAG == "3.37.0"
+    assert server.VERSION_TAG == "3.38.1"
     assert server.PRIMARY_INSTRUMENT == "EUR_USD"
     # V3.37 hardening changed only the config default: secondary instruments
     # remain profiled/PAPER-capable but now require explicit INSTRUMENTS config.
@@ -75,21 +77,23 @@ def test_forward_eur_veto_is_not_authoritative_for_gbp_or_jpy(monkeypatch):
     eur=server.quality_entry_gate(_signal("EUR_USD",room=.3,rr=.9,ext=.5),conf)
     gbp=server.quality_entry_gate(_signal("GBP_USD",room=.3,rr=.9,ext=.5),conf)
     jpy=server.quality_entry_gate(_signal("USD_JPY",room=.3,rr=.9,ext=.5),conf)
-    assert not eur["ok"] and "LOW_ROOM_LOW_RR" in eur["reason"]
+    # EUR Phase2 forward opens its prior LOW_ROOM strategic vetoes; GBP/JPY
+    # still do not inherit those EUR-specific vetoes.
+    assert eur["ok"] is True
     assert gbp["ok"] is True and "PAPER_FORWARD_VETO" not in gbp["reason"]
     assert jpy["ok"] is True and "PAPER_FORWARD_VETO" not in jpy["reason"]
     # The pattern remains observable for all symbols without becoming authority.
     assert server.forward_entry_pattern_flags(_signal("GBP_USD",room=.3,rr=.9)["features"])["low_room_low_rr"] is True
 
 
-def test_m1_forward_admission_exception_is_eur_only(monkeypatch):
+def test_phase1_m1_open_is_forward_scoped_to_eur_and_gbp(monkeypatch):
     monkeypatch.setattr(server,"ENTRY_TIMING_ENABLED",False)
     conf={"probability":.5}
     eur=server.quality_entry_gate(_signal("EUR_USD",m1=False),conf)
     gbp=server.quality_entry_gate(_signal("GBP_USD",m1=False),conf)
     jpy=server.quality_entry_gate(_signal("USD_JPY",m1=False),conf)
     assert eur["ok"] is True
-    assert gbp["ok"] is False and "excepción específica no autorizada" in gbp["reason"]
+    assert gbp["ok"] is True
     assert jpy["ok"] is False and "excepción específica no autorizada" in jpy["reason"]
 
 
