@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from research_manager import sha256_file
 from research_pipeline import analyze_phase1
 from research_phase2 import (
     automatic_pre_audit, automatic_report, candidate_analysis, discover_candidates,
@@ -86,6 +87,29 @@ def _valid_report_inputs(tmp_path, **updates):
     return report
 
 
+def _holdout_chain(tmp_path):
+    target = tmp_path / "target.json"
+    _write(target, {
+        "instrument": "AUD_USD", "variant": "V331_BASELINE",
+        "lookahead_protection": True, "future_bars_used_only_for_outcome": True,
+        "dataset_identity": {"status": "PASS", "code_sha": "abc", "data_sha256": "data-a"},
+        "episodes": _rows(),
+    })
+    phase1_payload = analyze_phase1(str(target), discovery_only=True, horizon_minutes=5, embargo_minutes=0)
+    phase1 = tmp_path / "phase1.json"
+    _write(phase1, phase1_payload)
+    phase2_payload = prepare_phase2(str(target), str(phase1), horizon_minutes=5, embargo_minutes=0)
+    phase2 = tmp_path / "phase2.json"
+    _write(phase2, phase2_payload)
+    discovery_payload = discover_candidates(str(target), str(phase2), min_resolved=5)
+    discovery = tmp_path / "discovery.json"
+    _write(discovery, discovery_payload)
+    freeze = tmp_path / "freeze.json"
+    frozen = freeze_candidate(str(discovery), freeze)
+    _write(freeze, frozen)
+    return target, phase2, discovery, freeze
+
+
 def test_phase2_preserves_non_binary_outcomes_and_freezes_before_holdout(tmp_path):
     target=tmp_path/"target.json"
     _write(target,{"instrument":"AUD_USD","variant":"V331_BASELINE","lookahead_protection":True,
@@ -104,13 +128,56 @@ def test_phase2_preserves_non_binary_outcomes_and_freezes_before_holdout(tmp_pat
     discovery_path=tmp_path/"discovery.json";_write(discovery_path,discovery)
     frozen=freeze_candidate(str(discovery_path),freeze_path);_write(freeze_path,frozen)
     assert frozen["immutable"] is True
-    holdout=evaluate_holdout(str(target),str(phase2_path),str(freeze_path))
+    holdout=evaluate_holdout(str(target),str(phase2_path),str(discovery_path),str(freeze_path))
     effects=holdout["analysis"]["outcome_effect"]
     assert effects["TIMEOUT"]["baseline"]>=0
     assert effects["AMBIGUOUS"]["baseline"]>=0
     assert effects["PENDING"]["baseline"]>=0
     assert holdout["retuning_after_holdout"] is False
     assert holdout["candidate_ranking"][0]["status"] in {"REJECT","RESEARCH_CANDIDATE"}
+
+
+def test_holdout_allows_exact_bound_artifact_identities(tmp_path):
+    target, phase2, discovery, freeze = _holdout_chain(tmp_path)
+    frozen = json.loads(freeze.read_text(encoding="utf-8"))
+    assert frozen["target_population_sha256"] == sha256_file(target)
+    assert frozen["phase2_sha256"] == sha256_file(phase2)
+    assert frozen["discovery_sha256"] == sha256_file(discovery)
+    assert frozen["dataset_identity"]["code_sha"] == frozen["code_sha"] == "abc"
+    result = evaluate_holdout(str(target), str(phase2), str(discovery), str(freeze))
+    assert result["candidate_definition_sha256"]
+
+
+def test_holdout_rejects_same_instrument_with_different_target_sha(tmp_path):
+    target, phase2, discovery, freeze = _holdout_chain(tmp_path)
+    target.write_text(target.read_text(encoding="utf-8") + "\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="Target population SHA"):
+        evaluate_holdout(str(target), str(phase2), str(discovery), str(freeze))
+
+
+def test_holdout_rejects_same_instrument_with_different_dataset_identity(tmp_path):
+    target, phase2, discovery, freeze = _holdout_chain(tmp_path)
+    frozen = json.loads(freeze.read_text(encoding="utf-8"))
+    frozen["dataset_identity"] = {"status": "PASS", "code_sha": "abc", "data_sha256": "data-b"}
+    _write(freeze, frozen)
+    with pytest.raises(ValueError, match="Dataset identity mismatch"):
+        evaluate_holdout(str(target), str(phase2), str(discovery), str(freeze))
+
+
+def test_holdout_rejects_same_instrument_with_different_phase2_sha(tmp_path):
+    target, phase2, discovery, freeze = _holdout_chain(tmp_path)
+    phase2.write_text(phase2.read_text(encoding="utf-8") + "\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="Phase2 SHA"):
+        evaluate_holdout(str(target), str(phase2), str(discovery), str(freeze))
+
+
+def test_holdout_rejects_tampered_discovery_freeze_provenance(tmp_path):
+    target, phase2, discovery, freeze = _holdout_chain(tmp_path)
+    frozen = json.loads(freeze.read_text(encoding="utf-8"))
+    frozen["discovery_sha256"] = "0" * 64
+    _write(freeze, frozen)
+    with pytest.raises(ValueError, match="Discovery/freeze provenance"):
+        evaluate_holdout(str(target), str(phase2), str(discovery), str(freeze))
 
 
 def test_freeze_refuses_silent_retuning(tmp_path):

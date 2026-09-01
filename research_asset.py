@@ -81,7 +81,8 @@ def build_stages(
         ]),
         _stage("holdout", artifacts["holdout"], [
             python, pipeline, "holdout", "--input", str(artifacts["target_population"]),
-            "--phase2", str(artifacts["phase_2"]), "--freeze", str(artifacts["freeze"]),
+            "--phase2", str(artifacts["phase_2"]), "--discovery", str(artifacts["discovery"]),
+            "--freeze", str(artifacts["freeze"]),
             "--output", str(artifacts["holdout"]),
         ]),
         _stage("audit", artifacts["audit"], [

@@ -840,6 +840,8 @@ def freeze_candidate(discovery_path: str, output_path: str | Path) -> Dict[str, 
         "threshold": definition.get("threshold"),
         "direction_semantics": definition.get("direction_semantics"),
         "discovery_sha256": sha256_file(discovery_path),
+        "target_population_sha256": discovery.get("input_sha256"),
+        "phase2_sha256": discovery.get("phase2_sha256"),
         "input_sha256": discovery.get("input_sha256"),
         "dataset_identity": discovery.get("dataset_identity"),
         "code_sha": (discovery.get("dataset_identity") or {}).get("code_sha"),
@@ -859,24 +861,65 @@ def freeze_candidate(discovery_path: str, output_path: str | Path) -> Dict[str, 
     output = Path(output_path)
     if output.exists():
         existing = _load(output)
-        if existing.get("candidate_definition_sha256") != payload["candidate_definition_sha256"]:
+        binding_keys = (
+            "instrument", "dataset_identity", "code_sha", "target_population_sha256",
+            "phase2_sha256", "discovery_sha256", "candidate_definition_sha256",
+        )
+        if any(existing.get(key) != payload.get(key) for key in binding_keys):
             raise ValueError("Freeze artifact is immutable and cannot be replaced")
         return existing
     return payload
 
 
-def evaluate_holdout(target_population_path: str, phase2_path: str, freeze_path: str) -> Dict[str, Any]:
-    source = _load(target_population_path)
+def evaluate_holdout(
+    target_population_path: str, phase2_path: str,
+    discovery_path: str, freeze_path: str,
+) -> Dict[str, Any]:
+    target_sha = sha256_file(target_population_path)
+    phase2_sha = sha256_file(phase2_path)
+    discovery_sha = sha256_file(discovery_path)
     spec = _load(phase2_path)
+    discovery = _load(discovery_path)
     frozen = _load(freeze_path)
-    instruments = {str(source.get("instrument") or "").upper(), str(spec.get("instrument") or "").upper(), str(frozen.get("instrument") or "").upper()}
-    if len(instruments) != 1:
+    target_bindings = (
+        spec.get("input_sha256"), discovery.get("input_sha256"),
+        frozen.get("target_population_sha256"), frozen.get("input_sha256"),
+    )
+    if any(value != target_sha for value in target_bindings):
+        raise ValueError("Target population SHA identity mismatch")
+    if discovery.get("phase2_sha256") != phase2_sha or frozen.get("phase2_sha256") != phase2_sha:
+        raise ValueError("Phase2 SHA identity mismatch")
+    if frozen.get("discovery_sha256") != discovery_sha:
+        raise ValueError("Discovery/freeze provenance mismatch")
+    upstream_instruments = [str(item.get("instrument") or "").upper() for item in (spec, discovery, frozen)]
+    if not all(upstream_instruments) or len(set(upstream_instruments)) != 1:
         raise ValueError("Cross-asset isolation failure: artifact instruments differ")
+    upstream_identities = [item.get("dataset_identity") for item in (spec, discovery, frozen)]
+    if any(not isinstance(identity, Mapping) for identity in upstream_identities):
+        raise ValueError("Dataset identity binding is missing")
+    if len({_canonical_hash(identity) for identity in upstream_identities}) != 1:
+        raise ValueError("Dataset identity mismatch")
+    source = _load(target_population_path)
+    if str(source.get("instrument") or "").upper() != upstream_instruments[0]:
+        raise ValueError("Cross-asset isolation failure: artifact instruments differ")
+    identities = [source.get("dataset_identity"), *upstream_identities]
+    if any(not isinstance(identity, Mapping) for identity in identities):
+        raise ValueError("Dataset identity binding is missing")
+    if len({_canonical_hash(identity) for identity in identities}) != 1:
+        raise ValueError("Dataset identity mismatch")
+    code_sha = identities[0].get("code_sha")
+    if not code_sha or any(identity.get("code_sha") != code_sha for identity in identities):
+        raise ValueError("Dataset code SHA identity mismatch")
+    if frozen.get("code_sha") != code_sha:
+        raise ValueError("Freeze code SHA identity mismatch")
     if frozen.get("immutable") is not True or frozen.get("holdout_opened") is not False:
         raise ValueError("Invalid freeze artifact")
     definition = frozen.get("candidate_definition") or {}
     if _canonical_hash(definition) != frozen.get("candidate_definition_sha256"):
         raise ValueError("Frozen candidate definition hash mismatch")
+    proposed = (discovery.get("proposed_frozen_candidate") or {}).get("candidate") or {}
+    if _canonical_hash(proposed) != frozen.get("candidate_definition_sha256"):
+        raise ValueError("Discovery candidate does not match frozen candidate definition")
     split = _split_from_spec(source, spec)
     holdout_rows = _phase1_eligible_rows(spec, split["test"])
     analysis = candidate_analysis(definition, holdout_rows)

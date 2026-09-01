@@ -123,7 +123,7 @@ class CascadeOptimizer:
         return result
 
     def run(self, instrument: str, stages: Sequence[Stage], *, resume: bool = True,
-            through: str = "report") -> Dict[str, Any]:
+            through: str = "report", holdout_reproduction_read_only: bool = False) -> Dict[str, Any]:
         instrument = instrument.upper()
         if through not in CASCADE:
             raise ValueError(f"Unknown terminal stage: {through}")
@@ -154,6 +154,24 @@ class CascadeOptimizer:
             self.manager.update_phase(instrument, name, "RUNNING")
             try:
                 transition_gate = self._transition_gate(name, by_name)
+                holdout_authorization = None
+                if name == "holdout":
+                    with by_name["freeze"].artifact.open("r", encoding="utf-8") as handle:
+                        frozen = json.load(handle)
+                    try:
+                        holdout_authorization = self.manager.begin_holdout(
+                            instrument,
+                            candidate_definition_sha256=str(frozen.get("candidate_definition_sha256") or ""),
+                            freeze_sha256=sha256_file(by_name["freeze"].artifact),
+                            read_only_reproduction=holdout_reproduction_read_only,
+                        )
+                        if (
+                            holdout_authorization.get("mode") == "READ_ONLY_REPRODUCTION"
+                            and Path(str(holdout_authorization.get("holdout_artifact") or "")).resolve() == stage.artifact.resolve()
+                        ):
+                            raise ValueError("Read-only reproduction requires a distinct holdout artifact path")
+                    except ValueError as exc:
+                        raise MethodologyViolation(str(exc)) from exc
                 result = self.runner(
                     list(stage.command), check=False, text=True,
                     capture_output=True, env=env,
@@ -166,6 +184,17 @@ class CascadeOptimizer:
                 blocking_statuses = {"FAIL", "FAILED", "BLOCKED", "REVIEW_REQUIRED", "NO_FREEZE_ELIGIBLE_CANDIDATE"}
                 if str(report.get("status") or "OK").upper() in blocking_statuses:
                     raise MethodologyViolation(f"Artifact status is {report['status']}")
+                if name == "holdout":
+                    try:
+                        self.manager.complete_holdout(
+                            instrument,
+                            candidate_definition_sha256=str(report.get("candidate_definition_sha256") or ""),
+                            freeze_sha256=sha256_file(by_name["freeze"].artifact),
+                            holdout_artifact=str(stage.artifact),
+                            read_only_reproduction=(holdout_authorization or {}).get("mode") == "READ_ONLY_REPRODUCTION",
+                        )
+                    except ValueError as exc:
+                        raise MethodologyViolation(str(exc)) from exc
                 evidence_summary = {
                     key: report.get(key) for key in (
                         "dataset_identity", "partitions", "candidate_space", "candidate_id",
@@ -181,9 +210,16 @@ class CascadeOptimizer:
                     },
                 )
                 if name == "freeze":
+                    current_identity = self.manager.load()["assets"][instrument]["dataset_identity"]
                     self.manager.freeze_candidate(instrument, {
                         "candidate_id": report.get("candidate_id"),
                         "candidate_definition_sha256": report.get("candidate_definition_sha256"),
+                        "dataset_identity": current_identity,
+                        "artifact_dataset_identity": report.get("dataset_identity"),
+                        "code_sha": report.get("code_sha"),
+                        "target_population_sha256": report.get("target_population_sha256"),
+                        "phase2_sha256": report.get("phase2_sha256"),
+                        "discovery_sha256": report.get("discovery_sha256"),
                         "artifact": str(stage.artifact),
                         "artifact_sha256": sha256_file(stage.artifact),
                         "rule": report.get("rule"),
@@ -226,12 +262,14 @@ def main() -> None:
     parser.add_argument("--manifest", required=True)
     parser.add_argument("--state", default="research_state.json")
     parser.add_argument("--no-resume", action="store_true")
+    parser.add_argument("--holdout-reproduction-read-only", action="store_true")
     parser.add_argument("--through", choices=CASCADE, default="report")
     args = parser.parse_args()
     optimizer = CascadeOptimizer(ResearchManager(args.state))
     result = optimizer.run(
         args.instrument, load_manifest(args.manifest),
         resume=not args.no_resume, through=args.through,
+        holdout_reproduction_read_only=args.holdout_reproduction_read_only,
     )
     print(json.dumps(result, indent=2, sort_keys=True))
 

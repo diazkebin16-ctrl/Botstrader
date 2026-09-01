@@ -36,7 +36,7 @@ def test_full_cascade_records_artifacts_and_resumes(tmp_path):
         if name in {"discovery","discovery_repeat"}:payload["status"]="OK"
         if name == "determinism":payload["status"]="PASS"
         if name == "freeze":payload.update({"immutable":True,"holdout_opened":False,"candidate_id":"c1","candidate_definition_sha256":"d1"})
-        if name == "holdout":payload["retuning_after_holdout"]=False
+        if name == "holdout":payload.update({"retuning_after_holdout":False,"candidate_definition_sha256":"d1"})
         if name == "audit":payload.update({"status":"PASS","production_modifications":"NONE"})
         if name == "report":payload={"LOOK-AHEAD":{"status":"PASS"}}
         if name == "pre_audit":payload.update({"verdict":"ACCEPT","severities":{}})
@@ -75,7 +75,7 @@ def test_fail_artifact_blocks_cascade_and_later_stages(tmp_path, failed_stage):
         if name == "freeze":
             payload.update({"immutable": True, "holdout_opened": False, "candidate_id": "c1", "candidate_definition_sha256": "d1"})
         if name == "holdout":
-            payload["retuning_after_holdout"] = False
+            payload.update({"retuning_after_holdout": False, "candidate_definition_sha256": "d1"})
         if name == "audit":
             payload.update({"status": "PASS", "production_modifications": "NONE"})
         if name == "report":

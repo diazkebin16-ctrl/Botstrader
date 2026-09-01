@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any, Dict, Mapping, Optional
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 PHASES = (
     "data_integrity", "replay", "target_population", "phase_1", "phase_2",
     "discovery", "discovery_repeat", "determinism", "freeze", "holdout",
@@ -56,7 +56,7 @@ def _identity(provenance: Mapping[str, Any]) -> str:
 
 def _migrate_state(state: Dict[str, Any]) -> Dict[str, Any]:
     version = state.get("schema_version")
-    if version not in (1, SCHEMA_VERSION):
+    if version not in (1, 2, SCHEMA_VERSION):
         raise ValueError("Unsupported research state schema")
     for asset in (state.get("assets") or {}).values():
         phases = asset.setdefault("phases", {})
@@ -64,7 +64,13 @@ def _migrate_state(state: Dict[str, Any]) -> Dict[str, Any]:
             phases.setdefault(phase, {"status": "PENDING"})
         provenance = asset.setdefault("provenance", {})
         asset.setdefault("dataset_identity", _identity(provenance))
+        dataset_identity = asset["dataset_identity"]
+        for collection in ("candidates", "frozen_candidates", "audits"):
+            for record in asset.setdefault(collection, []):
+                record.setdefault("dataset_identity", dataset_identity)
+                record.setdefault("active", record.get("dataset_identity") == dataset_identity)
         asset.setdefault("frozen_candidates", [])
+        asset.setdefault("holdout_ledger", [])
         asset.setdefault("open_risks", asset.pop("risks", []))
         asset.setdefault("limitations", [])
         asset.setdefault("audit_verdict", "NOT TESTED")
@@ -138,21 +144,28 @@ class ResearchManager:
         identity = _identity(provenance)
         identity_changed = bool(existing) and existing.get("dataset_identity") != identity
         phases = existing.get("phases") or {phase: {"status": "PENDING"} for phase in PHASES}
+        candidates = existing.get("candidates") or []
+        frozen_candidates = existing.get("frozen_candidates") or []
+        audits = existing.get("audits") or []
         if identity_changed:
             phases = {phase: {"status": "PENDING", "reason": "INPUT_IDENTITY_CHANGED"} for phase in PHASES}
+            for record in [*candidates, *frozen_candidates, *audits]:
+                record["active"] = False
+                record["invalidated_reason"] = "INPUT_IDENTITY_CHANGED"
         asset = {
             "instrument": instrument,
             "provenance": provenance,
             "dataset_identity": identity,
             "phases": phases,
-            "candidates": existing.get("candidates") or [],
-            "frozen_candidates": existing.get("frozen_candidates") or [],
-            "audits": existing.get("audits") or [],
+            "candidates": candidates,
+            "frozen_candidates": frozen_candidates,
+            "audits": audits,
+            "holdout_ledger": existing.get("holdout_ledger") or [],
             "open_risks": existing.get("open_risks") or existing.get("risks") or [],
             "limitations": existing.get("limitations") or [],
-            "audit_verdict": existing.get("audit_verdict") or "NOT TESTED",
-            "independent_audit_verdict": existing.get("independent_audit_verdict") or "NOT TESTED",
-            "forward_status": existing.get("forward_status") or "BLOCKED_HUMAN_REVIEW_REQUIRED",
+            "audit_verdict": "NOT TESTED" if identity_changed else existing.get("audit_verdict") or "NOT TESTED",
+            "independent_audit_verdict": "NOT TESTED" if identity_changed else existing.get("independent_audit_verdict") or "NOT TESTED",
+            "forward_status": "BLOCKED_INPUT_IDENTITY_CHANGED" if identity_changed else existing.get("forward_status") or "BLOCKED_HUMAN_REVIEW_REQUIRED",
             "lifecycle": ({
                 "last_valid_stage": None,
                 "next_allowed_stage": "data_integrity",
@@ -165,6 +178,8 @@ class ResearchManager:
             "created_at": existing.get("created_at") or utc_now(),
             "updated_at": utc_now(),
         }
+        if not identity_changed and existing.get("forward_candidate"):
+            asset["forward_candidate"] = existing["forward_candidate"]
         state["assets"][instrument] = asset
         self.save(state)
         return asset
@@ -214,6 +229,11 @@ class ResearchManager:
         if asset is None:
             raise KeyError(f"Asset not registered: {instrument}")
         record = dict(candidate)
+        supplied_identity = record.get("dataset_identity")
+        if supplied_identity not in (None, asset["dataset_identity"]):
+            raise ValueError("Candidate dataset identity does not match current asset identity")
+        record["dataset_identity"] = asset["dataset_identity"]
+        record["active"] = True
         record.setdefault("recorded_at", utc_now())
         record.setdefault("frozen", False)
         asset["candidates"].append(record)
@@ -226,6 +246,11 @@ class ResearchManager:
         if asset is None:
             raise KeyError(f"Asset not registered: {instrument}")
         record = dict(audit)
+        supplied_identity = record.get("dataset_identity")
+        if supplied_identity not in (None, asset["dataset_identity"]):
+            raise ValueError("Audit dataset identity does not match current asset identity")
+        record["dataset_identity"] = asset["dataset_identity"]
+        record["active"] = True
         record.setdefault("recorded_at", utc_now())
         asset["audits"].append(record)
         asset["audit_verdict"] = record.get("verdict") or record.get("status") or "NOT TESTED"
@@ -239,11 +264,24 @@ class ResearchManager:
         if asset is None:
             raise KeyError(f"Asset not registered: {instrument}")
         definition = dict(candidate)
+        supplied_identity = definition.get("dataset_identity")
+        if supplied_identity not in (None, asset["dataset_identity"]):
+            raise ValueError("Frozen candidate dataset identity does not match current asset identity")
+        definition["dataset_identity"] = asset["dataset_identity"]
+        definition["active"] = True
         candidate_id = str(definition.get("candidate_id") or definition.get("id") or "")
         definition_sha = str(definition.get("candidate_definition_sha256") or "")
         if not candidate_id or not definition_sha:
             raise ValueError("Frozen candidate requires candidate_id and candidate_definition_sha256")
+        current_holdout = next((
+            item for item in asset["holdout_ledger"]
+            if item.get("dataset_identity") == asset["dataset_identity"]
+        ), None)
+        if current_holdout and current_holdout.get("candidate_definition_sha256") != definition_sha:
+            raise ValueError("Holdout already exposed; a different candidate cannot be frozen for this dataset")
         for existing in asset["frozen_candidates"]:
+            if existing.get("dataset_identity") != asset["dataset_identity"] or existing.get("active") is not True:
+                continue
             if existing.get("candidate_id") == candidate_id:
                 if existing.get("candidate_definition_sha256") != definition_sha:
                     raise ValueError("Frozen candidate id cannot be silently retuned")
@@ -253,6 +291,91 @@ class ResearchManager:
         asset["frozen_candidates"].append(definition)
         self.save(state)
         return definition
+
+    def begin_holdout(
+        self, instrument: str, *, candidate_definition_sha256: str,
+        freeze_sha256: str, read_only_reproduction: bool = False,
+    ) -> Dict[str, Any]:
+        """Persist holdout exposure before evaluation and reject candidate reuse."""
+        state = self.load()
+        asset = state["assets"].get(instrument.upper())
+        if asset is None:
+            raise KeyError(f"Asset not registered: {instrument}")
+        frozen = next((
+            item for item in asset["frozen_candidates"]
+            if item.get("dataset_identity") == asset["dataset_identity"]
+            and item.get("active") is True
+            and item.get("candidate_definition_sha256") == candidate_definition_sha256
+        ), None)
+        if frozen is None:
+            raise ValueError("Holdout requires a frozen candidate for the current dataset identity")
+        if not freeze_sha256:
+            raise ValueError("Holdout requires freeze artifact identity")
+        existing = next((
+            item for item in asset["holdout_ledger"]
+            if item.get("dataset_identity") == asset["dataset_identity"]
+        ), None)
+        if existing:
+            same_freeze = (
+                existing.get("candidate_definition_sha256") == candidate_definition_sha256
+                and existing.get("freeze_sha256") == freeze_sha256
+            )
+            if not same_freeze:
+                raise ValueError("Holdout already exposed to a different candidate for this dataset")
+            if not read_only_reproduction:
+                raise ValueError("Holdout already consumed; reproduction must be explicitly read-only")
+            if existing.get("status") != "OPENED":
+                raise ValueError("Incomplete holdout exposure cannot be reopened")
+            return {**existing, "mode": "READ_ONLY_REPRODUCTION"}
+        if read_only_reproduction:
+            raise ValueError("Read-only reproduction requires a prior completed holdout opening")
+        record = {
+            "dataset_identity": asset["dataset_identity"],
+            "candidate_definition_sha256": candidate_definition_sha256,
+            "freeze_sha256": freeze_sha256,
+            "opened_at": utc_now(),
+            "status": "OPENING",
+            "mode": "FIRST_OPEN",
+        }
+        asset["holdout_ledger"].append(record)
+        self.save(state)
+        return record
+
+    def complete_holdout(
+        self, instrument: str, *, candidate_definition_sha256: str,
+        freeze_sha256: str, holdout_artifact: str,
+        read_only_reproduction: bool = False,
+    ) -> Dict[str, Any]:
+        state = self.load()
+        asset = state["assets"].get(instrument.upper())
+        if asset is None:
+            raise KeyError(f"Asset not registered: {instrument}")
+        artifact_path = Path(holdout_artifact)
+        if not artifact_path.is_file():
+            raise ValueError("Holdout artifact is missing")
+        artifact_sha = sha256_file(artifact_path)
+        record = next((
+            item for item in asset["holdout_ledger"]
+            if item.get("dataset_identity") == asset["dataset_identity"]
+            and item.get("candidate_definition_sha256") == candidate_definition_sha256
+            and item.get("freeze_sha256") == freeze_sha256
+        ), None)
+        if record is None:
+            raise ValueError("Holdout opening was not persisted before evaluation")
+        if read_only_reproduction:
+            if record.get("status") != "OPENED" or record.get("holdout_artifact_sha256") != artifact_sha:
+                raise ValueError("Read-only reproduction differs from the original holdout evidence")
+            return {**record, "mode": "READ_ONLY_REPRODUCTION"}
+        if record.get("status") != "OPENING":
+            raise ValueError("Holdout ledger is not awaiting first-open evidence")
+        record.update({
+            "status": "OPENED",
+            "holdout_artifact": str(artifact_path),
+            "holdout_artifact_sha256": artifact_sha,
+            "completed_at": utc_now(),
+        })
+        self.save(state)
+        return record
 
     def record_risks_and_limitations(
         self, instrument: str, *, risks: list[Mapping[str, Any]], limitations: list[str],
@@ -283,16 +406,28 @@ class ResearchManager:
         asset = state["assets"].get(instrument.upper())
         if asset is None:
             raise KeyError(f"Asset not registered: {instrument}")
-        frozen = next((item for item in asset["frozen_candidates"] if item.get("candidate_id") == candidate_id), None)
+        frozen = next((
+            item for item in asset["frozen_candidates"]
+            if item.get("candidate_id") == candidate_id
+            and item.get("dataset_identity") == asset["dataset_identity"]
+            and item.get("active") is True
+        ), None)
         if frozen is None:
-            raise ValueError("Forward candidate must reference an immutable frozen candidate")
-        if asset.get("audit_verdict") not in {"ACCEPT", "ACCEPT WITH LIMITATIONS"}:
+            raise ValueError("Forward candidate must reference an active frozen candidate for the current dataset identity")
+        accepted_audit = next((
+            item for item in reversed(asset["audits"])
+            if item.get("dataset_identity") == asset["dataset_identity"]
+            and item.get("active") is True
+            and item.get("verdict") in {"ACCEPT", "ACCEPT WITH LIMITATIONS"}
+        ), None)
+        if accepted_audit is None:
             raise ValueError("Automatic pre-audit did not accept the candidate")
         asset["independent_audit_verdict"] = ia2_verdict
         asset["forward_status"] = "FORWARD_CANDIDATE"
         asset["forward_candidate"] = {
             "candidate_id": candidate_id,
             "candidate_definition_sha256": frozen["candidate_definition_sha256"],
+            "dataset_identity": asset["dataset_identity"],
             "status": "FORWARD_CANDIDATE",
             "ia1_approved": True,
             "ia2_verdict": ia2_verdict,
