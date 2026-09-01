@@ -46,7 +46,8 @@ def main():
             horizon_bars=args.horizon,
             execution=execution,
             validation=validation,
-            save_m1_rejection_shadow=True
+            save_m1_rejection_shadow=True,
+            save_target_population=True,
         )
     )
     report["certification_eligible"]=(len(scales)==1 and scales[0]==1.0)

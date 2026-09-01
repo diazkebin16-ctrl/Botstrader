@@ -90,6 +90,7 @@ class ReplayConfig:
     horizon_bars: int = 180
     episode_gap_minutes: int = 15
     save_m1_rejection_shadow: bool = False
+    save_target_population: bool = False
     execution: HistoricalExecutionConfig = HistoricalExecutionConfig()
     validation: ReplayValidationConfig = ReplayValidationConfig()
 
@@ -231,6 +232,27 @@ def _metrics(rows: Sequence[Mapping[str,Any]]) -> Dict[str,Any]:
             "statuses":statuses}
 
 
+def _resolve_episode(store: CandleStore, row: Mapping[str, Any], inst: str,
+                     config: ReplayConfig, *, direction_key: str = "signal") -> Dict[str, Any]:
+    """Resolve an episode without exposing future bars to decision features."""
+    direction = str(row.get(direction_key) or "").upper()
+    payload={"candle_ts":row["candle_ts"],"direction":direction,"entry":row["entry"],
+             "stop":row["stop"],"target":row["target"],"instrument":inst}
+    future=store.future_m1_after(_dt(row["candle_ts"]), config.horizon_bars + max(0, int(config.execution.latency_bars)) + 1)
+    out=resolve_executed_outcome(payload,future,horizon_bars=config.horizon_bars,config=config.execution)
+    resolved=dict(row)
+    resolved["research_direction"]=direction
+    if out:
+        resolved.update({"outcome_status":out["status"],"label":out.get("label"),"mfe_r":out.get("mfe_r"),"mae_r":out.get("mae_r"),
+                         "entry_ts":out.get("entry_ts"),"exit_ts":out.get("exit_ts"),"entry_fill":out.get("entry_fill"),
+                         "exit_fill":out.get("exit_fill"),"entry_spread_pips":out.get("entry_spread_pips"),
+                         "entry_slippage_pips":out.get("entry_slippage_pips"),"exit_slippage_pips":out.get("exit_slippage_pips"),
+                         "execution_note":out.get("note"),"realized_r":out.get("realized_r")})
+    else:
+        resolved.update({"outcome_status":"PENDING","label":None,"realized_r":None})
+    return resolved
+
+
 def replay_history(server: Any, candles_by_tf: Mapping[str,Sequence[Mapping[str,Any]]], inst: str,
                    start: datetime, end: datetime, variants: Sequence[ReplayVariant], config: ReplayConfig=ReplayConfig()) -> Dict[str,Any]:
     store=CandleStore(candles_by_tf); start=_dt(start);end=_dt(end)
@@ -261,6 +283,31 @@ def replay_history(server: Any, candles_by_tf: Mapping[str,Sequence[Mapping[str,
                                          timestamp_key="candle_ts",instrument_key="instrument",direction_key="signal")
         resolved=[]
         m1_shadow_resolved=[]
+        target_population_resolved=[]
+        if config.save_target_population:
+            # The selected direction and all features are computed at decision time.
+            # Future M1 is used only below to label the outcome. This population is
+            # research evidence, never an executable population.
+            target_rows=[]
+            for r in raw[v.name]:
+                direction=str(r.get("signal") or "").upper()
+                if direction not in ("BUY","SELL"):
+                    direction=str(r.get("chosen_signal") or "").upper()
+                if direction not in ("BUY","SELL"):
+                    continue
+                z=dict(r);z["research_direction"]=direction
+                target_rows.append(z)
+            target_episodes=collapse_market_episodes(
+                target_rows,
+                gap_minutes=config.episode_gap_minutes,
+                timestamp_key="candle_ts",
+                instrument_key="instrument",
+                direction_key="research_direction",
+            )
+            target_population_resolved=[
+                _resolve_episode(store,r,inst,config,direction_key="research_direction")
+                for r in target_episodes
+            ]
         if config.save_m1_rejection_shadow:
             m1_shadow_episodes=collapse_market_episodes(
                 m1_rejected[v.name],
@@ -270,43 +317,10 @@ def replay_history(server: Any, candles_by_tf: Mapping[str,Sequence[Mapping[str,
                 direction_key="signal"
             )
             for r in m1_shadow_episodes:
-                payload={"candle_ts":r["candle_ts"],"direction":r["signal"],"entry":r["entry"],"stop":r["stop"],"target":r["target"],"instrument":inst}
-                future=store.future_m1_after(_dt(r["candle_ts"]), config.horizon_bars + max(0, int(config.execution.latency_bars)) + 1)
-                out=resolve_executed_outcome(payload,future,horizon_bars=config.horizon_bars,config=config.execution)
-                z=dict(r)
-                if out:
-                    z.update({
-                        "outcome_status":out["status"],
-                        "label":out.get("label"),
-                        "mfe_r":out.get("mfe_r"),
-                        "mae_r":out.get("mae_r"),
-                        "entry_ts":out.get("entry_ts"),
-                        "exit_ts":out.get("exit_ts"),
-                        "entry_fill":out.get("entry_fill"),
-                        "exit_fill":out.get("exit_fill"),
-                        "entry_spread_pips":out.get("entry_spread_pips"),
-                        "entry_slippage_pips":out.get("entry_slippage_pips"),
-                        "exit_slippage_pips":out.get("exit_slippage_pips"),
-                        "execution_note":out.get("note"),
-                        "realized_r":out.get("realized_r")
-                    })
-                else:
-                    z.update({"outcome_status":"PENDING","realized_r":None})
-                m1_shadow_resolved.append(z)
+                m1_shadow_resolved.append(_resolve_episode(store,r,inst,config))
 
         for r in episodes:
-            payload={"candle_ts":r["candle_ts"],"direction":r["signal"],"entry":r["entry"],"stop":r["stop"],"target":r["target"],"instrument":inst}
-            future=store.future_m1_after(_dt(r["candle_ts"]), config.horizon_bars + max(0, int(config.execution.latency_bars)) + 1)
-            out=resolve_executed_outcome(payload,future,horizon_bars=config.horizon_bars,config=config.execution)
-            z=dict(r)
-            if out:
-                z.update({"outcome_status":out["status"],"label":out.get("label"),"mfe_r":out.get("mfe_r"),"mae_r":out.get("mae_r"),
-                          "entry_ts":out.get("entry_ts"),"exit_ts":out.get("exit_ts"),"entry_fill":out.get("entry_fill"),
-                          "exit_fill":out.get("exit_fill"),"entry_spread_pips":out.get("entry_spread_pips"),
-                          "entry_slippage_pips":out.get("entry_slippage_pips"),"exit_slippage_pips":out.get("exit_slippage_pips"),
-                          "execution_note":out.get("note"),"realized_r":out.get("realized_r")})
-            else:z.update({"outcome_status":"PENDING","realized_r":None})
-            resolved.append(z)
+            resolved.append(_resolve_episode(store,r,inst,config))
 
         holdout=chronological_holdout(resolved,horizon_bars=config.horizon_bars,config=config.validation)
         wf=walk_forward_splits(resolved,horizon_bars=config.horizon_bars,config=config.validation)
@@ -320,6 +334,12 @@ def replay_history(server: Any, candles_by_tf: Mapping[str,Sequence[Mapping[str,
         reports[v.name]={"raw_snapshots":len(raw[v.name]),"actionable_snapshots":len(actionable),"independent_episodes":len(episodes),
                          "rejections":rejection[v.name],"metrics":_metrics(resolved),"holdout":holdout_report,
                          "walk_forward":wf_report,"episodes":resolved,
+                         "target_population":{
+                             "enabled":bool(config.save_target_population),
+                             "scope":"RESEARCH_ONLY_SELECTED_DIRECTION_BEFORE_STRATEGIC_GATES",
+                             "metrics":_metrics(target_population_resolved),
+                             "episodes":target_population_resolved,
+                         },
                          "m1_rejection_shadow":{
                              "enabled":bool(config.save_m1_rejection_shadow),
                              "episodes":m1_shadow_resolved,
