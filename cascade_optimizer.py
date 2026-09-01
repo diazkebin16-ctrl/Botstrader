@@ -163,7 +163,7 @@ class CascadeOptimizer:
                 if not stage.artifact.is_file():
                     raise RuntimeError(f"Expected artifact was not created: {stage.artifact}")
                 report = validate_research_artifact(stage.artifact, name)
-                blocking_statuses = {"FAILED", "BLOCKED", "REVIEW_REQUIRED", "NO_FREEZE_ELIGIBLE_CANDIDATE"}
+                blocking_statuses = {"FAIL", "FAILED", "BLOCKED", "REVIEW_REQUIRED", "NO_FREEZE_ELIGIBLE_CANDIDATE"}
                 if str(report.get("status") or "OK").upper() in blocking_statuses:
                     raise MethodologyViolation(f"Artifact status is {report['status']}")
                 evidence_summary = {

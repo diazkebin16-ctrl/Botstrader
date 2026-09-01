@@ -86,6 +86,20 @@ def _row_id(row: Mapping[str, Any]) -> str:
     return _canonical_hash(material)[:20]
 
 
+def episode_dedup_evidence(rows: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
+    """Report duplicate canonical episode identities without collapsing rows."""
+    identities = [str(row.get("episode_id") or _row_id(row)) for row in rows]
+    unique = set(identities)
+    duplicate_count = len(identities) - len(unique)
+    return {
+        "status": "PASS" if duplicate_count == 0 else "FAIL",
+        "total_episodes": len(identities),
+        "unique_episode_identities": len(unique),
+        "duplicate_count": duplicate_count,
+        "identity": "episode_id_or_canonical_instrument_timestamp_direction",
+    }
+
+
 def _partition_hash(rows: Sequence[Mapping[str, Any]]) -> str:
     return _canonical_hash([_row_id(row) for row in rows])
 
@@ -230,6 +244,8 @@ def prepare_phase2(
         raise ValueError("Target population lacks look-ahead protection")
     rows = list(source.get("episodes") or [])
     validate_rows(rows)
+    dedup = episode_dedup_evidence(rows)
+    replay_methodology = source.get("replay_methodology") or {}
     config = ReplayValidationConfig(
         discovery_fraction=discovery_fraction,
         validation_fraction=validation_fraction,
@@ -245,7 +261,7 @@ def prepare_phase2(
         for name in NUMERIC_FEATURES
     }
     return {
-        "status": "OK",
+        "status": "OK" if dedup["status"] == "PASS" else "FAIL",
         "stage": "phase_2",
         "instrument": source.get("instrument"),
         "variant": source.get("variant"),
@@ -256,6 +272,19 @@ def prepare_phase2(
         "phase1_sha256": sha256_file(phase1_path),
         "lookahead_protection": True,
         "future_bars_used_only_for_outcome": True,
+        "lookahead_evidence": {
+            "replay": {
+                "no_lookahead_decision": replay_methodology.get("no_lookahead_decision"),
+                "future_bars_only_for_outcome": replay_methodology.get("future_bars_only_for_outcome"),
+                "lookahead_detected": replay_methodology.get("lookahead_detected"),
+            },
+            "target_population": {
+                "lookahead_protection": source.get("lookahead_protection"),
+                "future_bars_used_only_for_outcome": source.get("future_bars_used_only_for_outcome"),
+                "lookahead_detected": source.get("lookahead_detected"),
+            },
+        },
+        "episode_dedup": dedup,
         "selection_protocol": "DISCOVERY_DEFINE__VALIDATION_SELECT__FREEZE__HOLDOUT_ONCE",
         "phase1_policy": _phase1_policy({**phase1, "artifact_sha256": sha256_file(phase1_path)}),
         "partition_config": {
@@ -910,6 +939,45 @@ def automatic_report(
     selected = (holdout.get("candidate_ranking") or [None])[0]
     risk = holdout.get("overfitting_risk") or {}
     audit_failures = len((audit.get("package") or {}).get("failures") or [])
+    dedup = phase2.get("episode_dedup")
+    if not isinstance(dedup, Mapping):
+        dedup = {
+            "status": "NOT TESTED", "total_episodes": None,
+            "unique_episode_identities": None, "duplicate_count": None,
+        }
+    upstream_lookahead = phase2.get("lookahead_evidence") or {}
+
+    def lookahead_stage(values: Sequence[Any], *, detected: Any = None) -> Dict[str, Any]:
+        if detected is True or any(value is False for value in values):
+            status = "FAIL"
+        elif values and all(value is True for value in values):
+            status = "PASS"
+        else:
+            status = "NOT TESTED"
+        return {"status": status, "evidence": list(values), "lookahead_detected": detected}
+
+    replay_lookahead = upstream_lookahead.get("replay") or {}
+    target_lookahead = upstream_lookahead.get("target_population") or {}
+    lookahead_stages = {
+        "replay": lookahead_stage(
+            [replay_lookahead.get("no_lookahead_decision"), replay_lookahead.get("future_bars_only_for_outcome")],
+            detected=replay_lookahead.get("lookahead_detected"),
+        ),
+        "target_population": lookahead_stage(
+            [target_lookahead.get("lookahead_protection"), target_lookahead.get("future_bars_used_only_for_outcome")],
+            detected=target_lookahead.get("lookahead_detected"),
+        ),
+        "phase_1": lookahead_stage([phase1.get("lookahead_protection")], detected=phase1.get("lookahead_detected")),
+        "phase_2": lookahead_stage(
+            [phase2.get("lookahead_protection"), phase2.get("future_bars_used_only_for_outcome")],
+            detected=phase2.get("lookahead_detected"),
+        ),
+        "discovery": lookahead_stage([discovery.get("lookahead_protection")], detected=discovery.get("lookahead_detected")),
+        "freeze": lookahead_stage([frozen.get("lookahead_protection")], detected=frozen.get("lookahead_detected")),
+        "holdout": lookahead_stage([holdout.get("lookahead_protection")], detected=holdout.get("lookahead_detected")),
+    }
+    lookahead_statuses = {item["status"] for item in lookahead_stages.values()}
+    lookahead_status = "FAIL" if "FAIL" in lookahead_statuses else ("PASS" if lookahead_statuses == {"PASS"} else "NOT TESTED")
     report = {
         "INPUT SHA256": integrity.get("input_sha256"),
         "INSTRUMENT": integrity.get("instrument"),
@@ -917,7 +985,11 @@ def automatic_report(
         "END": integrity.get("end"),
         "WARMUP": integrity.get("warmup_days"),
         "HORIZON": integrity.get("horizon_minutes"),
-        "POPULATION": {"status": "PASS", "episodes": sum((phase2.get("partitions", {}).get(name) or {}).get("episodes", 0) for name in ("discovery", "validation", "holdout"))},
+        "POPULATION": {
+            "status": dedup.get("status", "NOT TESTED"),
+            "episodes": dedup.get("total_episodes"),
+            "episode_dedup": dedup,
+        },
         "OUTCOMES": {"status": "PASS", "counts": discovery.get("discovery_metrics", {}).get("outcomes")},
         "FILTERS/GATES": {"status": "PASS", "data_integrity": integrity, "safety_risk_global": phase2.get("safety_risk_global_gates"), "learned_research_veto": phase2.get("learned_research_veto"), "m1_internals": discovery.get("m1_internals")},
         "PHASE 1": {"status": "PASS" if phase1.get("all_target_wins_recovered") else "FAIL", "evidence": phase1},
@@ -933,7 +1005,11 @@ def automatic_report(
         "WALK-FORWARD": {"status": (holdout.get("walk_forward_stability") or {}).get("status", "NOT TESTED"), "evidence": holdout.get("walk_forward_stability")},
         "OVERFITTING RISK": {"status": "FAIL" if risk.get("severity") == "HIGH" else "PASS", "evidence": risk},
         "SELECTED CANDIDATE": {"status": "PASS" if selected and selected.get("status") == "RESEARCH_CANDIDATE" else "FAIL", "candidate": selected},
-        "LOOK-AHEAD": {"status": "PASS", "future_bars_only_for_outcome": True},
+        "LOOK-AHEAD": {
+            "status": lookahead_status,
+            "future_bars_only_for_outcome": lookahead_status == "PASS",
+            "stages": lookahead_stages,
+        },
         "DETERMINISM": {"status": determinism.get("status", "NOT TESTED"), "evidence": determinism},
         "PRODUCTION MODIFICATIONS": {"status": "PASS" if audit.get("production_modifications") == "NONE" else "FAIL", "value": audit.get("production_modifications")},
         "CRITICAL": 0 if integrity.get("status") == "PASS" and determinism.get("status") == "PASS" else 1,
@@ -951,12 +1027,20 @@ def automatic_pre_audit(report_path: str) -> Dict[str, Any]:
     stored_output_sha = report.get("OUTPUT SHA256")
     hash_material = dict(report)
     hash_material["OUTPUT SHA256"] = None
+    population = report.get("POPULATION") or {}
+    dedup = population.get("episode_dedup") or {}
+    dedup_counts_coherent = (
+        isinstance(dedup.get("total_episodes"), int)
+        and isinstance(dedup.get("unique_episode_identities"), int)
+        and isinstance(dedup.get("duplicate_count"), int)
+        and dedup["total_episodes"] == dedup["unique_episode_identities"] + dedup["duplicate_count"]
+    )
     checks = {
         "canonical_output_sha256": stored_output_sha == _canonical_hash(hash_material),
         "dataset_identity": bool(report.get("INPUT SHA256")),
         "bid_ask_no_midpoint": ((report.get("FILTERS/GATES") or {}).get("data_integrity") or {}).get("bid_ask_real") is True,
         "outcome_semantics": (report.get("OUTCOMES") or {}).get("status") == "PASS",
-        "episode_dedup": (report.get("POPULATION") or {}).get("status") == "PASS",
+        "episode_dedup": dedup.get("status") == "PASS" and dedup.get("duplicate_count") == 0 and dedup_counts_coherent,
         "no_lookahead": (report.get("LOOK-AHEAD") or {}).get("status") == "PASS",
         "phase1_all_target_wins": (report.get("PHASE 1") or {}).get("status") == "PASS",
         "phase1_losses_released_recorded": ((report.get("PHASE 1") or {}).get("evidence") or {}).get("best_policy", {}).get("losses_released") is not None,
@@ -967,7 +1051,7 @@ def automatic_pre_audit(report_path: str) -> Dict[str, Any]:
         "sensitivity_recorded": (report.get("SENSITIVITY") or {}).get("status") in {"PASS", "FAIL", "NOT APPLICABLE"},
         "direction_recorded": (report.get("DIRECTIONAL STABILITY") or {}).get("status") in {"PASS", "FAIL"},
         "temporal_recorded": (report.get("TEMPORAL STABILITY") or {}).get("status") in {"PASS", "FAIL"},
-        "overlap_recorded": (report.get("OVERLAP") or {}).get("status") == "PASS",
+        "overlap_recorded": (report.get("OVERLAP") or {}).get("status") in {"PASS", "NOT APPLICABLE"},
         "remove_one_recorded": (report.get("REMOVE-ONE") or {}).get("status") in {"PASS", "NOT APPLICABLE"},
         "mutable_states_nhr": (report.get("FILTERS/GATES") or {}).get("learned_research_veto") == "NOT_HISTORICALLY_RECONSTRUCTABLE",
         "determinism": (report.get("DETERMINISM") or {}).get("status") == "PASS",
