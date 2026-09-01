@@ -19,9 +19,22 @@ def main():
     ap.add_argument("--exit-slippage-pips",type=float,default=0.10)
     ap.add_argument("--latency-bars",type=int,default=0)
     ap.add_argument("--embargo-minutes",type=int,default=30)
+    ap.add_argument("--integrity-artifact",default="",help="Passed data-integrity evidence for this exact cache")
     ap.add_argument("--session-scales",default="1.0")
     ap.add_argument("--allow-research-sweep",action="store_true",help="Allow multiple session scales; output is research-only and not certification evidence")
     args=ap.parse_args();start,end=dt(args.start),dt(args.end)
+    integrity=None
+    if args.integrity_artifact:
+        with open(args.integrity_artifact,encoding="utf-8") as f:integrity=json.load(f)
+        if integrity.get("status")!="PASS":raise SystemExit("Data integrity gate did not pass")
+        import hashlib
+        digest=hashlib.sha256()
+        with open(args.cache,"rb") as f:
+            for chunk in iter(lambda:f.read(1024*1024),b""):digest.update(chunk)
+        if digest.hexdigest()!=integrity.get("input_sha256"):raise SystemExit("Cache SHA does not match integrity artifact")
+        if str(integrity.get("instrument") or "").upper()!=args.instrument.upper():raise SystemExit("Integrity artifact instrument mismatch")
+    if os.getenv("BOTS_RESEARCH_OFFLINE","").lower()=="true" and (not args.cache or not os.path.exists(args.cache)):
+        raise SystemExit("Offline research requires an existing cache; network download is blocked")
     if args.cache and os.path.exists(args.cache):bundle=load_bundle(args.cache)
     else:
         bundle=asyncio.run(fetch_bundle(args.instrument,start,end,warmup_days=10,horizon_minutes=args.horizon+60))
@@ -51,6 +64,7 @@ def main():
         )
     )
     report["certification_eligible"]=(len(scales)==1 and scales[0]==1.0)
+    report["input_identity"]=(integrity or {"status":"NOT TESTED"})
     with open(args.output,"w",encoding="utf-8") as f:json.dump(report,f,indent=2,default=str)
     print(f"Replay guardado: {args.output}")
     for name,v in report["variants"].items():

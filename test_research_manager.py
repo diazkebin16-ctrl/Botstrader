@@ -39,3 +39,28 @@ def test_rejects_unknown_phase_and_unregistered_asset(tmp_path):
         manager.update_phase("AUD_USD", "production", "COMPLETED")
     with pytest.raises(KeyError):
         manager.update_phase("AUD_USD", "replay", "COMPLETED")
+
+
+def test_v2_freeze_is_immutable_and_identity_change_resets_phases(tmp_path):
+    manager=ResearchManager(tmp_path/"state.json")
+    kwargs=dict(start="s",end="e",warmup_days=10,horizon_minutes=240)
+    manager.register_asset("AUD_USD",code_sha="a",data_sha256="d1",**kwargs)
+    manager.update_phase("AUD_USD","data_integrity","COMPLETED")
+    manager.freeze_candidate("AUD_USD",{"candidate_id":"c1","candidate_definition_sha256":"sha1"})
+    with pytest.raises(ValueError,match="retuned"):
+        manager.freeze_candidate("AUD_USD",{"candidate_id":"c1","candidate_definition_sha256":"sha2"})
+    changed=manager.register_asset("AUD_USD",code_sha="a",data_sha256="d2",**kwargs)
+    assert changed["phases"]["data_integrity"]["status"]=="PENDING"
+    assert changed["lifecycle"]["status"]=="INPUT_CHANGED"
+
+
+def test_forward_candidate_requires_manual_ia1_and_independent_ia2(tmp_path):
+    manager=ResearchManager(tmp_path/"state.json")
+    manager.register_asset("AUD_USD",code_sha="a",data_sha256="d",start="s",end="e",warmup_days=10,horizon_minutes=240)
+    manager.freeze_candidate("AUD_USD",{"candidate_id":"c1","candidate_definition_sha256":"sha1"})
+    manager.add_audit("AUD_USD",{"verdict":"ACCEPT"})
+    with pytest.raises(ValueError,match="IA #1"):
+        manager.approve_forward_candidate("AUD_USD","c1",ia1_approved=False,ia2_verdict="ACCEPT")
+    result=manager.approve_forward_candidate("AUD_USD","c1",ia1_approved=True,ia2_verdict="ACCEPT WITH LIMITATIONS")
+    assert result["status"]=="FORWARD_CANDIDATE"
+    assert result["production_authority"] is False

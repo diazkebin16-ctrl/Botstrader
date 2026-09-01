@@ -63,10 +63,25 @@ def chronological_holdout(rows: Sequence[Mapping[str, Any]], *, horizon_bars: in
     test = _embargo_after(test_raw, test_boundary, config.embargo_minutes)
     purged = (len(discovery_raw) - len(discovery)) + (len(validation_raw) - len(validation_purged))
     embargoed = (len(validation_purged) - len(validation)) + (len(test_raw) - len(test))
+    def identity(row: Mapping[str, Any], partition: str, reason: str) -> Dict[str, Any]:
+        return {
+            "partition": partition, "reason": reason, "candle_ts": row.get("candle_ts"),
+            "instrument": row.get("instrument"),
+            "direction": row.get("research_direction") or row.get("signal") or row.get("chosen_signal"),
+        }
+    discovery_ids = {str(row.get("candle_ts")) for row in discovery}
+    validation_purged_ids = {str(row.get("candle_ts")) for row in validation_purged}
+    validation_ids = {str(row.get("candle_ts")) for row in validation}
+    test_ids = {str(row.get("candle_ts")) for row in test}
+    purged_rows = [identity(row, "discovery", "OVERLAPS_VALIDATION_BOUNDARY") for row in discovery_raw if str(row.get("candle_ts")) not in discovery_ids]
+    purged_rows.extend(identity(row, "validation", "OVERLAPS_HOLDOUT_BOUNDARY") for row in validation_raw if str(row.get("candle_ts")) not in validation_purged_ids)
+    embargoed_rows = [identity(row, "validation", "POST_DISCOVERY_EMBARGO") for row in validation_purged if str(row.get("candle_ts")) not in validation_ids]
+    embargoed_rows.extend(identity(row, "holdout", "POST_VALIDATION_EMBARGO") for row in test_raw if str(row.get("candle_ts")) not in test_ids)
     return {
         "status": "OK" if discovery and validation and test else "INSUFFICIENT_DATA",
         "discovery": discovery, "validation": validation, "test": test,
         "purged": purged, "embargoed": embargoed,
+        "purged_rows": purged_rows, "embargoed_rows": embargoed_rows,
         "boundaries": {"validation": val_boundary.isoformat(), "test": test_boundary.isoformat()},
     }
 
