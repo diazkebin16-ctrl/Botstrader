@@ -981,7 +981,19 @@ def automatic_report(
     audit = _load(audit_path)
     selected = (holdout.get("candidate_ranking") or [None])[0]
     risk = holdout.get("overfitting_risk") or {}
-    audit_failures = len((audit.get("package") or {}).get("failures") or [])
+    package = audit.get("package") or {}
+    audit_failures = len(package.get("failures") or [])
+    audit_package_evidence = {
+        "audit_status": audit.get("status"),
+        "package_status": package.get("status"),
+        "failures": list(package.get("failures") or []),
+        "secret_hits": list(package.get("secret_hits") or []),
+        "contaminated_untracked": list(package.get("contaminated_untracked") or []),
+        "permission_changes": list(package.get("permission_changes") or []),
+        "prohibited": list(package.get("prohibited") or []),
+        "manifest_generation_allowed": package.get("manifest_generation_allowed") is True,
+        "production_modifications": audit.get("production_modifications"),
+    }
     dedup = phase2.get("episode_dedup")
     if not isinstance(dedup, Mapping):
         dedup = {
@@ -1034,7 +1046,7 @@ def automatic_report(
             "episode_dedup": dedup,
         },
         "OUTCOMES": {"status": "PASS", "counts": discovery.get("discovery_metrics", {}).get("outcomes")},
-        "FILTERS/GATES": {"status": "PASS", "data_integrity": integrity, "safety_risk_global": phase2.get("safety_risk_global_gates"), "learned_research_veto": phase2.get("learned_research_veto"), "m1_internals": discovery.get("m1_internals")},
+        "FILTERS/GATES": {"status": "PASS", "data_integrity": integrity, "audit_package": audit_package_evidence, "safety_risk_global": phase2.get("safety_risk_global_gates"), "learned_research_veto": phase2.get("learned_research_veto"), "m1_internals": discovery.get("m1_internals")},
         "PHASE 1": {"status": "PASS" if phase1.get("all_target_wins_recovered") else "FAIL", "evidence": phase1},
         "PHASE 2": {"status": "PASS", "candidate_space": discovery.get("candidate_space")},
         "DISCOVERY": {"status": "PASS" if discovery.get("status") == "OK" else "FAIL", "partitions": phase2.get("partitions")},
@@ -1078,10 +1090,46 @@ def automatic_pre_audit(report_path: str) -> Dict[str, Any]:
         and isinstance(dedup.get("duplicate_count"), int)
         and dedup["total_episodes"] == dedup["unique_episode_identities"] + dedup["duplicate_count"]
     )
+    filters_gates = report.get("FILTERS/GATES") or {}
+    data_integrity = filters_gates.get("data_integrity") or {}
+    audit_package = filters_gates.get("audit_package") or {}
+
+    dataset_identity_ok = (
+        data_integrity.get("status") == "PASS"
+        and bool(data_integrity.get("instrument"))
+        and bool(data_integrity.get("start"))
+        and bool(data_integrity.get("end"))
+        and isinstance(data_integrity.get("warmup_days"), int)
+        and data_integrity.get("warmup_days") > 0
+        and isinstance(data_integrity.get("horizon_minutes"), int)
+        and data_integrity.get("horizon_minutes") > 0
+        and bool(data_integrity.get("input_sha256"))
+        and bool(data_integrity.get("dataset_identity"))
+        and bool(data_integrity.get("code_sha"))
+        and str(report.get("INSTRUMENT") or "").upper() == str(data_integrity.get("instrument") or "").upper()
+        and report.get("INPUT SHA256") == data_integrity.get("input_sha256")
+        and str(report.get("START")) == str(data_integrity.get("start"))
+        and str(report.get("END")) == str(data_integrity.get("end"))
+        and report.get("WARMUP") == data_integrity.get("warmup_days")
+        and report.get("HORIZON") == data_integrity.get("horizon_minutes")
+    )
+
+    packaging_cleanliness_ok = (
+        audit_package.get("audit_status") == "PASS"
+        and audit_package.get("package_status") == "PASS"
+        and audit_package.get("failures") == []
+        and audit_package.get("secret_hits") == []
+        and audit_package.get("contaminated_untracked") == []
+        and audit_package.get("permission_changes") == []
+        and audit_package.get("prohibited") == []
+        and audit_package.get("manifest_generation_allowed") is True
+        and audit_package.get("production_modifications") == "NONE"
+    )
+
     checks = {
         "canonical_output_sha256": stored_output_sha == _canonical_hash(hash_material),
-        "dataset_identity": bool(report.get("INPUT SHA256")),
-        "bid_ask_no_midpoint": ((report.get("FILTERS/GATES") or {}).get("data_integrity") or {}).get("bid_ask_real") is True,
+        "dataset_identity": dataset_identity_ok,
+        "bid_ask_no_midpoint": data_integrity.get("bid_ask_real") is True,
         "outcome_semantics": (report.get("OUTCOMES") or {}).get("status") == "PASS",
         "episode_dedup": dedup.get("status") == "PASS" and dedup.get("duplicate_count") == 0 and dedup_counts_coherent,
         "no_lookahead": (report.get("LOOK-AHEAD") or {}).get("status") == "PASS",
@@ -1099,7 +1147,7 @@ def automatic_pre_audit(report_path: str) -> Dict[str, Any]:
         "mutable_states_nhr": (report.get("FILTERS/GATES") or {}).get("learned_research_veto") == "NOT_HISTORICALLY_RECONSTRUCTABLE",
         "determinism": (report.get("DETERMINISM") or {}).get("status") == "PASS",
         "no_production_modification": (report.get("PRODUCTION MODIFICATIONS") or {}).get("status") == "PASS",
-        "packaging_cleanliness": report.get("CRITICAL", 1) == 0,
+        "packaging_cleanliness": packaging_cleanliness_ok,
     }
     failed = [name for name, passed in checks.items() if not passed]
     severities = {

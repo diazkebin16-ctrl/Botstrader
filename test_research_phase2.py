@@ -46,7 +46,7 @@ def _write(path,payload):
 
 def _valid_report_inputs(tmp_path, **updates):
     payloads = {
-        "integrity": {"status":"PASS","instrument":"AUD_USD","input_sha256":"data","start":"s","end":"e","warmup_days":10,"horizon_minutes":240,"bid_ask_real":True},
+        "integrity": {"status":"PASS","instrument":"AUD_USD","input_sha256":"data","dataset_identity":"dataset-id","code_sha":"code-sha","start":"s","end":"e","warmup_days":10,"horizon_minutes":240,"bid_ask_real":True},
         "phase1": {"all_target_wins_recovered":True,"lookahead_protection":True,"best_policy":{"losses_released":1}},
         "phase2": {
             "instrument":"AUD_USD","lookahead_protection":True,"future_bars_used_only_for_outcome":True,
@@ -72,7 +72,14 @@ def _valid_report_inputs(tmp_path, **updates):
             "candidate_ranking":[{"candidate_id":"c1","status":"RESEARCH_CANDIDATE"}],
         },
         "determinism": {"status":"PASS"},
-        "audit": {"status":"PASS","production_modifications":"NONE","package":{"failures":[]}},
+        "audit": {
+            "status":"PASS","production_modifications":"NONE",
+            "package":{
+                "status":"PASS","failures":[],"secret_hits":[],
+                "contaminated_untracked":[],"permission_changes":[],"prohibited":[],
+                "manifest_generation_allowed":True,
+            },
+        },
     }
     for name, change in updates.items():
         payloads[name].update(change)
@@ -283,3 +290,79 @@ def test_pre_audit_duplicate_dedup_evidence_rejects(tmp_path):
     pre_audit = automatic_pre_audit(str(report_path))
     assert pre_audit["checks"]["episode_dedup"] is False
     assert pre_audit["verdict"] == "REJECT"
+
+
+def _pre_audit_from_report(tmp_path, report):
+    report_path = tmp_path / "preaudit_report.json"
+    _write(report_path, report)
+    return automatic_pre_audit(str(report_path))
+
+
+def test_pre_audit_rejects_missing_dataset_identity(tmp_path):
+    report = _valid_report_inputs(tmp_path)
+    report["FILTERS/GATES"]["data_integrity"].pop("dataset_identity", None)
+    material = dict(report); material["OUTPUT SHA256"] = None
+    from research_phase2 import _canonical_hash
+    report["OUTPUT SHA256"] = _canonical_hash(material)
+    pre = _pre_audit_from_report(tmp_path, report)
+    assert pre["checks"]["dataset_identity"] is False
+    assert pre["verdict"] == "REJECT"
+
+
+def test_pre_audit_rejects_missing_code_sha(tmp_path):
+    report = _valid_report_inputs(tmp_path)
+    report["FILTERS/GATES"]["data_integrity"].pop("code_sha", None)
+    material = dict(report); material["OUTPUT SHA256"] = None
+    from research_phase2 import _canonical_hash
+    report["OUTPUT SHA256"] = _canonical_hash(material)
+    pre = _pre_audit_from_report(tmp_path, report)
+    assert pre["checks"]["dataset_identity"] is False
+    assert pre["verdict"] == "REJECT"
+
+
+def test_pre_audit_rejects_identity_mismatch(tmp_path):
+    report = _valid_report_inputs(tmp_path)
+    report["FILTERS/GATES"]["data_integrity"]["instrument"] = "EUR_USD"
+    material = dict(report); material["OUTPUT SHA256"] = None
+    from research_phase2 import _canonical_hash
+    report["OUTPUT SHA256"] = _canonical_hash(material)
+    pre = _pre_audit_from_report(tmp_path, report)
+    assert pre["checks"]["dataset_identity"] is False
+    assert pre["verdict"] == "REJECT"
+
+
+@pytest.mark.parametrize("field,value", [
+    ("failures", ["WORKTREE_CONTAMINATED_BY_TRANSIENTS"]),
+    ("secret_hits", [{"path":"x.py","pattern":"token"}]),
+    ("permission_changes", ["mode change 100644 => 100755 x.py"]),
+    ("contaminated_untracked", ["result.zip"]),
+])
+def test_pre_audit_rejects_dirty_package_even_with_zero_critical(tmp_path, field, value):
+    report = _valid_report_inputs(tmp_path)
+    report["CRITICAL"] = 0
+    report["FILTERS/GATES"]["audit_package"][field] = value
+    material = dict(report); material["OUTPUT SHA256"] = None
+    from research_phase2 import _canonical_hash
+    report["OUTPUT SHA256"] = _canonical_hash(material)
+    pre = _pre_audit_from_report(tmp_path, report)
+    assert pre["checks"]["packaging_cleanliness"] is False
+    assert pre["verdict"] == "REJECT"
+
+
+def test_pre_audit_rejects_manifest_blocked(tmp_path):
+    report = _valid_report_inputs(tmp_path)
+    report["CRITICAL"] = 0
+    report["FILTERS/GATES"]["audit_package"]["manifest_generation_allowed"] = False
+    material = dict(report); material["OUTPUT SHA256"] = None
+    from research_phase2 import _canonical_hash
+    report["OUTPUT SHA256"] = _canonical_hash(material)
+    pre = _pre_audit_from_report(tmp_path, report)
+    assert pre["checks"]["packaging_cleanliness"] is False
+    assert pre["verdict"] == "REJECT"
+
+
+def test_pre_audit_accepts_complete_identity_and_clean_package(tmp_path):
+    report = _valid_report_inputs(tmp_path)
+    pre = _pre_audit_from_report(tmp_path, report)
+    assert pre["checks"]["dataset_identity"] is True
+    assert pre["checks"]["packaging_cleanliness"] is True
