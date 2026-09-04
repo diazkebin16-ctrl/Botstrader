@@ -185,6 +185,101 @@ def _replay_gate(server: Any, row: Mapping[str,Any]) -> Tuple[bool,str]:
     return True,"REPLAY_ACTIONABLE"
 
 
+
+def _research_blocks(server: Any, row: Mapping[str, Any]) -> List[str]:
+    """Return all decision-time blockers for offline Phase 1 research.
+
+    Strategy gates are explicitly researchable. Hard execution/data safety checks
+    remain immutable. This is evidence only and does not alter live execution.
+    """
+    blocks: List[str] = []
+    if str(row.get("signal") or "").upper() == "WAIT":
+        blocks.append("DIRECTION_SELECTION")
+    for name, passed in (row.get("safety_checks") or {}).items():
+        if passed is not False or str(name) == "valid_direction":
+            continue
+        name = str(name)
+        if name == "minimum_rr":
+            blocks.append("MINIMUM_RR")
+        elif name in {"barrier_room_ok", "low_room_low_rr", "low_room_extended"}:
+            blocks.append("LOW_ROOM")
+        else:
+            blocks.append(f"SAFETY:{name}")
+    filters = row.get("filters") or {}
+    if getattr(server, "M1_CONFIRMATION_REQUIRED", True) and not bool(filters.get("m1_confirmation")):
+        blocks.append("M1_CONFIRMATION")
+    ext = float((row.get("features") or {}).get("extension_atr", 0) or 0)
+    if getattr(server, "ENTRY_TIMING_ENABLED", True) and ext > float(getattr(server, "MAX_ENTRY_EXTENSION_ATR", 1.5)):
+        blocks.append("QUALITY_EXTENSION")
+    return sorted(set(blocks))
+
+
+def build_research_target_episodes(
+    rows: Sequence[Mapping[str, Any]], *, gap_minutes: int,
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """Build a broad pre-Phase1 population without swallowing baseline episodes.
+
+    The old population collapsed every minute of the same selected direction into
+    one long episode, even when the strategy gate state changed. That could make
+    the supposedly-broad population smaller than the baseline actionable subset.
+    We now include the blocker signature in episode identity. Baseline-pass rows
+    therefore collapse exactly as the baseline actionable population, while each
+    blocked strategic state remains independently researchable.
+    """
+    target_rows: List[Dict[str, Any]] = []
+    for row in rows:
+        direction = str(row.get("signal") or "").upper()
+        if direction not in ("BUY", "SELL"):
+            direction = str(row.get("chosen_signal") or "").upper()
+        if direction not in ("BUY", "SELL"):
+            continue
+        item = dict(row)
+        item["research_direction"] = direction
+        blocks = [str(value) for value in (item.get("research_blocks") or [])]
+        item["research_episode_class"] = str(
+            item.get("research_episode_class")
+            or ("|".join(sorted(set(blocks))) if blocks else "BASELINE_PASS")
+        )
+        target_rows.append(item)
+
+    target_episodes = collapse_market_episodes(
+        target_rows,
+        gap_minutes=gap_minutes,
+        timestamp_key="candle_ts",
+        instrument_key="instrument",
+        direction_key="research_direction",
+        variant_key="research_episode_class",
+    )
+    baseline_rows = [
+        dict(row) for row in rows
+        if row.get("actionable") and str(row.get("signal") or "").upper() in ("BUY", "SELL")
+    ]
+    baseline_episodes = collapse_market_episodes(
+        baseline_rows,
+        gap_minutes=gap_minutes,
+        timestamp_key="candle_ts",
+        instrument_key="instrument",
+        direction_key="signal",
+    )
+    baseline_keys = {
+        (str(row.get("instrument") or ""), str(row.get("signal") or ""), str(row.get("candle_ts") or ""))
+        for row in baseline_episodes
+    }
+    target_keys = {
+        (str(row.get("instrument") or ""), str(row.get("research_direction") or ""), str(row.get("candle_ts") or ""))
+        for row in target_episodes
+    }
+    missing = sorted(baseline_keys - target_keys)
+    if missing:
+        raise ValueError("Research population lost baseline actionable episodes")
+    return target_episodes, {
+        "status": "PASS",
+        "identity": "INSTRUMENT_DIRECTION_STRATEGIC_BLOCKER_STATE",
+        "baseline_actionable_episodes": len(baseline_episodes),
+        "research_episodes": len(target_episodes),
+        "baseline_subset_missing": 0,
+    }
+
 def replay_snapshot(server: Any, h1,m15,m5,m1,inst: str,variant: ReplayVariant, *, hypotheses=None) -> Dict[str,Any]:
     if hypotheses is None:
         buy=server._direction_hypothesis(h1,m15,m5,m1,inst,"BUY")
@@ -218,6 +313,8 @@ def replay_snapshot(server: Any, h1,m15,m5,m1,inst: str,variant: ReplayVariant, 
          "filters":filters,"safety_checks":safety,"features":features,"barrier_class":chosen.get("barrier_class"),
          "candle_ts":m1[-1]["t"].isoformat(),"countertrend":sel["countertrend"],"transition":sel["transition"]}
     actionable,reason=_replay_gate(server,row);row["actionable"]=actionable;row["decision_reason"]=reason
+    row["research_blocks"]=_research_blocks(server,row)
+    row["research_episode_class"]="|".join(row["research_blocks"]) if row["research_blocks"] else "BASELINE_PASS"
     return row
 
 
@@ -289,25 +386,12 @@ def replay_history(server: Any, candles_by_tf: Mapping[str,Sequence[Mapping[str,
         resolved=[]
         m1_shadow_resolved=[]
         target_population_resolved=[]
+        target_population_evidence={"status":"NOT TESTED"}
         if config.save_target_population:
-            # The selected direction and all features are computed at decision time.
-            # Future M1 is used only below to label the outcome. This population is
-            # research evidence, never an executable population.
-            target_rows=[]
-            for r in raw[v.name]:
-                direction=str(r.get("signal") or "").upper()
-                if direction not in ("BUY","SELL"):
-                    direction=str(r.get("chosen_signal") or "").upper()
-                if direction not in ("BUY","SELL"):
-                    continue
-                z=dict(r);z["research_direction"]=direction
-                target_rows.append(z)
-            target_episodes=collapse_market_episodes(
-                target_rows,
-                gap_minutes=config.episode_gap_minutes,
-                timestamp_key="candle_ts",
-                instrument_key="instrument",
-                direction_key="research_direction",
+            # Decision-time blocker state participates in episode identity so the
+            # broad research population cannot swallow baseline actionable episodes.
+            target_episodes,target_population_evidence=build_research_target_episodes(
+                raw[v.name],gap_minutes=config.episode_gap_minutes
             )
             target_population_resolved=[
                 _resolve_episode(store,r,inst,config,direction_key="research_direction")
@@ -342,6 +426,16 @@ def replay_history(server: Any, candles_by_tf: Mapping[str,Sequence[Mapping[str,
                          "target_population":{
                              "enabled":bool(config.save_target_population),
                              "scope":"RESEARCH_ONLY_SELECTED_DIRECTION_BEFORE_STRATEGIC_GATES",
+                             "episode_semantics":"STRATEGIC_STATE_AWARE_PRE_PHASE1_RESEARCH_EPISODES",
+                             "baseline_subset_evidence":target_population_evidence,
+                             "funnel":{
+                                 "raw_decision_snapshots":len(raw[v.name]),
+                                 "baseline_actionable_snapshots":len(actionable),
+                                 "baseline_actionable_episodes":len(episodes),
+                                 "baseline_outcomes":_metrics(resolved),
+                                 "research_episodes":len(target_population_resolved),
+                                 "research_outcomes":_metrics(target_population_resolved),
+                             },
                              "metrics":_metrics(target_population_resolved),
                              "episodes":target_population_resolved,
                          },

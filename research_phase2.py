@@ -260,6 +260,12 @@ def prepare_phase2(
         name: sum(_feature(row, name) is not None for row in split["discovery"])
         for name in NUMERIC_FEATURES
     }
+    from research_pipeline import _eligible
+    phase1_opened=set((phase1.get("best_policy") or {}).get("opened_gates") or [])
+    phase1_input_population={
+        name: metrics([dict(row) for row in split[key] if _eligible(row,phase1_opened)])
+        for name,key in (("discovery","discovery"),("validation","validation"),("holdout","test"))
+    }
     return {
         "status": "OK" if dedup["status"] == "PASS" else "FAIL",
         "stage": "phase_2",
@@ -287,6 +293,7 @@ def prepare_phase2(
         "episode_dedup": dedup,
         "selection_protocol": "DISCOVERY_DEFINE__VALIDATION_SELECT__FREEZE__HOLDOUT_ONCE",
         "phase1_policy": _phase1_policy({**phase1, "artifact_sha256": sha256_file(phase1_path)}),
+        "phase1_input_population":phase1_input_population,
         "partition_config": {
             "horizon_minutes": int(horizon_minutes),
             "discovery_fraction": float(discovery_fraction),

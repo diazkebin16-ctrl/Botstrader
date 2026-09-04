@@ -13,6 +13,10 @@ from research_manager import sha256_file
 
 NON_BINARY_OUTCOMES = {"TIMEOUT", "AMBIGUOUS", "PENDING", "NOT_HISTORICALLY_RECONSTRUCTABLE"}
 LOW_ROOM_CHECKS = {"barrier_room_ok", "low_room_low_rr", "low_room_extended"}
+RESEARCHABLE_STRATEGY_GATES = (
+    "DIRECTION_SELECTION", "MINIMUM_RR", "M1_CONFIRMATION",
+    "QUALITY_EXTENSION", "LOW_ROOM",
+)
 
 
 def _validate_outcomes(rows: Iterable[Mapping[str, Any]]) -> None:
@@ -62,12 +66,29 @@ def extract_target_population(replay_path: str, variant: str) -> Dict[str, Any]:
 
 
 def _strategic_blocks(row: Mapping[str, Any]) -> Tuple[set[str], set[str]]:
-    """Return (relaxable strategic blocks, immutable/non-reconstructable blocks)."""
+    """Return (researchable strategy blocks, immutable safety blocks).
+
+    Explicit replay evidence is preferred. Legacy artifacts remain readable but
+    WAIT_DIRECTION and minimum_rr are classified according to their actual role:
+    decision-policy/quality filters, not execution/data-integrity safety.
+    """
     relaxable: set[str] = set()
     immutable: set[str] = set()
+    explicit = row.get("research_blocks")
+    if isinstance(explicit, list):
+        for value in explicit:
+            name = str(value)
+            if name in RESEARCHABLE_STRATEGY_GATES:
+                relaxable.add(name)
+            elif name.startswith("SAFETY:"):
+                immutable.add(name)
+            else:
+                immutable.add(f"UNKNOWN:{name}")
+        return relaxable, immutable
+
     reason = str(row.get("decision_reason") or "")
     if reason == "WAIT_DIRECTION":
-        immutable.add("WAIT_DIRECTION")
+        relaxable.add("DIRECTION_SELECTION")
     elif reason == "QUALITY:M1_CONFIRMATION":
         relaxable.add("M1_CONFIRMATION")
     elif reason == "QUALITY:EXTENSION":
@@ -78,7 +99,9 @@ def _strategic_blocks(row: Mapping[str, Any]) -> Tuple[set[str], set[str]]:
         if passed is False and str(name) != "valid_direction"
     }
     for name in failed_safety:
-        if name in LOW_ROOM_CHECKS:
+        if name == "minimum_rr":
+            relaxable.add("MINIMUM_RR")
+        elif name in LOW_ROOM_CHECKS:
             relaxable.add("LOW_ROOM")
         else:
             immutable.add(f"SAFETY:{name}")
@@ -99,8 +122,9 @@ def analyze_phase1(
         source = json.load(handle)
     if source.get("lookahead_protection") is not True:
         raise ValueError("Target population lacks look-ahead protection")
-    rows = list(source.get("episodes") or [])
-    _validate_outcomes(rows)
+    all_rows = list(source.get("episodes") or [])
+    _validate_outcomes(all_rows)
+    rows = list(all_rows)
     partition = None
     selection_scope = "FULL_POPULATION_LEGACY"
     if discovery_only:
@@ -132,7 +156,7 @@ def analyze_phase1(
         }
     target_wins = [row for row in rows if str(row.get("outcome_status") or "").upper() == "WIN"]
     candidates=[]
-    gates=("M1_CONFIRMATION", "QUALITY_EXTENSION", "LOW_ROOM")
+    gates=RESEARCHABLE_STRATEGY_GATES
     for n in range(len(gates)+1):
         for combo in itertools.combinations(gates,n):
             opened=set(combo)
@@ -143,8 +167,9 @@ def analyze_phase1(
                 "opened_gates":list(combo), "wins_recovered":wins,
                 "losses_released":losses, "eligible_episodes":len(kept),
             })
-    candidates.sort(key=lambda x:(-x["wins_recovered"],x["losses_released"],len(x["opened_gates"]),x["opened_gates"]))
+    candidates.sort(key=lambda x:(-x["wins_recovered"],len(x["opened_gates"]),x["losses_released"],x["opened_gates"]))
     best=candidates[0] if candidates else {"opened_gates":[],"wins_recovered":0,"losses_released":0,"eligible_episodes":0}
+    baseline=next((item for item in candidates if item["opened_gates"]==[]),{"opened_gates":[],"wins_recovered":0,"losses_released":0,"eligible_episodes":0})
     unrecovered=[]
     opened=set(best["opened_gates"])
     for row in target_wins:
@@ -156,10 +181,14 @@ def analyze_phase1(
                 "relaxable_blocks":sorted(relaxable-opened),
                 "immutable_blocks":sorted(immutable),
             })
-    blocker_counts=Counter()
+    blocker_counts=Counter();researchable_counts=Counter();immutable_counts=Counter()
     for row in target_wins:
         relaxable,immutable=_strategic_blocks(row)
         blocker_counts.update(relaxable);blocker_counts.update(immutable)
+        researchable_counts.update(relaxable);immutable_counts.update(immutable)
+    source_counts=outcome_counts(all_rows);selection_counts=outcome_counts(rows)
+    baseline_wins=int(baseline.get("wins_recovered") or 0);best_wins=int(best.get("wins_recovered") or 0)
+    target_count=len(target_wins)
     complete=len(unrecovered)==0
     return {
         "status":"OK" if complete else "REVIEW_REQUIRED",
@@ -170,16 +199,39 @@ def analyze_phase1(
         "lookahead_protection":True,
         "selection_scope":selection_scope,
         "partition":partition,
-        "objective":"RECOVER_ALL_TARGET_WINS_THROUGH_STRATEGIC_CHAIN",
-        "target_wins":len(target_wins),
+        "objective":"MAXIMIZE_TARGET_WIN_RECALL_BEFORE_PHASE2_LOSS_FILTERING",
+        "total_research_episodes":len(all_rows),
+        "resolved_wins":int(source_counts.get("WIN",0)),
+        "resolved_losses":int(source_counts.get("LOSS",0)),
+        "timeouts":int(source_counts.get("TIMEOUT",0)),
+        "ambiguous":int(source_counts.get("AMBIGUOUS",0)),
+        "phase1_selection_episodes":len(rows),
+        "phase1_selection_outcomes":selection_counts,
+        "baseline_pass_wins":baseline_wins,
+        "baseline_blocked_wins":max(0,target_count-baseline_wins),
+        "phase1_target_wins":target_count,
+        "phase1_recovered_wins":best_wins,
+        "phase1_unrecoverable_wins":len(unrecovered),
+        "win_recall_before":baseline_wins/target_count if target_count else None,
+        "win_recall_after":best_wins/target_count if target_count else None,
+        "losses_admitted_before":int(baseline.get("losses_released") or 0),
+        "losses_admitted_after":int(best.get("losses_released") or 0),
+        "opened_gates":list(best.get("opened_gates") or []),
+        "immutable_blockers":dict(sorted(immutable_counts.items())),
+        "researchable_blockers":dict(sorted(researchable_counts.items())),
+        "target_wins":target_count,
         "best_policy":best,
         "all_target_wins_recovered":complete,
         "target_win_blockers":dict(sorted(blocker_counts.items())),
         "unrecovered_target_wins":unrecovered,
         "candidates":candidates,
+        "researchable_strategy_gates":list(RESEARCHABLE_STRATEGY_GATES),
+        "production_authority":False,
         "notes":[
             "Outcome is used only to evaluate Phase 1 recovery, never as a decision-time feature.",
-            "Non-LOW_ROOM safety checks and WAIT_DIRECTION are never relaxed automatically.",
+            "DIRECTION_SELECTION and MINIMUM_RR are offline researchable strategy gates; live execution is unchanged.",
+            "All remaining failed safety checks are immutable unless explicitly classified as researchable.",
+            "Phase 1 maximizes WIN recall before considering gate count and admitted LOSS; Phase 2 filters LOSS.",
             "TIMEOUT and AMBIGUOUS remain separate from LOSS.",
         ],
     }

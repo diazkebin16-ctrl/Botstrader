@@ -460,7 +460,7 @@ class ResearchManager:
         if not isinstance(best, Mapping) or not isinstance(candidates, list) or not candidates:
             raise ValueError("Best-viable policy ranking evidence is incomplete")
 
-        allowed_gates = {"M1_CONFIRMATION", "QUALITY_EXTENSION", "LOW_ROOM"}
+        allowed_gates = {"DIRECTION_SELECTION", "MINIMUM_RR", "M1_CONFIRMATION", "QUALITY_EXTENSION", "LOW_ROOM"}
         opened = best.get("opened_gates")
         if not isinstance(opened, list) or any(gate not in allowed_gates for gate in opened):
             raise ValueError("Best policy contains an unknown or immutable gate")
@@ -471,8 +471,8 @@ class ResearchManager:
                 raise ValueError("Malformed Phase 1 candidate")
             return (
                 -int(candidate.get("wins_recovered") or 0),
-                int(candidate.get("losses_released") or 0),
                 len(gates),
+                int(candidate.get("losses_released") or 0),
                 tuple(gates),
             )
 

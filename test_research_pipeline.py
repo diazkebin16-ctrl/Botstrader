@@ -41,13 +41,17 @@ def test_phase1_prefers_minimum_losses_after_recovering_all_wins(tmp_path):
     assert out["best_policy"]["losses_released"]==1
 
 
-def test_phase1_never_relaxes_non_low_room_safety(tmp_path):
+def test_phase1_researches_minimum_rr_but_preserves_hard_safety(tmp_path):
     source=tmp_path/"target.json"
     source.write_text(json.dumps({
         "instrument":"AUD_USD","variant":"V331_BASELINE","lookahead_protection":True,
-        "episodes":[_row("WIN","SAFETY:minimum_rr",{"minimum_rr":False})],
+        "episodes":[
+            _row("WIN","SAFETY:minimum_rr",{"minimum_rr":False}),
+            _row("WIN","SAFETY:finite_prices",{"finite_prices":False},"2026-01-02T00:00:00Z"),
+        ],
     }),encoding="utf-8")
     out=analyze_phase1(str(source))
+    assert "MINIMUM_RR" in out["best_policy"]["opened_gates"]
+    assert out["phase1_recovered_wins"]==1
     assert out["status"]=="REVIEW_REQUIRED"
-    assert out["all_target_wins_recovered"] is False
-    assert out["unrecovered_target_wins"][0]["immutable_blocks"]==["SAFETY:minimum_rr"]
+    assert out["unrecovered_target_wins"][0]["immutable_blocks"]==["SAFETY:finite_prices"]

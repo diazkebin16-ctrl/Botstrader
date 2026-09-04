@@ -69,12 +69,12 @@ def validate_autonomous_phase1(p:Mapping[str,Any],*,instrument,target_population
  if p.get("selection_scope")!="DISCOVERY_ONLY" or p.get("lookahead_protection") is not True or p.get("input_sha256")!=target_population_sha256:raise ValueError("Phase 1 methodology/binding mismatch")
  u=p.get("unrecovered_target_wins")
  if not isinstance(u,list) or not u or any(not isinstance(x,Mapping) or not isinstance(x.get("immutable_blocks"),list) or not x.get("immutable_blocks") for x in u):raise ValueError("every unrecovered WIN needs immutable blocker")
- best=p.get("best_policy");cs=p.get("candidates");allowed={"M1_CONFIRMATION","QUALITY_EXTENSION","LOW_ROOM"}
+ best=p.get("best_policy");cs=p.get("candidates");allowed={"DIRECTION_SELECTION","MINIMUM_RR","M1_CONFIRMATION","QUALITY_EXTENSION","LOW_ROOM"}
  if not isinstance(best,Mapping) or not isinstance(cs,list) or not cs:raise ValueError("ranking evidence missing")
  def rank(x):
   g=x.get("opened_gates")
   if not isinstance(g,list) or any(y not in allowed for y in g):raise ValueError("unknown/immutable gate")
-  return(-int(x.get("wins_recovered") or 0),int(x.get("losses_released") or 0),len(g),tuple(g))
+  return(-int(x.get("wins_recovered") or 0),len(g),int(x.get("losses_released") or 0),tuple(g))
  if any(not isinstance(x,Mapping) for x in cs) or canonical_sha256(best)!=canonical_sha256(sorted(cs,key=rank)[0]):raise ValueError("best policy ranking mismatch")
  rank(best);return dict(best)
 
