@@ -1,0 +1,35 @@
+name: Apply Operational Time Outcome Patch
+
+on:
+  push:
+    branches:
+      - fix/automation-v3-phase1-population-architecture
+    paths:
+      - apply_operational_time_outcome_patch.py
+      - .operational-time-trigger
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: fix/automation-v3-phase1-population-architecture
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Apply deterministic patch
+        run: python apply_operational_time_outcome_patch.py
+      - name: Verify patch formatting
+        run: git diff --check
+      - name: Commit patch
+        run: |
+          git config user.name "diazkebin16-ctrl"
+          git config user.email "diazkebin16@gmail.com"
+          git add operational_time.py historical_execution.py historical_replay.py research_pipeline.py research_phase2.py automation_v3_candidate_mapping.py test_operational_time_outcome.py test_historical_execution.py
+          git commit -m "Align historical outcomes with operational time contract"
+          git push origin HEAD:fix/automation-v3-phase1-population-architecture
