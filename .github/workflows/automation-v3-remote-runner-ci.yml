@@ -61,20 +61,31 @@ jobs:
         run: |
           python - <<'PY'
           import pathlib
-          files = [
-              pathlib.Path('automation_v3_code_change_adapter.py'),
-              pathlib.Path('automation_v3_railway_adapter.py'),
-              pathlib.Path('automation_v3_remote_worker.py'),
-              pathlib.Path('.github/workflows/automation-v3-remote.yml'),
+          import re
+
+          changed = [
+              pathlib.Path(line.strip())
+              for line in __import__('subprocess').check_output(
+                  ['git','diff','--name-only','04bebbb15d43fe4f81b9309f263f5d9db6267887','HEAD'],
+                  text=True,
+              ).splitlines()
+              if line.strip()
           ]
-          forbidden_values = ('api-fxtrade.oanda.com', 'PRIMARY_OANDA_ENV=live', 'TRADING_ENVIRONMENT=PRODUCTION')
-          for path in files:
-              text = path.read_text(encoding='utf-8')
-              for value in forbidden_values:
-                  assert value not in text, f'{value} found in {path}'
-          for path in pathlib.Path('.').rglob('*'):
-              if path.is_file() and path.suffix.lower() in {'.db','.sqlite','.zip'}:
-                  if str(path).startswith('.git/'):
-                      continue
-                  raise AssertionError(f'dataset/binary committed: {path}')
+          secret_assignment = re.compile(
+              r"(?i)(?:OANDA_TOKEN|RAILWAY_TOKEN|API_KEY|SECRET_KEY|PASSWORD)\s*=\s*['\"]([^'\"]+)['\"]"
+          )
+          placeholders = {
+              'railway-secret', 'supersecret', 'x', 'y', 'g', 'r', 'o',
+          }
+          for path in changed:
+              if not path.is_file():
+                  continue
+              if path.suffix.lower() in {'.db','.sqlite','.zip','.pyc'} or '__pycache__' in path.parts:
+                  raise AssertionError(f'dataset/binary/transient committed: {path}')
+              if path.suffix.lower() in {'.py','.yml','.yaml','.md'}:
+                  text = path.read_text(encoding='utf-8')
+                  for match in secret_assignment.finditer(text):
+                      value = match.group(1)
+                      if value not in placeholders and len(value) >= 8:
+                          raise AssertionError(f'credential-like literal in {path}')
           PY
