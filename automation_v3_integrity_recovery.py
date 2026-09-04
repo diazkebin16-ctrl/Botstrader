@@ -6,7 +6,6 @@ threshold, BID/ASK rule, warmup, horizon, gap tolerance, or look-ahead rule.
 from __future__ import annotations
 
 import hashlib
-import json
 from pathlib import Path
 from typing import Any, Mapping
 
