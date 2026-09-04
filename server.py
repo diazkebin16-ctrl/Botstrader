@@ -32,6 +32,7 @@ from research_evidence import (resolve_outcome as research_resolve_outcome, coll
 from session_regime import session_regime as detect_session_regime
 from instrument_registry import InstrumentRegistry
 from instrument_profiles import instrument_profile
+from managed_strategy_rules import evaluate_managed_strategy_rules
 from slot_allocator import slot_policy
 from opportunity_ranker import rank_opportunities
 from broker_risk import OandaBrokerRiskAdapter
@@ -8185,15 +8186,17 @@ def evaluate_active_research_rules(r):
     if not instrument_profile(instrument).learned_research_veto_authority:
         return {"ok":True,"active":False,"rules":[],"vetoes":[],
                 "reason":"instrument_scoped_research_not_validated","instrument":instrument}
+    managed=evaluate_managed_strategy_rules(r or {})
     rules=get_active_research_rules()
-    if not rules:return {"ok":True,"active":False,"rules":[],"vetoes":[]}
-    results=[];vetoes=[]
+    if not rules and not managed.get("active"):
+        return {"ok":True,"active":False,"rules":[],"vetoes":[],"instrument":instrument}
+    results=list(managed.get("rules") or []);vetoes=list(managed.get("vetoes") or [])
     for rule in rules:
         passed=_rule_match_for_dict(rule["source"],rule["rule_key"],r)
         item={"source":rule["source"],"rule_key":rule["rule_key"],"status":rule["status"],"passed":passed}
         results.append(item)
         if passed is False:vetoes.append(item)
-    return {"ok":not vetoes,"active":True,"rules":results,"vetoes":vetoes}
+    return {"ok":not vetoes,"active":True,"rules":results,"vetoes":vetoes,"instrument":instrument}
 
 def evaluate_active_research_rule(r):
     out=evaluate_active_research_rules(r)

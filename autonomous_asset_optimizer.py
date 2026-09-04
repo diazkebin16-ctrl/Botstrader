@@ -6,10 +6,11 @@ from datetime import datetime,timedelta,timezone
 from pathlib import Path
 from typing import Any,Mapping
 from automation_v3_release import ReleaseController as GovernedReleaseController
+from automation_v3_candidate_mapping import CandidateNotDeployable,compile_and_write_release_plan
 
 LOOKBACK_SEQUENCE=(1,3,6,12);MAX_RESEARCH_LOOKBACK_MONTHS=12
 SUPPORTED_INSTRUMENTS=("AUD_USD","EUR_USD","GBP_USD","USD_JPY","USD_CAD")
-TERMINAL_STATES={"PAPER_DEPLOYED","NO_VALID_CANDIDATE","INSUFFICIENT_EVIDENCE","DATA_SOURCE_UNAVAILABLE","METHODOLOGY_BLOCKED","TEST_FAILURE","DEPLOYMENT_FAILURE","UNSUPPORTED_INSTRUMENT"}
+TERMINAL_STATES={"PAPER_DEPLOYED","PAPER_DEPLOYABLE_CANDIDATE","CANDIDATE_NOT_DEPLOYABLE","NO_VALID_CANDIDATE","INSUFFICIENT_EVIDENCE","DATA_SOURCE_UNAVAILABLE","METHODOLOGY_BLOCKED","TEST_FAILURE","DEPLOYMENT_FAILURE","UNSUPPORTED_INSTRUMENT"}
 PRACTICE_OANDA_URL="https://api-fxpractice.oanda.com"
 AUTOMATION_APPROVAL_TYPE="AUTONOMOUS_RESEARCH_POLICY_APPROVAL";AUTOMATION_AUTHORITY="AUTOMATION_V3_POLICY";AUTOMATION_SCOPE="RESEARCH_CONTINUATION_ONLY"
 PROTECTED_LIVE_FILES={"server.py","forward_experiment.py"}
@@ -173,7 +174,12 @@ class AutonomousAssetOptimizer:
      return self._terminal(ledger,i,"METHODOLOGY_BLOCKED",str(err),lookback_months=months)
    h=load_json(ad/"10_holdout.json");pre=load_json(ad/"13_pre_audit.json");ranking=h.get("candidate_ranking") or []
    if h.get("status")!="PASS" or (h.get("overfitting_risk") or {}).get("severity")=="HIGH" or pre.get("verdict") not in {"ACCEPT","ACCEPT WITH LIMITATIONS"} or not any(isinstance(x,Mapping) and x.get("status")=="RESEARCH_CANDIDATE" for x in ranking):return self._terminal(ledger,i,"NO_VALID_CANDIDATE","holdout/pre-audit did not establish PAPER candidate",lookback_months=months)
-   cand=next(x for x in ranking if isinstance(x,Mapping) and x.get("status")=="RESEARCH_CANDIDATE");plan=ad/"paper_release_plan.json";write_json(plan,{"instrument":i,"candidate":cand,"source_code_sha":sha,"production_authority":False,"created_at":utc_now()});rel=self.release.prepare_test_merge(plan=plan,base_sha=sha,instrument=i);ledger.mutate(i,release=rel)
+   cand=next(x for x in ranking if isinstance(x,Mapping) and x.get("status")=="RESEARCH_CANDIDATE");plan=ad/"paper_release_plan.json";write_json(plan,{"instrument":i,"candidate":cand,"source_code_sha":sha,"production_authority":False})
+   try:compiled=compile_and_write_release_plan(repo=self.repo,plan_path=plan,instrument=i,source_code_sha=sha)
+   except CandidateNotDeployable as exc:return self._terminal(ledger,i,"CANDIDATE_NOT_DEPLOYABLE",str(exc),lookback_months=months)
+   ledger.mutate(i,status="PAPER_DEPLOYABLE_CANDIDATE",paper_release_plan=str(plan),paper_release_plan_sha256=canonical_sha256(compiled))
+   rel=self.release.prepare_test_merge(plan=plan,base_sha=sha,instrument=i);ledger.mutate(i,release=rel)
+   if rel.get("status")=="CANDIDATE_NOT_DEPLOYABLE":return self._terminal(ledger,i,"CANDIDATE_NOT_DEPLOYABLE",str(rel.get("reason")),release=rel)
    if rel.get("status")!="PASS":return self._terminal(ledger,i,"TEST_FAILURE" if rel.get("reason") in {"TEST_FAILURE","GIT_DIFF_CHECK_FAILED","DIFF_POLICY_BLOCK"} else "DEPLOYMENT_FAILURE",str(rel.get("reason")),release=rel)
    dep=self.release.deploy_paper(expected_sha=rel["merged_main_sha"],environment={"TRADING_ENVIRONMENT":"PAPER","PRIMARY_OANDA_ENV":"practice","OANDA":PRACTICE_OANDA_URL});ledger.mutate(i,paper_deployment=dep)
    if dep.get("status")!="PAPER_DEPLOYED":return self._terminal(ledger,i,"DEPLOYMENT_FAILURE",str(dep.get("reason")),deployment=dep)
