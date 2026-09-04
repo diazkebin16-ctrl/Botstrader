@@ -42,6 +42,9 @@ def load_json(p):
 def integrity_artifact_failed(report:Mapping[str,Any]):
  return str(report.get("status") or "UNKNOWN").upper()!="PASS" or bool(report.get("failures") or [])
 
+def integrity_artifact_failed(report:Mapping[str,Any]):
+ return str(report.get("status") or "UNKNOWN").upper()!="PASS" or bool(report.get("failures") or [])
+
 def diagnose_discovery(d:Mapping[str,Any],*,min_resolved=10):
  s=d.get("candidate_space") or {};rows=int((d.get("discovery_metrics") or {}).get("episodes") or (d.get("discovery_metrics") or {}).get("total") or 0);ranked=[x for x in d.get("ranked_candidates") or [] if isinstance(x,Mapping)]
  mx=fs=fr=fl=fe=fo=fi=0

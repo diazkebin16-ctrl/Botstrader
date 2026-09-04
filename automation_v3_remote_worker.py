@@ -60,6 +60,13 @@ def _current_checkout_sha() -> str | None:
     return value or None
 
 
+def _current_checkout_sha() -> str | None:
+    try:
+        return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=Path(__file__).resolve().parent, text=True).strip()
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
 def _current_stage(root: Path, instrument: str) -> tuple[str | None, int | None]:
     ledger = _load(root / instrument / "autonomous_v3" / "automation_v3_state.json")
     run = ((ledger.get("runs") or {}).get(instrument) or {}) if isinstance(ledger.get("runs"), dict) else {}
