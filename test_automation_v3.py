@@ -173,3 +173,48 @@ def test_terminal_rerun_does_not_duplicate_paper_deploy(tmp_path,monkeypatch):
 
 def test_unsupported_instrument_terminal(tmp_path):
     opt,_,_=_optimizer(tmp_path,{1:"ok"}); out=opt.optimize("BTC_USD"); assert out["status"]=="UNSUPPORTED_INSTRUMENT" and out["production_authority"] is False
+
+def _release_repo(tmp_path, monkeypatch, change):
+    import subprocess, sys
+    from automation_v3_release import TESTS, ReleaseController
+    repo=tmp_path/'release_repo';repo.mkdir()
+    subprocess.run(['git','init','-q','-b','main'],cwd=repo,check=True)
+    subprocess.run(['git','config','user.email','v3@example.com'],cwd=repo,check=True)
+    subprocess.run(['git','config','user.name','V3 Test'],cwd=repo,check=True)
+    for name in TESTS:
+        (repo/name).write_text('def test_ok(): assert True\n',encoding='utf-8')
+    (repo/'safe.py').write_text('VALUE=1\n',encoding='utf-8')
+    changer=repo/'changer.py';changer.write_text(change,encoding='utf-8')
+    subprocess.run(['git','add','-A'],cwd=repo,check=True);subprocess.run(['git','commit','-qm','base'],cwd=repo,check=True)
+    base=subprocess.run(['git','rev-parse','HEAD'],cwd=repo,text=True,capture_output=True,check=True).stdout.strip()
+    bare=tmp_path/'remote.git';subprocess.run(['git','init','-q','--bare',str(bare)],check=True)
+    subprocess.run(['git','remote','add','origin',str(bare)],cwd=repo,check=True);subprocess.run(['git','push','-q','-u','origin','main'],cwd=repo,check=True)
+    monkeypatch.setenv('BOTS_V3_CODE_CHANGE_COMMAND',f'{sys.executable} {changer}')
+    plan=tmp_path/'plan.json';plan.write_text('{}',encoding='utf-8')
+    return repo,base,plan,ReleaseController(repo)
+
+def test_release_controller_creates_branch_tests_and_ff_merges(tmp_path,monkeypatch):
+    repo,base,plan,r=_release_repo(tmp_path,monkeypatch,"from pathlib import Path\nPath('safe_candidate.py').write_text('PAPER_ONLY=True\\n')\n")
+    out=r.prepare_test_merge(plan=plan,base_sha=base,instrument='AUD_USD')
+    assert out['status']=='PASS' and out['merged_main_sha'] and out['branch'].startswith('automation-v3/')
+
+def test_release_controller_blocks_protected_live_file(tmp_path,monkeypatch):
+    repo,base,plan,r=_release_repo(tmp_path,monkeypatch,"from pathlib import Path\nPath('server.py').write_text('x=1\\n')\n")
+    out=r.prepare_test_merge(plan=plan,base_sha=base,instrument='AUD_USD')
+    assert out['status']=='BLOCKED' and out['reason']=='DIFF_POLICY_BLOCK'
+
+def test_release_controller_blocks_secret_marker(tmp_path,monkeypatch):
+    repo,base,plan,r=_release_repo(tmp_path,monkeypatch,"from pathlib import Path\nPath('safe.py').write_text('OANDA_TOKEN=abc\\n')\n")
+    out=r.prepare_test_merge(plan=plan,base_sha=base,instrument='AUD_USD')
+    assert out['status']=='BLOCKED' and out['reason']=='DIFF_POLICY_BLOCK'
+
+def test_release_controller_test_failure_prevents_merge(tmp_path,monkeypatch):
+    repo,base,plan,r=_release_repo(tmp_path,monkeypatch,"from pathlib import Path\nPath('test_automation_v3.py').write_text('def test_bad(): assert False\\n')\n")
+    out=r.prepare_test_merge(plan=plan,base_sha=base,instrument='AUD_USD')
+    assert out['status']=='BLOCKED' and out['reason']=='TEST_FAILURE'
+
+def test_release_controller_dirty_tree_prevents_branch(tmp_path,monkeypatch):
+    repo,base,plan,r=_release_repo(tmp_path,monkeypatch,"from pathlib import Path\nPath('safe_candidate.py').write_text('x=1\\n')\n")
+    (repo/'safe.py').write_text('dirty=1\n',encoding='utf-8')
+    out=r.prepare_test_merge(plan=plan,base_sha=base,instrument='AUD_USD')
+    assert out['status']=='BLOCKED' and out['reason']=='BASE_OR_WORKTREE_MISMATCH'
