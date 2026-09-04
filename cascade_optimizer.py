@@ -9,10 +9,16 @@ import argparse
 import json
 import os
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence
 
+from automation_v3_convergence import (
+    checkpoint_matches,
+    command_identity,
+    discovery_checkpoint,
+)
 from research_manager import ResearchManager, sha256_file
 
 
@@ -132,6 +138,38 @@ class CascadeOptimizer:
             raise MethodologyViolation("; ".join(result["reasons"]))
         return result
 
+    def _resume_negative_discovery(self, instrument: str, stage: Stage, current: Mapping[str, Any]) -> None:
+        if current.get("status") != "BLOCKED" or not stage.artifact.is_file():
+            return
+        details = current.get("details") or {}
+        checkpoint = details.get("negative_checkpoint") if isinstance(details, Mapping) else None
+        if not isinstance(checkpoint, Mapping):
+            return
+        try:
+            report = validate_research_artifact(stage.artifact, "discovery")
+        except Exception:
+            return
+        if str(report.get("status") or "").upper() != "NO_FREEZE_ELIGIBLE_CANDIDATE":
+            return
+        if not checkpoint_matches(
+            checkpoint,
+            artifact_path=stage.artifact,
+            report=report,
+            command=stage.command,
+        ):
+            return
+        cached_details = dict(details)
+        cached_details["cache_hits"] = int(cached_details.get("cache_hits") or 0) + 1
+        cached_details["last_cache_hit"] = "DISCOVERY_EVALUATED"
+        self.manager.update_phase(
+            instrument,
+            "discovery",
+            "BLOCKED",
+            artifact=str(stage.artifact),
+            details=cached_details,
+        )
+        raise MethodologyViolation("Artifact status is NO_FREEZE_ELIGIBLE_CANDIDATE (memoized)")
+
     def run(self, instrument: str, stages: Sequence[Stage], *, resume: bool = True,
             through: str = "report", holdout_reproduction_read_only: bool = False) -> Dict[str, Any]:
         instrument = instrument.upper()
@@ -152,10 +190,13 @@ class CascadeOptimizer:
             "BOTS_RESEARCH_OFFLINE": "true",
         })
         completed: List[str] = []
+        stage_timings: Dict[str, float] = {}
         for name in requested:
             stage = by_name[name]
             self._validate_stage(stage)
             current = self.manager.load()["assets"][instrument]["phases"][name]
+            if resume and name == "discovery":
+                self._resume_negative_discovery(instrument, stage, current)
             if resume and current.get("status") == "COMPLETED" and stage.artifact.is_file():
                 expected = current.get("artifact_sha256")
                 if expected and expected == sha256_file(stage.artifact):
@@ -177,11 +218,19 @@ class CascadeOptimizer:
                                 "approval_type": "BEST_VIABLE_POLICY",
                                 "approval_phase1_artifact_sha256": approval.get("phase1_artifact_sha256"),
                                 "production_authority": False,
+                                "checkpoint": {
+                                    "name": "PHASE1_READY",
+                                    "artifact_sha256": sha256_file(stage.artifact),
+                                    "methodology_identity": command_identity(stage.command),
+                                    "production_authority": False,
+                                },
                             },
                         )
                         completed.append(name)
                         continue
             self.manager.update_phase(instrument, name, "RUNNING")
+            started = time.monotonic()
+            report: Dict[str, Any] | None = None
             try:
                 transition_gate = self._transition_gate(name, by_name, instrument)
                 holdout_authorization = None
@@ -211,6 +260,8 @@ class CascadeOptimizer:
                 if not stage.artifact.is_file():
                     raise RuntimeError(f"Expected artifact was not created: {stage.artifact}")
                 report = validate_research_artifact(stage.artifact, name)
+                stage_seconds = max(0.0, time.monotonic() - started)
+                stage_timings[name] = stage_seconds
                 blocking_statuses = {"FAIL", "FAILED", "BLOCKED", "REVIEW_REQUIRED", "NO_FREEZE_ELIGIBLE_CANDIDATE"}
                 if str(report.get("status") or "OK").upper() in blocking_statuses:
                     raise MethodologyViolation(f"Artifact status is {report['status']}")
@@ -232,11 +283,28 @@ class CascadeOptimizer:
                         "OUTPUT SHA256",
                     ) if report.get(key) is not None
                 }
+                checkpoint_name = {
+                    "data_integrity": "DATA_READY",
+                    "target_population": "POPULATION_READY",
+                    "phase_1": "PHASE1_READY",
+                    "phase_2": "PHASE2_READY",
+                    "discovery": "DISCOVERY_EVALUATED",
+                    "freeze": "FREEZE_READY",
+                    "holdout": "HOLDOUT_COMPLETE",
+                    "audit": "AUDIT_COMPLETE",
+                }.get(name, name.upper() + "_COMPLETE")
                 self.manager.update_phase(
                     instrument, name, "COMPLETED", artifact=str(stage.artifact),
                     details={
                         "command": list(stage.command), "transition_gate": transition_gate,
                         "evidence_summary": evidence_summary,
+                        "duration_seconds": stage_seconds,
+                        "checkpoint": {
+                            "name": checkpoint_name,
+                            "artifact_sha256": sha256_file(stage.artifact),
+                            "methodology_identity": command_identity(stage.command),
+                            "production_authority": False,
+                        },
                     },
                 )
                 if name == "freeze":
@@ -265,18 +333,41 @@ class CascadeOptimizer:
                     )
                 completed.append(name)
             except BaseException as exc:
-                artifact_for_state = (
-                    str(stage.artifact)
-                    if name == "phase_1" and stage.artifact.is_file()
-                    else None
-                )
+                stage_seconds = max(0.0, time.monotonic() - started)
+                stage_timings[name] = stage_seconds
+                artifact_for_state = None
+                details: Dict[str, Any] = {
+                    "error": str(exc),
+                    "duration_seconds": stage_seconds,
+                }
+                if name == "phase_1" and stage.artifact.is_file():
+                    artifact_for_state = str(stage.artifact)
+                if name == "discovery" and stage.artifact.is_file():
+                    try:
+                        negative_report = report or validate_research_artifact(stage.artifact, name)
+                        if str(negative_report.get("status") or "").upper() == "NO_FREEZE_ELIGIBLE_CANDIDATE":
+                            artifact_for_state = str(stage.artifact)
+                            details["negative_checkpoint"] = discovery_checkpoint(
+                                artifact_path=stage.artifact,
+                                report=negative_report,
+                                command=stage.command,
+                            )
+                            details["artifact_sha256"] = sha256_file(stage.artifact)
+                            details["cache_hits"] = 0
+                    except Exception:
+                        pass
                 self.manager.update_phase(
                     instrument, name, "BLOCKED" if isinstance(exc, MethodologyViolation) else "FAILED",
                     artifact=artifact_for_state,
-                    details={"error": str(exc)},
+                    details=details,
                 )
                 raise
-        return {"instrument": instrument, "status": "COMPLETED", "phases": completed}
+        return {
+            "instrument": instrument,
+            "status": "COMPLETED",
+            "phases": completed,
+            "stage_timings_seconds": stage_timings,
+        }
 
 
 def load_manifest(path: os.PathLike[str] | str) -> List[Stage]:
