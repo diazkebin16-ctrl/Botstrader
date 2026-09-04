@@ -56,6 +56,9 @@ jobs:
       - name: Focused Phase 1 population architecture tests
         run: python -m pytest -q test_phase1_population_architecture.py
 
+      - name: Focused operational-time outcome tests
+        run: python -m pytest -q test_operational_time_outcome.py test_historical_execution.py
+
       - name: Remote runner tests
         run: python -m pytest -q test_automation_v3_remote_runner.py
 
@@ -73,7 +76,7 @@ jobs:
 
       - name: Pyflakes changed Python files
         run: |
-          pyflakes automation_v3_candidate_mapping.py managed_strategy_rules.py automation_v3_code_change_adapter.py automation_v3_release.py automation_v3_railway_adapter.py automation_v3_remote_worker.py autonomous_asset_optimizer.py automation_v3_integrity_recovery.py automation_v3_phase1_continuation.py automation_v3_discovery_pregate.py historical_replay.py research_pipeline.py research_phase2.py research_manager.py test_automation_v3_candidate_mapping.py test_automation_v3_remote_runner.py test_automation_v3_integrity_recovery.py test_automation_v3_sha_horizon.py test_automation_v3_discovery_expansion.py test_automation_v3_phase1_continuation.py test_automation_v3_discovery_pregate.py test_phase1_population_architecture.py test_research_pipeline.py
+          pyflakes automation_v3_candidate_mapping.py managed_strategy_rules.py automation_v3_code_change_adapter.py automation_v3_release.py automation_v3_railway_adapter.py automation_v3_remote_worker.py autonomous_asset_optimizer.py automation_v3_integrity_recovery.py automation_v3_phase1_continuation.py automation_v3_discovery_pregate.py operational_time.py historical_execution.py historical_replay.py research_pipeline.py research_phase2.py research_manager.py test_automation_v3_candidate_mapping.py test_automation_v3_remote_runner.py test_automation_v3_integrity_recovery.py test_automation_v3_sha_horizon.py test_automation_v3_discovery_expansion.py test_automation_v3_phase1_continuation.py test_automation_v3_discovery_pregate.py test_phase1_population_architecture.py test_operational_time_outcome.py test_historical_execution.py test_research_pipeline.py
 
       - name: Git diff check
         run: |
