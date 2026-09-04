@@ -39,6 +39,9 @@ def load_json(p):
  if not isinstance(v,dict):raise ValueError("artifact must be object")
  return v
 
+def integrity_artifact_failed(report:Mapping[str,Any]):
+ return str(report.get("status") or "UNKNOWN").upper()!="PASS" or bool(report.get("failures") or [])
+
 def diagnose_discovery(d:Mapping[str,Any],*,min_resolved=10):
  s=d.get("candidate_space") or {};rows=int((d.get("discovery_metrics") or {}).get("episodes") or (d.get("discovery_metrics") or {}).get("total") or 0);ranked=[x for x in d.get("ranked_candidates") or [] if isinstance(x,Mapping)]
  mx=fs=fr=fl=fe=fo=fi=0
@@ -133,8 +136,8 @@ class AutonomousAssetOptimizer:
    s=ledger.load();r=s.setdefault("runs",{}).setdefault(i,run);r.setdefault("decision_history",[]).append({"decision":"CODE_SHA_CHANGED","old":r.get("code_sha"),"new":sha,"at":utc_now()});
    for a in r.setdefault("approvals",[]):
     if a.get("active") is True:a["active"]=False;a["invalidated_reason"]="CODE_SHA_CHANGED"
-   r.update(status="NEW",paper_deployment=None,stop_reason=None);ledger.save(s)
-  end=aligned_research_end(self.now(),240);ledger.mutate(i,status="RUNNING",code_sha=sha,workspace=str(root),max_lookback_months=12)
+   r.update(status="NEW",paper_deployment=None,stop_reason=None,final_outcome=None,integrity_diagnostic=None,diagnostic=None,lookback_months=None);ledger.save(s)
+  end=aligned_research_end(self.now(),240);ledger.mutate(i,status="RUNNING",code_sha=sha,workspace=str(root),max_lookback_months=12,stop_reason=None,final_outcome=None,integrity_diagnostic=None,diagnostic=None)
   for months in LOOKBACK_SEQUENCE:
    ad=root/f"lookback_{months:02d}m_{sha[:12]}";ad.mkdir(parents=True,exist_ok=True);start=self._months_before(end,months);cache=root/"data"/f"{i}_{months:02d}m.json";cache_preexisting=cache.is_file();ledger.append(i,"lookback_attempts",{"months":months,"code_sha":sha,"start":start.isoformat(),"end":end.isoformat(),"status":"RUNNING","at":utc_now()})
    try:
@@ -159,7 +162,9 @@ class AutonomousAssetOptimizer:
       except Exception as x:err=x
     if err:
      ip=ad/"01_data_integrity.json"
-     if ip.is_file():
+     if ip.is_file() and not integrity_artifact_failed(load_json(ip)):
+      ledger.mutate(i,integrity_diagnostic=None,lookback_months=months)
+     if ip.is_file() and integrity_artifact_failed(load_json(ip)):
       diag=build_integrity_diagnostic(load_json(ip),artifact_path=ip,cache_path=cache,requested_start=start.isoformat(),requested_end=end.isoformat(),cache_preexisting=cache_preexisting,retry_count=0)
       write_json(ad/"integrity_diagnostic.json",diag);ledger.mutate(i,integrity_diagnostic=diag,lookback_months=months);ledger.append(i,"decision_history",{"decision":"DATA_INTEGRITY_DIAGNOSTIC","months":months,"diagnostic":diag,"at":utc_now()})
       if diag.get("recoverable") is True:
@@ -172,13 +177,15 @@ class AutonomousAssetOptimizer:
         final_data_sha=sha256_file(cache);m.register_asset(i,code_sha=sha,start=start.isoformat(),end=end.isoformat(),warmup_days=10,horizon_minutes=240,data_sha256=final_data_sha);stages=builder(repo=self.repo,python=sys.executable,instrument=i,cache=cache,workspace=ad,start=start.isoformat(),end=end.isoformat(),warmup=10,horizon=240,variant="V331_BASELINE",embargo=30,discovery_fraction=.60,validation_fraction=.20,min_resolved=10,code_sha=sha,state=state);write_json(ad/"cascade_manifest.json",{"schema_version":3,"automation":"V3","instrument":i,"code_sha":sha,"data_sha256":final_data_sha,"production_authority":False,"stages":[{"name":x.name,"artifact":str(x.artifact),"command":list(x.command)} for x in stages]});c.run(i,stages,through="prompts");err=None;ledger.append(i,"decision_history",{"decision":"DATA_REACQUIRE_SUCCEEDED","months":months,"data_sha256":final_data_sha,"at":utc_now()})
        except Exception as x:
         err=x
-        if ip.is_file():
+        if ip.is_file() and integrity_artifact_failed(load_json(ip)):
          diag=build_integrity_diagnostic(load_json(ip),artifact_path=ip,cache_path=cache,requested_start=start.isoformat(),requested_end=end.isoformat(),cache_preexisting=False,retry_count=1)
          write_json(ad/"integrity_diagnostic.json",diag);ledger.mutate(i,integrity_diagnostic=diag,lookback_months=months);ledger.append(i,"decision_history",{"decision":"DATA_INTEGRITY_RETRY_FAILED","months":months,"diagnostic":diag,"at":utc_now()})
-       if err and diag.get("recoverable") is True:
+        else:
+         diag=None;ledger.mutate(i,integrity_diagnostic=None,lookback_months=months)
+       if err and isinstance(diag,Mapping) and diag.get("recoverable") is True:
         if months==12:return self._terminal(ledger,i,"DATA_COVERAGE_INSUFFICIENT","recoverable data coverage exhausted maximum lookback",lookback_months=months,integrity_diagnostic=diag)
         ledger.append(i,"decision_history",{"decision":"EXPAND_LOOKBACK","months":months,"recommended_action":"EXPAND_LOOKBACK","at":utc_now()});continue
-      if err and diag.get("recoverable") is not True:
+      if err and isinstance(diag,Mapping) and diag.get("recoverable") is not True:
        return self._terminal(ledger,i,terminal_for_nonrecoverable(diag),str(err),lookback_months=months,integrity_diagnostic=diag)
     if err:
      dp=ad/"06_discovery.json"

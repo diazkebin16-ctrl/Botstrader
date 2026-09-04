@@ -55,6 +55,13 @@ def _require_remote_boundary() -> None:
         raise RuntimeError("DATA_SOURCE_UNAVAILABLE: OANDA_TOKEN missing")
 
 
+def _current_checkout_sha() -> str | None:
+    try:
+        return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=Path(__file__).resolve().parent, text=True).strip()
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
 def _current_stage(root: Path, instrument: str) -> tuple[str | None, int | None]:
     ledger = _load(root / instrument / "autonomous_v3" / "automation_v3_state.json")
     run = ((ledger.get("runs") or {}).get(instrument) or {}) if isinstance(ledger.get("runs"), dict) else {}
@@ -93,24 +100,30 @@ def _candidate(root: Path, instrument: str) -> Any:
 
 
 def _snapshot(root: Path, instrument: str, run_id: str, *, terminal: str | None = None, error: str | None = None) -> dict[str, Any]:
-    stage, lookback = _current_stage(root, instrument)
     ledger = _load(root / instrument / "autonomous_v3" / "automation_v3_state.json")
     run = ((ledger.get("runs") or {}).get(instrument) or {}) if isinstance(ledger.get("runs"), dict) else {}
-    deployment = run.get("paper_deployment") or run.get("deployment") or {}
-    if isinstance(deployment, dict):
-        paper_status = deployment.get("status")
+    checkout_sha = _current_checkout_sha()
+    run_sha = str(run.get("code_sha") or "")
+    authoritative = not checkout_sha or not run_sha or run_sha == checkout_sha
+    if authoritative:
+        stage, lookback = _current_stage(root, instrument)
     else:
-        paper_status = None
+        stage, lookback = "STARTING", None
+    deployment = run.get("paper_deployment") or run.get("deployment") or {}
+    paper_status = deployment.get("status") if authoritative and isinstance(deployment, dict) else None
+    stored_terminal = run.get("status") if authoritative and run.get("status") in EXPECTED_TERMINALS | FAIL_TERMINALS else None
+    stored_error = run.get("stop_reason") if authoritative else None
+    stored_integrity = run.get("integrity_diagnostic") if authoritative and isinstance(run.get("integrity_diagnostic"), dict) else None
     return {
         "run_id": run_id,
         "instrument": instrument,
         "current_stage": stage,
         "lookback": lookback,
-        "terminal_state": terminal or (run.get("status") if run.get("status") in EXPECTED_TERMINALS | FAIL_TERMINALS else None),
-        "candidate": _candidate(root, instrument),
+        "terminal_state": terminal or stored_terminal,
+        "candidate": _candidate(root, instrument) if authoritative else None,
         "paper_deployment_status": paper_status,
-        "last_error": error or run.get("stop_reason"),
-        "integrity_diagnostic": run.get("integrity_diagnostic") if isinstance(run.get("integrity_diagnostic"), dict) else None,
+        "last_error": error or stored_error,
+        "integrity_diagnostic": stored_integrity,
         "production_authority": False,
     }
 
