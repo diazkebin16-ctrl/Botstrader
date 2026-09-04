@@ -56,10 +56,8 @@ def _require_remote_boundary() -> None:
 
 
 def _current_checkout_sha() -> str | None:
-    try:
-        return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=Path(__file__).resolve().parent, text=True).strip()
-    except (OSError, subprocess.SubprocessError):
-        return None
+    value = os.getenv("GITHUB_SHA", "").strip()
+    return value or None
 
 
 def _current_stage(root: Path, instrument: str) -> tuple[str | None, int | None]:
