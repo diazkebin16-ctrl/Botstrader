@@ -145,6 +145,10 @@ class AutonomousAssetOptimizer:
   if i not in SUPPORTED_INSTRUMENTS:return self._terminal(ledger,i,"UNSUPPORTED_INSTRUMENT","instrument unsupported")
   sha=self.code_sha_provider() if self.code_sha_provider else self._git("rev-parse","HEAD");run=ledger.run(i)
   if run.get("status") in TERMINAL_STATES and run.get("code_sha")==sha:return run
+  release_resume=run.get("release") or {}
+  if run.get("status")=="RUNNING" and release_resume.get("merged_main_sha")==sha:
+   dep=self.release.deploy_paper(expected_sha=sha,environment={"TRADING_ENVIRONMENT":"PAPER","PRIMARY_OANDA_ENV":"practice","OANDA":PRACTICE_OANDA_URL});ledger.mutate(i,paper_deployment=dep)
+   return self._terminal(ledger,i,"PAPER_DEPLOYED" if dep.get("status")=="PAPER_DEPLOYED" else "DEPLOYMENT_FAILURE","resumed PAPER verification",deployment=dep)
   if run.get("code_sha") and run.get("code_sha")!=sha:
    s=ledger.load();r=s.setdefault("runs",{}).setdefault(i,run);r.setdefault("decision_history",[]).append({"decision":"CODE_SHA_CHANGED","old":r.get("code_sha"),"new":sha,"at":utc_now()});
    for a in r.setdefault("approvals",[]):
@@ -173,6 +177,15 @@ class AutonomousAssetOptimizer:
      if q.get("status")=="REVIEW_REQUIRED" and q.get("all_target_wins_recovered") is False:
       try:a=m.approve_phase1_autonomous(i,p);ledger.append(i,"decision_history",{"decision":"AUTONOMOUS_PHASE1_BEST_VIABLE","approval":a,"at":utc_now()});m.update_phase(i,"phase_1","COMPLETED",artifact=str(p),details={"review_status":"REVIEW_REQUIRED","approval_type":AUTOMATION_APPROVAL_TYPE,"approval_authority":AUTOMATION_AUTHORITY,"authorization_scope":AUTOMATION_SCOPE,"ia1_approved":False,"production_authority":False});c.run(i,stages,through="prompts");err=None
       except Exception as x:err=x
+    if err:
+     ip=ad/"01_data_integrity.json"
+     if ip.is_file():
+      failures=" ".join(str(x) for x in (load_json(ip).get("failures") or [])).upper()
+      if any(x in failures for x in ("COVERAGE","WARMUP","HORIZON","MISSING")):
+       try:
+        if cache.exists():cache.unlink()
+        asyncio.run(self.data_source.acquire(i,start,end,cache,warmup_days=10,horizon_minutes=240));m.register_asset(i,code_sha=sha,start=start.isoformat(),end=end.isoformat(),warmup_days=10,horizon_minutes=240,data_sha256=sha256_file(cache));c.run(i,stages,through="prompts");err=None
+       except Exception as x:err=x
     if err:
      dp=ad/"06_discovery.json"
      if dp.is_file():
