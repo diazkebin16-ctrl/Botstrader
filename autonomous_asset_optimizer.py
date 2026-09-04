@@ -107,30 +107,6 @@ class OandaPracticeDataSource:
   if any(not bundle[x] for x in tfs):raise RuntimeError("DATA_SOURCE_UNAVAILABLE: incomplete OANDA history")
   Path(cache).parent.mkdir(parents=True,exist_ok=True);save_bundle(str(cache),bundle);return Path(cache)
 
-class ReleaseController:
- def __init__(self,repo,runner=subprocess.run):self.repo=Path(repo);self.runner=runner
- @staticmethod
- def assert_paper_only(e):
-  if str(e.get("TRADING_ENVIRONMENT") or "").upper()!="PAPER" or str(e.get("PRIMARY_OANDA_ENV") or "").lower()!="practice" or e.get("OANDA")!=PRACTICE_OANDA_URL:raise ValueError("LIVE/PRODUCTION target prohibited")
- def _run(self,cmd,**kw):return self.runner(cmd,check=False,text=True,capture_output=True,**kw)
- def prepare_test_merge(self,*,plan,base_sha,instrument):
-  adapter=os.getenv("BOTS_V3_CODE_CHANGE_COMMAND","").strip()
-  if not adapter:return {"status":"BLOCKED","reason":"CODE_CHANGE_ADAPTER_UNAVAILABLE","production_authority":False}
-  env=dict(os.environ,BOTS_V3_RELEASE_PLAN=str(plan),BOTS_V3_BASE_SHA=base_sha,BOTS_V3_INSTRUMENT=instrument,BOTS_V3_PRODUCTION_AUTHORITY="false",TRADING_ENVIRONMENT="PAPER",PRIMARY_OANDA_ENV="practice",OANDA=PRACTICE_OANDA_URL)
-  r=self._run(adapter.split(),cwd=self.repo,env=env)
-  if r.returncode:return {"status":"BLOCKED","reason":"CODE_CHANGE_ADAPTER_FAILED","production_authority":False}
-  return {"status":"BLOCKED","reason":"MERGE_REQUIRES_VALIDATED_GIT_ADAPTER_EVIDENCE","production_authority":False}
- def deploy_paper(self,*,expected_sha,environment):
-  self.assert_paper_only(environment);deploy=os.getenv("BOTS_V3_PAPER_DEPLOY_COMMAND","").strip();verify=os.getenv("BOTS_V3_PAPER_VERIFY_COMMAND","").strip();rollback=os.getenv("BOTS_V3_PAPER_ROLLBACK_COMMAND","").strip()
-  if not deploy or not verify:return {"status":"DEPLOYMENT_FAILURE","reason":"PAPER_DEPLOY_ADAPTER_UNAVAILABLE","production_authority":False}
-  env=dict(os.environ,**{k:str(v) for k,v in environment.items()},BOTS_V3_EXPECTED_SHA=expected_sha,BOTS_V3_PRODUCTION_AUTHORITY="false");d=self._run(deploy.split(),cwd=self.repo,env=env)
-  if d.returncode:return {"status":"DEPLOYMENT_FAILURE","reason":"PAPER_DEPLOY_FAILED","production_authority":False}
-  v=self._run(verify.split(),cwd=self.repo,env=env)
-  if not v.returncode:return {"status":"PAPER_DEPLOYED","verified_sha":expected_sha,"production_authority":False}
-  rb=False
-  if rollback:rb=self._run(rollback.split(),cwd=self.repo,env=env).returncode==0
-  return {"status":"DEPLOYMENT_FAILURE","reason":"PAPER_VERIFY_FAILED","rollback_attempted":bool(rollback),"rollback_succeeded":rb,"production_authority":False}
-
 ReleaseController=GovernedReleaseController
 
 class AutonomousAssetOptimizer:
