@@ -55,7 +55,7 @@ def _fixture(tmp_path, *, instrument="AUD_USD", rules=None, verdict="ACCEPT", re
         "decision":"RESEARCH_CANDIDATE_SURVIVED_HOLDOUT", "retuning_after_holdout":retune, "holdout_opened_once":True,
         "input_sha256":_sha(target), "phase2_sha256":_sha(phase2), "freeze_sha256":_sha(freeze),
         "candidate_definition_sha256":definition_sha})
-    audit = _write(ws / "11_audit.json", {"status":"PASS", "production_authority":False})
+    audit = _write(ws / "11_audit.json", {"status":"PASS", "stage":"audit", "production_authority":False})
     pre = _write(ws / "13_pre_audit.json", {"verdict":verdict, "production_authority":False})
     plan = _write(ws / "paper_release_plan.json", {"instrument":instrument,
         "candidate":{"candidate_id":"candidate-1"}, "source_code_sha":SHA, "production_authority":False})
@@ -77,6 +77,11 @@ def _rehash(plan):
     return plan
 
 
+def _decoded_rules(change):
+    encoded = change["new_text"].split(" = ", 1)[1].strip()
+    return json.loads(json.loads(encoded))
+
+
 def test_supported_single_threshold_candidate_deterministic_code_changes(tmp_path):
     f=_fixture(tmp_path); p=_compile(f); c=p["code_changes"][0]
     assert p["status"]=="PAPER_DEPLOYABLE_CANDIDATE" and c["path"]==mapping.MANAGED_PATH and c["expected_occurrences"]==1
@@ -84,12 +89,12 @@ def test_supported_single_threshold_candidate_deterministic_code_changes(tmp_pat
 
 def test_less_equal_candidate_mapping(tmp_path):
     f=_fixture(tmp_path,rules=[{"feature":"session_strength","operator":"<=","threshold":0.4}])
-    assert '"operator":"<="' in _compile(f)["code_changes"][0]["new_text"]
+    assert _decoded_rules(_compile(f)["code_changes"][0])[0]["operator"] == "<="
 
 
 def test_greater_equal_candidate_mapping(tmp_path):
     f=_fixture(tmp_path,rules=[{"feature":"session_strength","operator":">=","threshold":0.4}])
-    assert '"operator":">="' in _compile(f)["code_changes"][0]["new_text"]
+    assert _decoded_rules(_compile(f)["code_changes"][0])[0]["operator"] == ">="
 
 
 def test_composite_approved_candidate_mapping(tmp_path):
