@@ -218,3 +218,29 @@ def test_release_controller_dirty_tree_prevents_branch(tmp_path,monkeypatch):
     (repo/'safe.py').write_text('dirty=1\n',encoding='utf-8')
     out=r.prepare_test_merge(plan=plan,base_sha=base,instrument='AUD_USD')
     assert out['status']=='BLOCKED' and out['reason']=='BASE_OR_WORKTREE_MISMATCH'
+
+class UnavailableData:
+    async def acquire(self,*a,**kw): raise RuntimeError('source offline')
+
+def test_data_source_unavailable_terminal(tmp_path,monkeypatch):
+    from autonomous_asset_optimizer import AutonomousAssetOptimizer
+    monkeypatch.setenv('BOTS_RESEARCH_ROOT',str(tmp_path/'research'))
+    repo=tmp_path/'repo';repo.mkdir();rel=FakeRelease()
+    opt=AutonomousAssetOptimizer(repo,data_source=UnavailableData(),release=rel,now=lambda:__import__('datetime').datetime(2026,9,3,tzinfo=__import__('datetime').timezone.utc),manager_factory=FakeManager,stage_builder=fake_stages,code_sha_provider=lambda:'a'*40)
+    assert opt.optimize('AUD_USD')['status']=='DATA_SOURCE_UNAVAILABLE'
+
+def test_crash_after_merge_resumes_paper_without_research(tmp_path,monkeypatch):
+    from autonomous_asset_optimizer import AutonomousAssetOptimizer,V3Ledger
+    root=tmp_path/'research';monkeypatch.setenv('BOTS_RESEARCH_ROOT',str(root));repo=tmp_path/'repo';repo.mkdir();sha='c'*40;rel=FakeRelease();data=FakeData()
+    ledger=V3Ledger(root/'AUD_USD'/'autonomous_v3'/'automation_v3_state.json');ledger.mutate('AUD_USD',status='RUNNING',code_sha=sha,release={'status':'PASS','merged_main_sha':sha})
+    opt=AutonomousAssetOptimizer(repo,data_source=data,release=rel,code_sha_provider=lambda:sha)
+    assert opt.optimize('AUD_USD')['status']=='PAPER_DEPLOYED' and rel.deploys==1 and data.calls==[]
+
+def test_code_sha_change_invalidates_old_autonomous_approval(tmp_path,monkeypatch):
+    from autonomous_asset_optimizer import AutonomousAssetOptimizer,V3Ledger
+    root=tmp_path/'research';monkeypatch.setenv('BOTS_RESEARCH_ROOT',str(root));repo=tmp_path/'repo';repo.mkdir();ledger=V3Ledger(root/'AUD_USD'/'autonomous_v3'/'automation_v3_state.json')
+    ledger.mutate('AUD_USD',status='RUNNING',code_sha='b'*40,approvals=[{'active':True,'approval_type':AUTOMATION_APPROVAL_TYPE,'production_authority':False}])
+    data=FakeData();opt=AutonomousAssetOptimizer(repo,data_source=data,release=FakeRelease(),now=lambda:__import__('datetime').datetime(2026,9,3,tzinfo=__import__('datetime').timezone.utc),cascade_factory=lambda m:ScenarioCascade(m,{1:'bad'}),manager_factory=FakeManager,stage_builder=fake_stages,code_sha_provider=lambda:'a'*40)
+    assert opt.optimize('AUD_USD')['status']=='NO_VALID_CANDIDATE'
+    old=V3Ledger(root/'AUD_USD'/'autonomous_v3'/'automation_v3_state.json').run('AUD_USD')['approvals'][0]
+    assert old['active'] is False and old['invalidated_reason']=='CODE_SHA_CHANGED'
