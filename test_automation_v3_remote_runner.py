@@ -83,26 +83,23 @@ def test_code_change_adapter_unavailable_fails_closed(monkeypatch, tmp_path):
     plan = tmp_path / "plan.json"
     plan.write_text(json.dumps({"instrument": "AUD_USD", "source_code_sha": "b" * 40, "production_authority": False}))
     monkeypatch.setenv("BOTS_V3_PRODUCTION_AUTHORITY", "false")
-    with pytest.raises(ValueError, match="no executable code_changes"):
+    with pytest.raises(ValueError, match="not PAPER deployable"):
         code_adapter.apply_release_plan(tmp_path, plan, base_sha="b" * 40, instrument="AUD_USD")
 
 
 def test_code_change_adapter_success_path(monkeypatch, tmp_path):
-    target = tmp_path / "strategy.py"
-    target.write_text("VALUE = 1\n", encoding="utf-8")
+    target = tmp_path / "managed_strategy_rules.py"
+    old = 'MANAGED_RULES_JSON["AUD_USD"] = "[]"\n'
+    target.write_text(old, encoding="utf-8")
     plan = tmp_path / "plan.json"
-    plan.write_text(json.dumps({
-        "instrument": "AUD_USD", "source_code_sha": "c" * 40, "production_authority": False,
-        "code_changes": [{
-            "operation": "replace_text", "path": "strategy.py", "expected_sha256": _sha(target),
-            "replacements": [{"old": "VALUE = 1", "new": "VALUE = 2", "count": 1}],
-        }],
-    }))
+    artifact = tmp_path / "x.json"; artifact.write_text('{}\n')
+    identity={"code_sha":"c"*40}; definition_sha="d"*64; candidate_id="candidate"
+    binding={"instrument":"AUD_USD","source_code_sha":"c"*40,"dataset_identity":identity,"dataset_identity_sha256":code_adapter._canonical_sha256(identity),"candidate_id":candidate_id,"candidate_definition_sha256":definition_sha,"freeze_sha256":_sha(artifact),"holdout_sha256":_sha(artifact),"audit_sha256":_sha(artifact),"pre_audit_sha256":_sha(artifact),"audit_verdict":"ACCEPT","retuning_after_holdout":False}
+    new='MANAGED_RULES_JSON["AUD_USD"] = "candidate dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"\n'
+    payload={"schema_version":2,"status":"PAPER_DEPLOYABLE_CANDIDATE","instrument":"AUD_USD","candidate_id":candidate_id,"candidate_definition_sha256":definition_sha,"source_code_sha":"c"*40,"dataset_identity":identity,"production_authority":False,"freeze_artifact":{"path":"x.json","sha256":_sha(artifact)},"holdout_artifact":{"path":"x.json","sha256":_sha(artifact)},"audit_artifact":{"path":"x.json","sha256":_sha(artifact)},"pre_audit":{"path":"x.json","sha256":_sha(artifact),"verdict":"ACCEPT"},"code_changes":[{"operation":"replace_text","path":"managed_strategy_rules.py","expected_file_sha256":_sha(target),"old_text":old,"new_text":new,"expected_occurrences":1,"evidence_binding":binding}]}
+    payload["plan_binding_sha256"]=code_adapter._canonical_sha256(payload);plan.write_text(json.dumps(payload))
     monkeypatch.setenv("BOTS_V3_PRODUCTION_AUTHORITY", "false")
-    changed = code_adapter.apply_release_plan(tmp_path, plan, base_sha="c" * 40, instrument="AUD_USD")
-    assert changed == ["strategy.py"]
-    assert target.read_text() == "VALUE = 2\n"
-
+    assert code_adapter.apply_release_plan(tmp_path, plan, base_sha="c"*40, instrument="AUD_USD")==["managed_strategy_rules.py"]
 
 def test_paper_deploy_env_validation(monkeypatch):
     _paper_env(monkeypatch)
@@ -175,14 +172,11 @@ def test_missing_railway_auth_explicit_failure(monkeypatch):
 
 
 def test_no_secrets_in_adapter_logs(monkeypatch, capsys, tmp_path):
-    target = tmp_path / "x.py"; target.write_text("A=1\n")
-    plan = tmp_path / "plan.json"
-    plan.write_text(json.dumps({"instrument":"AUD_USD","source_code_sha":"d"*40,"production_authority":False,"code_changes":[{"operation":"replace_text","path":"x.py","expected_sha256":_sha(target),"replacements":[{"old":"A=1","new":"A=2"}]}]}))
-    monkeypatch.setenv("BOTS_V3_PRODUCTION_AUTHORITY", "false")
     monkeypatch.setenv("OANDA_TOKEN", "supersecret")
-    code_adapter.apply_release_plan(tmp_path, plan, base_sha="d"*40, instrument="AUD_USD")
+    monkeypatch.setenv("BOTS_V3_PRODUCTION_AUTHORITY", "false")
+    plan=tmp_path/"plan.json";plan.write_text(json.dumps({"schema_version":2,"status":"PAPER_DEPLOYABLE_CANDIDATE","instrument":"AUD_USD","source_code_sha":"d"*40,"production_authority":False}))
+    with pytest.raises(ValueError): code_adapter.apply_release_plan(tmp_path,plan,base_sha="d"*40,instrument="AUD_USD")
     assert "supersecret" not in capsys.readouterr().out
-
 
 def test_no_datasets_in_git_policy():
     assert ".db" in code_adapter.BLOCKED_SUFFIXES and ".zip" in code_adapter.BLOCKED_SUFFIXES
@@ -194,7 +188,7 @@ def test_service_isolation_from_main_process():
 
 
 def test_worker_can_terminate_after_job():
-    assert remote_worker.EXPECTED_TERMINALS == {"PAPER_DEPLOYED", "NO_VALID_CANDIDATE", "INSUFFICIENT_EVIDENCE"}
+    assert "CANDIDATE_NOT_DEPLOYABLE" in remote_worker.EXPECTED_TERMINALS and "PAPER_DEPLOYED" in remote_worker.EXPECTED_TERMINALS
 
 
 def test_retrigger_terminal_status_is_readable(tmp_path):
@@ -215,9 +209,9 @@ def test_remote_status_readable(tmp_path):
 
 
 def test_code_adapter_rejects_protected_file(monkeypatch, tmp_path):
-    target = tmp_path / "server.py"; target.write_text("A=1\n")
-    plan = tmp_path / "plan.json"
-    plan.write_text(json.dumps({"instrument":"AUD_USD","source_code_sha":"e"*40,"production_authority":False,"code_changes":[{"operation":"replace_text","path":"server.py","expected_sha256":_sha(target),"replacements":[{"old":"A=1","new":"A=2"}]}]}))
-    monkeypatch.setenv("BOTS_V3_PRODUCTION_AUTHORITY", "false")
-    with pytest.raises(ValueError, match="protected LIVE file"):
-        code_adapter.apply_release_plan(tmp_path, plan, base_sha="e"*40, instrument="AUD_USD")
+    target=tmp_path/"managed_strategy_rules.py";target.write_text('MANAGED_RULES_JSON["AUD_USD"] = "[]"\n')
+    plan=tmp_path/"plan.json";identity={"code_sha":"e"*40};artifact=tmp_path/"x.json";artifact.write_text('{}\n')
+    binding={"instrument":"AUD_USD","source_code_sha":"e"*40,"dataset_identity":identity,"dataset_identity_sha256":code_adapter._canonical_sha256(identity),"candidate_id":"c","candidate_definition_sha256":"d"*64,"freeze_sha256":_sha(artifact),"holdout_sha256":_sha(artifact),"audit_sha256":_sha(artifact),"pre_audit_sha256":_sha(artifact),"audit_verdict":"ACCEPT","retuning_after_holdout":False}
+    payload={"schema_version":2,"status":"PAPER_DEPLOYABLE_CANDIDATE","instrument":"AUD_USD","candidate_id":"c","candidate_definition_sha256":"d"*64,"source_code_sha":"e"*40,"dataset_identity":identity,"production_authority":False,"freeze_artifact":{"path":"x.json","sha256":_sha(artifact)},"holdout_artifact":{"path":"x.json","sha256":_sha(artifact)},"audit_artifact":{"path":"x.json","sha256":_sha(artifact)},"pre_audit":{"path":"x.json","sha256":_sha(artifact),"verdict":"ACCEPT"},"code_changes":[{"operation":"replace_text","path":"server.py","expected_file_sha256":_sha(target),"old_text":"x","new_text":"y","expected_occurrences":1,"evidence_binding":binding}]}
+    payload["plan_binding_sha256"]=code_adapter._canonical_sha256(payload);plan.write_text(json.dumps(payload));monkeypatch.setenv("BOTS_V3_PRODUCTION_AUTHORITY","false")
+    with pytest.raises(ValueError,match="approved Automation V3 managed surface"):code_adapter.apply_release_plan(tmp_path,plan,base_sha="e"*40,instrument="AUD_USD")

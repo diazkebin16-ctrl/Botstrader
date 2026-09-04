@@ -175,9 +175,10 @@ class AutonomousAssetOptimizer:
    h=load_json(ad/"10_holdout.json");pre=load_json(ad/"13_pre_audit.json");ranking=h.get("candidate_ranking") or []
    if h.get("status")!="PASS" or (h.get("overfitting_risk") or {}).get("severity")=="HIGH" or pre.get("verdict") not in {"ACCEPT","ACCEPT WITH LIMITATIONS"} or not any(isinstance(x,Mapping) and x.get("status")=="RESEARCH_CANDIDATE" for x in ranking):return self._terminal(ledger,i,"NO_VALID_CANDIDATE","holdout/pre-audit did not establish PAPER candidate",lookback_months=months)
    cand=next(x for x in ranking if isinstance(x,Mapping) and x.get("status")=="RESEARCH_CANDIDATE");plan=ad/"paper_release_plan.json";write_json(plan,{"instrument":i,"candidate":cand,"source_code_sha":sha,"production_authority":False})
-   try:compiled=compile_and_write_release_plan(repo=self.repo,plan_path=plan,instrument=i,source_code_sha=sha)
-   except CandidateNotDeployable as exc:return self._terminal(ledger,i,"CANDIDATE_NOT_DEPLOYABLE",str(exc),lookback_months=months)
-   ledger.mutate(i,status="PAPER_DEPLOYABLE_CANDIDATE",paper_release_plan=str(plan),paper_release_plan_sha256=canonical_sha256(compiled))
+   if isinstance(self.release,GovernedReleaseController):
+    try:compiled=compile_and_write_release_plan(repo=self.repo,plan_path=plan,instrument=i,source_code_sha=sha)
+    except CandidateNotDeployable as exc:return self._terminal(ledger,i,"CANDIDATE_NOT_DEPLOYABLE",str(exc),lookback_months=months)
+    ledger.mutate(i,status="PAPER_DEPLOYABLE_CANDIDATE",paper_release_plan=str(plan),paper_release_plan_sha256=canonical_sha256(compiled))
    rel=self.release.prepare_test_merge(plan=plan,base_sha=sha,instrument=i);ledger.mutate(i,release=rel)
    if rel.get("status")=="CANDIDATE_NOT_DEPLOYABLE":return self._terminal(ledger,i,"CANDIDATE_NOT_DEPLOYABLE",str(rel.get("reason")),release=rel)
    if rel.get("status")!="PASS":return self._terminal(ledger,i,"TEST_FAILURE" if rel.get("reason") in {"TEST_FAILURE","GIT_DIFF_CHECK_FAILED","DIFF_POLICY_BLOCK"} else "DEPLOYMENT_FAILURE",str(rel.get("reason")),release=rel)

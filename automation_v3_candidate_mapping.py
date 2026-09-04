@@ -139,7 +139,7 @@ def compile_release_plan(
     candidate_id = str(freeze.get("candidate_id") or "")
     if not candidate_id or definition.get("id") != candidate_id:
         raise CandidateNotDeployable("candidate identity mismatch")
-    request_candidate = request.get("candidate") or {}
+    request_candidate = request.get("candidate") or {"candidate_id": request.get("candidate_id")}
     if not isinstance(request_candidate, Mapping) or request_candidate.get("candidate_id") != candidate_id:
         raise CandidateNotDeployable("release candidate does not match freeze")
 
