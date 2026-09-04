@@ -38,9 +38,6 @@ jobs:
       BOTS_V3_RAILWAY_ENVIRONMENT_ID: 3f0906f8-56a4-471f-9c19-cea4d0a82f20
       BOTS_V3_RAILWAY_SERVICE_ID: 06f23754-3652-4817-a119-2c9851408120
       BOTS_V3_HEALTHCHECK_URL: https://botstrader-production.up.railway.app/
-      BOTS_RESEARCH_ROOT: ${{ runner.temp }}/Botstrader_Research
-      BOTS_V3_REMOTE_STATUS_PATH: ${{ runner.temp }}/Botstrader_Research/remote_status.json
-      BOTS_V3_REMOTE_DEPLOY_STATE: ${{ runner.temp }}/Botstrader_Research/deployment_state.json
 
     steps:
       - name: Validate trigger input
@@ -57,6 +54,13 @@ jobs:
           ref: main
           fetch-depth: 0
           persist-credentials: true
+
+      - name: Configure remote runtime paths
+        shell: bash
+        run: |
+          echo "BOTS_RESEARCH_ROOT=$RUNNER_TEMP/Botstrader_Research" >> "$GITHUB_ENV"
+          echo "BOTS_V3_REMOTE_STATUS_PATH=$RUNNER_TEMP/Botstrader_Research/remote_status.json" >> "$GITHUB_ENV"
+          echo "BOTS_V3_REMOTE_DEPLOY_STATE=$RUNNER_TEMP/Botstrader_Research/deployment_state.json" >> "$GITHUB_ENV"
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
