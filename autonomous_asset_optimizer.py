@@ -5,6 +5,7 @@ import argparse,asyncio,hashlib,json,os,subprocess,sys,tempfile
 from datetime import datetime,timedelta,timezone
 from pathlib import Path
 from typing import Any,Mapping
+from automation_v3_release import ReleaseController as GovernedReleaseController
 
 LOOKBACK_SEQUENCE=(1,3,6,12);MAX_RESEARCH_LOOKBACK_MONTHS=12
 SUPPORTED_INSTRUMENTS=("AUD_USD","EUR_USD","GBP_USD","USD_JPY","USD_CAD")
@@ -129,6 +130,8 @@ class ReleaseController:
   rb=False
   if rollback:rb=self._run(rollback.split(),cwd=self.repo,env=env).returncode==0
   return {"status":"DEPLOYMENT_FAILURE","reason":"PAPER_VERIFY_FAILED","rollback_attempted":bool(rollback),"rollback_succeeded":rb,"production_authority":False}
+
+ReleaseController=GovernedReleaseController
 
 class AutonomousAssetOptimizer:
  def __init__(self,repo,*,data_source=None,release=None,now=None,cascade_factory=None,manager_factory=None,stage_builder=None,code_sha_provider=None):
