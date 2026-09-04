@@ -6,7 +6,7 @@ import pytest
 from automation_v3_candidate_mapping import CandidateNotDeployable, _canonical_rules
 from historical_execution import HistoricalExecutionConfig, resolve_executed_outcome
 from historical_replay import build_research_target_episodes
-from operational_time import NY, fixed_entry_gate, operational_close_after
+from operational_time import NY, fixed_entry_gate
 from research_phase2 import _phase1_eligible_rows
 from research_pipeline import RESEARCHABLE_STRATEGY_GATES, analyze_phase1
 
@@ -130,7 +130,6 @@ def test_14_no_artificial_timeout_at_240_minutes():
 
 def test_15_data_coverage_horizon_is_separate_constant_contract():
     from research_integrity import validate_dataset
-    import research_integrity
     assert "required_end = end_dt + timedelta(minutes=max(0, int(horizon_minutes)))" in __import__("inspect").getsource(validate_dataset)
     assert "horizon_minutes" in __import__("inspect").signature(validate_dataset).parameters
 
