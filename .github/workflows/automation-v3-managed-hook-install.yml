@@ -1,0 +1,42 @@
+name: Automation V3 Managed Hook Installer
+
+on:
+  push:
+    branches:
+      - feature/automation-v3-remote-runner
+    paths:
+      - install_v3_managed_strategy_hook.py
+      - .github/workflows/automation-v3-managed-hook-install.yml
+
+permissions:
+  contents: write
+
+jobs:
+  install:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/automation-v3-remote-runner
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Apply deterministic one-time integration patch
+        run: python install_v3_managed_strategy_hook.py
+      - name: Verify only intended runtime files changed
+        shell: bash
+        run: |
+          changed="$(git diff --name-only)"
+          printf '%s\n' "$changed"
+          test "$changed" = $'autonomous_asset_optimizer.py\nserver.py' || test "$changed" = $'server.py\nautonomous_asset_optimizer.py'
+          git diff --check
+          python -m compileall -q autonomous_asset_optimizer.py server.py managed_strategy_rules.py automation_v3_candidate_mapping.py
+      - name: Commit integration patch
+        shell: bash
+        run: |
+          git config user.name "Botstrader Automation V3"
+          git config user.email "automation-v3@users.noreply.github.com"
+          git add autonomous_asset_optimizer.py server.py
+          git commit -m "Integrate managed Automation V3 strategy rules"
+          git push origin HEAD:feature/automation-v3-remote-runner
