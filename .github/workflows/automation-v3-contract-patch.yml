@@ -1,0 +1,31 @@
+name: Automation V3 Contract Patch
+
+on:
+  push:
+    branches: [feature/automation-v3-remote-runner]
+    paths:
+      - patch_v3_contract_compat.py
+      - .github/workflows/automation-v3-contract-patch.yml
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/automation-v3-remote-runner
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python patch_v3_contract_compat.py
+      - run: |
+          git diff --check
+          python -m compileall -q autonomous_asset_optimizer.py automation_v3_candidate_mapping.py automation_v3_remote_worker.py test_automation_v3_remote_runner.py
+      - run: |
+          git config user.name "Botstrader Automation V3"
+          git config user.email "automation-v3@users.noreply.github.com"
+          git add autonomous_asset_optimizer.py automation_v3_candidate_mapping.py automation_v3_remote_worker.py test_automation_v3_remote_runner.py
+          git commit -m "Align remote runner with deterministic candidate contract"
+          git push origin HEAD:feature/automation-v3-remote-runner
