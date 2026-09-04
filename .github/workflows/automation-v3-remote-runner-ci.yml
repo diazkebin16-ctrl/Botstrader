@@ -9,6 +9,7 @@ on:
       - fix/automation-v3-discovery-expansion
       - fix/automation-v3-phase1-continuation
       - fix/automation-v3-discovery-pregate-diagnostic
+      - fix/automation-v3-phase1-population-architecture
   workflow_dispatch:
 
 permissions:
@@ -52,6 +53,9 @@ jobs:
       - name: Focused discovery pre-gate diagnostic tests
         run: python -m pytest -q test_automation_v3_discovery_pregate.py
 
+      - name: Focused Phase 1 population architecture tests
+        run: python -m pytest -q test_phase1_population_architecture.py
+
       - name: Remote runner tests
         run: python -m pytest -q test_automation_v3_remote_runner.py
 
@@ -69,16 +73,16 @@ jobs:
 
       - name: Pyflakes changed Python files
         run: |
-          pyflakes automation_v3_candidate_mapping.py managed_strategy_rules.py automation_v3_code_change_adapter.py automation_v3_release.py automation_v3_railway_adapter.py automation_v3_remote_worker.py autonomous_asset_optimizer.py automation_v3_integrity_recovery.py automation_v3_phase1_continuation.py automation_v3_discovery_pregate.py test_automation_v3_candidate_mapping.py test_automation_v3_remote_runner.py test_automation_v3_integrity_recovery.py test_automation_v3_sha_horizon.py test_automation_v3_discovery_expansion.py test_automation_v3_phase1_continuation.py test_automation_v3_discovery_pregate.py
+          pyflakes automation_v3_candidate_mapping.py managed_strategy_rules.py automation_v3_code_change_adapter.py automation_v3_release.py automation_v3_railway_adapter.py automation_v3_remote_worker.py autonomous_asset_optimizer.py automation_v3_integrity_recovery.py automation_v3_phase1_continuation.py automation_v3_discovery_pregate.py historical_replay.py research_pipeline.py research_phase2.py research_manager.py test_automation_v3_candidate_mapping.py test_automation_v3_remote_runner.py test_automation_v3_integrity_recovery.py test_automation_v3_sha_horizon.py test_automation_v3_discovery_expansion.py test_automation_v3_phase1_continuation.py test_automation_v3_discovery_pregate.py test_phase1_population_architecture.py test_research_pipeline.py
 
       - name: Git diff check
         run: |
-          git diff --check 7d1bf853d4e59c6de57bb5497f95f49fd0fb9b96 HEAD
+          git diff --check 4743428e3af6c6501772d8cc77b04209fd18710f HEAD
 
       - name: Protected file verification
         shell: bash
         run: |
-          test -z "$(git diff --name-only 7d1bf853d4e59c6de57bb5497f95f49fd0fb9b96 HEAD -- server.py forward_experiment.py)"
+          test -z "$(git diff --name-only 4743428e3af6c6501772d8cc77b04209fd18710f HEAD -- server.py forward_experiment.py)"
 
       - name: Secret and dataset policy scan
         run: |
@@ -90,7 +94,7 @@ jobs:
           changed = [
               pathlib.Path(line.strip())
               for line in subprocess.check_output(
-                  ['git','diff','--name-only','7d1bf853d4e59c6de57bb5497f95f49fd0fb9b96','HEAD'],
+                  ['git','diff','--name-only','4743428e3af6c6501772d8cc77b04209fd18710f','HEAD'],
                   text=True,
               ).splitlines()
               if line.strip()
