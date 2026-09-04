@@ -243,6 +243,8 @@ def prepare_phase2(
     if source.get("lookahead_protection") is not True:
         raise ValueError("Target population lacks look-ahead protection")
     rows = list(source.get("episodes") or [])
+    if any(row.get("operational_entry_allowed") is False for row in rows):
+        raise ValueError("Phase 2 cannot research fixed operational-entry blocked episodes")
     validate_rows(rows)
     dedup = episode_dedup_evidence(rows)
     replay_methodology = source.get("replay_methodology") or {}
@@ -340,7 +342,10 @@ def _phase1_eligible_rows(spec: Mapping[str, Any], rows: Sequence[Mapping[str, A
     # reimplementing it in Phase 2.
     from research_pipeline import _eligible
     opened = set((spec.get("phase1_policy") or {}).get("opened_gates") or [])
-    return [dict(row) for row in rows if _eligible(row, opened)]
+    return [
+        dict(row) for row in rows
+        if row.get("operational_entry_allowed") is not False and _eligible(row, opened)
+    ]
 
 
 def _generate_candidates(rows: Sequence[Mapping[str, Any]]) -> List[Dict[str, Any]]:

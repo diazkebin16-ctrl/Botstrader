@@ -11,6 +11,7 @@ from managed_strategy_rules import APPROVED_FEATURES, APPROVED_OPERATORS, SUPPOR
 MANAGED_PATH = "managed_strategy_rules.py"
 ACCEPTED_AUDIT_VERDICTS = {"ACCEPT", "ACCEPT WITH LIMITATIONS"}
 MAX_COMPOSITE_RULES = 3
+PROHIBITED_OPERATIONAL_FEATURE_MARKERS = ("entry_time", "entry_window", "schedule", "blackout", "operational_time")
 ARTIFACT_FILES = {
     "target_population": "03_target_population.json",
     "phase_2": "05_phase_2.json",
@@ -75,6 +76,8 @@ def _canonical_rules(definition: Mapping[str, Any]) -> list[dict[str, Any]]:
             raise CandidateNotDeployable("candidate rule is not declarative")
         feature = str(raw.get("feature") or "")
         operator = str(raw.get("operator") or "")
+        if any(marker in feature.lower() for marker in PROHIBITED_OPERATIONAL_FEATURE_MARKERS):
+            raise CandidateNotDeployable("candidate cannot relax fixed operational schedule")
         if feature not in APPROVED_FEATURES:
             raise CandidateNotDeployable(f"candidate feature has no approved mapping: {feature}")
         if operator not in APPROVED_OPERATORS:

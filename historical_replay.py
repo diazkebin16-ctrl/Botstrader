@@ -21,6 +21,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Sequence, Tuple
 
 from research_evidence import collapse_market_episodes
 from historical_execution import HistoricalExecutionConfig, resolve_executed_outcome
+from operational_time import fixed_entry_gate, minutes_needed_through_close, planned_entry_time
 from replay_validation import ReplayValidationConfig, chronological_holdout, walk_forward_splits
 from legacy_v331_scoring import legacy_v331_score
 
@@ -228,6 +229,8 @@ def build_research_target_episodes(
     """
     target_rows: List[Dict[str, Any]] = []
     for row in rows:
+        if row.get("operational_entry_allowed") is False:
+            continue
         direction = str(row.get("signal") or "").upper()
         if direction not in ("BUY", "SELL"):
             direction = str(row.get("chosen_signal") or "").upper()
@@ -340,7 +343,13 @@ def _resolve_episode(store: CandleStore, row: Mapping[str, Any], inst: str,
     direction = str(row.get(direction_key) or "").upper()
     payload={"candle_ts":row["candle_ts"],"direction":direction,"entry":row["entry"],
              "stop":row["stop"],"target":row["target"],"instrument":inst}
-    future=store.future_m1_after(_dt(row["candle_ts"]), config.horizon_bars + max(0, int(config.execution.latency_bars)) + 1)
+    signal_ts=_dt(row["candle_ts"])
+    operational_needed=minutes_needed_through_close(signal_ts, config.execution.latency_bars)
+    future_count=max(
+        config.horizon_bars + max(0, int(config.execution.latency_bars)) + 1,
+        operational_needed,
+    )
+    future=store.future_m1_after(signal_ts, future_count)
     out=resolve_executed_outcome(payload,future,horizon_bars=config.horizon_bars,config=config.execution)
     resolved=dict(row)
     resolved["research_direction"]=direction
@@ -373,6 +382,14 @@ def replay_history(server: Any, candles_by_tf: Mapping[str,Sequence[Mapping[str,
                     server._direction_hypothesis(h1,m15,m5,m1,inst,"SELL"))
         for v in variants:
             row=replay_snapshot(server,h1,m15,m5,m1,inst,v,hypotheses=hypotheses)
+            planned_entry=planned_entry_time(_dt(row["candle_ts"]), config.execution.latency_bars)
+            operational_gate=fixed_entry_gate(planned_entry)
+            row["planned_entry_ts"]=planned_entry.isoformat()
+            row["operational_entry_allowed"]=bool(operational_gate["allowed"])
+            row["operational_entry_gate"]=operational_gate
+            if not operational_gate["allowed"]:
+                row["actionable"]=False
+                row["decision_reason"]="OPERATIONAL:"+str(operational_gate["reason"])
             if not row["actionable"]:
                 d=rejection[v.name];d[row["decision_reason"]]=d.get(row["decision_reason"],0)+1
                 if config.save_m1_rejection_shadow and row["decision_reason"]=="QUALITY:M1_CONFIRMATION" and row.get("signal") in ("BUY","SELL"):
@@ -452,6 +469,11 @@ def replay_history(server: Any, candles_by_tf: Mapping[str,Sequence[Mapping[str,
                            "exit_slippage_pips":config.execution.exit_slippage_pips,
                            "latency_bars":config.execution.latency_bars,
                            "require_bid_ask":config.execution.require_bid_ask,
+                           "fixed_entry_windows_et":["07:00-10:00","15:00-19:00"],
+                           "operational_entry_schedule_researchable":False,
+                           "trade_outcome_lifetime":"TP_OR_SL_OR_16:50_AMERICA_NEW_YORK",
+                           "data_coverage_horizon_bars":config.horizon_bars,
+                           "data_coverage_horizon_is_trade_timeout":False,
                            "validation":"CHRONOLOGICAL_HOLDOUT_PLUS_WALK_FORWARD_WITH_PURGING_AND_EMBARGO",
                            "embargo_minutes":config.validation.embargo_minutes,
                            "scope":"DETERMINISTIC_STRATEGY_CORE_NOT_PRODUCTION_ML_OR_MUTABLE_GATES",

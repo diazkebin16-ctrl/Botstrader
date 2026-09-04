@@ -46,6 +46,8 @@ def extract_target_population(replay_path: str, variant: str) -> Dict[str, Any]:
     if population.get("enabled") is not True:
         raise ValueError("Replay target_population was not enabled")
     rows = list(population.get("episodes") or [])
+    if any(row.get("operational_entry_allowed") is False for row in rows):
+        raise ValueError("Target population contains fixed operational-entry blocked episode")
     _validate_outcomes(rows)
     return {
         "status": "OK",
@@ -123,6 +125,8 @@ def analyze_phase1(
     if source.get("lookahead_protection") is not True:
         raise ValueError("Target population lacks look-ahead protection")
     all_rows = list(source.get("episodes") or [])
+    if any(row.get("operational_entry_allowed") is False for row in all_rows):
+        raise ValueError("Phase 1 cannot research fixed operational-entry blocked episodes")
     _validate_outcomes(all_rows)
     rows = list(all_rows)
     partition = None

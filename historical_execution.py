@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Mapping, Optional, Sequence
 
 from research_evidence import pip_size
+from operational_time import fixed_entry_gate, operational_close_after
 
 
 def _dt(value: Any) -> datetime:
@@ -102,6 +103,14 @@ def resolve_executed_outcome(
     if ask_o < bid_o:
         return _invalid("negative spread in historical candle", "DATA_INTEGRITY_ERROR")
 
+    entry_ts = _dt(first["t"])
+    operational_gate = fixed_entry_gate(entry_ts)
+    if operational_gate["allowed"] is not True:
+        out = _invalid(f"new entry blocked by fixed operational schedule: {operational_gate['reason']}", "ENTRY_BLOCKED_OPERATIONAL_TIME")
+        out.update({"entry_ts": entry_ts.isoformat(), "operational_entry_gate": operational_gate})
+        return out
+    operational_close = operational_close_after(entry_ts)
+
     if direction == "BUY":
         entry_fill = ask_o + entry_slip
         if not (stop < entry_fill < target):
@@ -118,9 +127,23 @@ def resolve_executed_outcome(
     entry_spread_pips = (ask_o - bid_o) / pip if pip > 0 else None
     mfe = 0.0
     mae = 0.0
-    max_bars = max(1, int(horizon_bars))
+    data_coverage_horizon_bars = max(1, int(horizon_bars))
 
-    for idx, bar in enumerate(bars[:max_bars], start=1):
+    for idx, bar in enumerate(bars, start=1):
+        bar_ts = _dt(bar["t"])
+        if bar_ts >= operational_close:
+            return {
+                "status": "TIMEOUT", "label": None, "bars": idx - 1,
+                "entry_ts": entry_ts.isoformat(), "exit_ts": operational_close.isoformat(),
+                "entry_fill": entry_fill, "planned_entry": planned_entry,
+                "entry_spread_pips": entry_spread_pips,
+                "entry_slippage_pips": float(config.entry_slippage_pips),
+                "exit_slippage_pips": float(config.exit_slippage_pips),
+                "mfe_r": mfe, "mae_r": mae, "realized_r": None,
+                "data_coverage_horizon_bars": data_coverage_horizon_bars,
+                "operational_close": operational_close.isoformat(),
+                "note": "Neither TP nor SL touched before 16:50 America/New_York operational close",
+            }
         if config.require_bid_ask and not has_bid_ask(bar):
             return _invalid("bid/ask series became incomplete inside outcome horizon", "DATA_INSUFFICIENT")
         if not has_bid_ask(bar):
@@ -143,8 +166,8 @@ def resolve_executed_outcome(
 
         common = {
             "bars": idx,
-            "entry_ts": _dt(first["t"]).isoformat(),
-            "exit_ts": _dt(bar["t"]).isoformat(),
+            "entry_ts": entry_ts.isoformat(),
+            "exit_ts": bar_ts.isoformat(),
             "entry_fill": entry_fill,
             "planned_entry": planned_entry,
             "entry_spread_pips": entry_spread_pips,
@@ -152,6 +175,8 @@ def resolve_executed_outcome(
             "exit_slippage_pips": float(config.exit_slippage_pips),
             "mfe_r": mfe,
             "mae_r": mae,
+            "data_coverage_horizon_bars": data_coverage_horizon_bars,
+            "operational_close": operational_close.isoformat(),
         }
         if hit_tp and hit_sl:
             return {"status": "AMBIGUOUS", "label": None, "realized_r": None,
@@ -167,16 +192,7 @@ def resolve_executed_outcome(
             return {"status": "LOSS", "label": 0, "exit_fill": exit_fill, "realized_r": realized,
                     "note": None, **common}
 
-    if len(bars) >= max_bars:
-        last = bars[max_bars - 1]
-        return {
-            "status": "TIMEOUT", "label": None, "bars": max_bars,
-            "entry_ts": _dt(first["t"]).isoformat(), "exit_ts": _dt(last["t"]).isoformat(),
-            "entry_fill": entry_fill, "planned_entry": planned_entry,
-            "entry_spread_pips": entry_spread_pips,
-            "entry_slippage_pips": float(config.entry_slippage_pips),
-            "exit_slippage_pips": float(config.exit_slippage_pips),
-            "mfe_r": mfe, "mae_r": mae, "realized_r": None,
-            "note": f"No resolution in {max_bars} executable M1 bars",
-        }
+    # Exhausting the caller's available candles before operational close is
+    # not a trade TIMEOUT.  It is unresolved evidence and must remain PENDING so
+    # data coverage can be repaired independently of trade lifetime semantics.
     return None
