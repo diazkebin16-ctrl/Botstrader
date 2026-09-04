@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any, Dict, Mapping, Optional
 
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 PHASES = (
     "data_integrity", "replay", "target_population", "phase_1", "phase_2",
     "discovery", "discovery_repeat", "determinism", "freeze", "holdout",
@@ -56,7 +56,7 @@ def _identity(provenance: Mapping[str, Any]) -> str:
 
 def _migrate_state(state: Dict[str, Any]) -> Dict[str, Any]:
     version = state.get("schema_version")
-    if version not in (1, 2, SCHEMA_VERSION):
+    if version not in (1, 2, 3, SCHEMA_VERSION):
         raise ValueError("Unsupported research state schema")
     for asset in (state.get("assets") or {}).values():
         phases = asset.setdefault("phases", {})
@@ -70,6 +70,10 @@ def _migrate_state(state: Dict[str, Any]) -> Dict[str, Any]:
                 record.setdefault("dataset_identity", dataset_identity)
                 record.setdefault("active", record.get("dataset_identity") == dataset_identity)
         asset.setdefault("frozen_candidates", [])
+        for record in asset.setdefault("phase1_best_viable_approvals", []):
+            record.setdefault("dataset_identity", dataset_identity)
+            record.setdefault("active", record.get("dataset_identity") == dataset_identity)
+            record.setdefault("production_authority", False)
         asset.setdefault("holdout_ledger", [])
         asset.setdefault("open_risks", asset.pop("risks", []))
         asset.setdefault("limitations", [])
@@ -147,9 +151,10 @@ class ResearchManager:
         candidates = existing.get("candidates") or []
         frozen_candidates = existing.get("frozen_candidates") or []
         audits = existing.get("audits") or []
+        phase1_best_viable_approvals = existing.get("phase1_best_viable_approvals") or []
         if identity_changed:
             phases = {phase: {"status": "PENDING", "reason": "INPUT_IDENTITY_CHANGED"} for phase in PHASES}
-            for record in [*candidates, *frozen_candidates, *audits]:
+            for record in [*candidates, *frozen_candidates, *audits, *phase1_best_viable_approvals]:
                 record["active"] = False
                 record["invalidated_reason"] = "INPUT_IDENTITY_CHANGED"
         asset = {
@@ -160,6 +165,7 @@ class ResearchManager:
             "candidates": candidates,
             "frozen_candidates": frozen_candidates,
             "audits": audits,
+            "phase1_best_viable_approvals": phase1_best_viable_approvals,
             "holdout_ledger": existing.get("holdout_ledger") or [],
             "open_risks": existing.get("open_risks") or existing.get("risks") or [],
             "limitations": existing.get("limitations") or [],
@@ -392,6 +398,172 @@ class ResearchManager:
         self.save(state)
         return asset
 
+    @staticmethod
+    def _best_policy_sha256(policy: Mapping[str, Any]) -> str:
+        material = json.dumps(
+            dict(policy), sort_keys=True, separators=(",", ":"), default=str
+        ).encode("utf-8")
+        return hashlib.sha256(material).hexdigest()
+
+    def approve_phase1_best_viable(
+        self, instrument: str, phase1_artifact: os.PathLike[str] | str, *,
+        ia1_approved: bool,
+    ) -> Dict[str, Any]:
+        """Approve exact reviewed Phase 1 evidence for research-only continuation."""
+        if not ia1_approved:
+            raise ValueError("IA #1 approval is required")
+
+        state = self.load()
+        instrument = instrument.upper()
+        asset = state["assets"].get(instrument)
+        if asset is None:
+            raise KeyError(f"Asset not registered: {instrument}")
+
+        artifact_path = Path(phase1_artifact).resolve()
+        if not artifact_path.is_file():
+            raise ValueError("Phase 1 artifact does not exist")
+
+        artifact_bytes_before = artifact_path.read_bytes()
+        artifact_sha = sha256_file(artifact_path)
+        try:
+            phase1 = json.loads(artifact_bytes_before.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError("Phase 1 artifact is malformed") from exc
+        if not isinstance(phase1, dict):
+            raise ValueError("Phase 1 artifact must be an object")
+
+        if phase1.get("stage") != "phase_1":
+            raise ValueError("Artifact is not Phase 1 evidence")
+        if str(phase1.get("instrument") or "").upper() != instrument:
+            raise ValueError("Phase 1 instrument does not match registered instrument")
+        if phase1.get("status") != "REVIEW_REQUIRED":
+            raise ValueError("Best-viable approval requires REVIEW_REQUIRED Phase 1")
+        if phase1.get("all_target_wins_recovered") is not False:
+            raise ValueError("Best-viable approval requires unrecovered target WINs")
+        if phase1.get("selection_scope") != "DISCOVERY_ONLY":
+            raise ValueError("Best-viable approval requires discovery-only Phase 1")
+        if phase1.get("lookahead_protection") is not True:
+            raise ValueError("Phase 1 lacks look-ahead protection")
+
+        unrecovered = phase1.get("unrecovered_target_wins")
+        if not isinstance(unrecovered, list) or not unrecovered:
+            raise ValueError("Best-viable approval requires unrecovered target WIN evidence")
+        for item in unrecovered:
+            if not isinstance(item, Mapping):
+                raise ValueError("Malformed unrecovered target WIN evidence")
+            immutable = item.get("immutable_blocks")
+            if not isinstance(immutable, list) or not immutable:
+                raise ValueError("Every unrecovered target WIN must have an immutable blocker")
+
+        best = phase1.get("best_policy")
+        candidates = phase1.get("candidates")
+        if not isinstance(best, Mapping) or not isinstance(candidates, list) or not candidates:
+            raise ValueError("Best-viable policy ranking evidence is incomplete")
+
+        allowed_gates = {"M1_CONFIRMATION", "QUALITY_EXTENSION", "LOW_ROOM"}
+        opened = best.get("opened_gates")
+        if not isinstance(opened, list) or any(gate not in allowed_gates for gate in opened):
+            raise ValueError("Best policy contains an unknown or immutable gate")
+
+        def rank(candidate: Mapping[str, Any]) -> tuple[Any, ...]:
+            gates = candidate.get("opened_gates")
+            if not isinstance(gates, list):
+                raise ValueError("Malformed Phase 1 candidate")
+            return (
+                -int(candidate.get("wins_recovered") or 0),
+                int(candidate.get("losses_released") or 0),
+                len(gates),
+                tuple(gates),
+            )
+
+        candidate_maps = [item for item in candidates if isinstance(item, Mapping)]
+        if len(candidate_maps) != len(candidates):
+            raise ValueError("Malformed Phase 1 candidate")
+        expected_best = sorted(candidate_maps, key=rank)[0]
+        if self._best_policy_sha256(best) != self._best_policy_sha256(expected_best):
+            raise ValueError("Phase 1 best policy does not match deterministic ranking")
+
+        target_phase = (asset.get("phases") or {}).get("target_population") or {}
+        target_sha = target_phase.get("artifact_sha256")
+        if not target_sha or phase1.get("input_sha256") != target_sha:
+            raise ValueError("Phase 1 target-population binding mismatch")
+
+        dataset_identity = asset.get("dataset_identity")
+        code_sha = (asset.get("provenance") or {}).get("code_sha")
+        if not dataset_identity or not code_sha:
+            raise ValueError("Current research identity is incomplete")
+
+        best_sha = self._best_policy_sha256(best)
+
+        for existing in reversed(asset.get("phase1_best_viable_approvals") or []):
+            if (
+                existing.get("active") is True
+                and existing.get("dataset_identity") == dataset_identity
+                and existing.get("phase1_artifact_sha256") == artifact_sha
+                and existing.get("best_policy_sha256") == best_sha
+            ):
+                return existing
+
+        approval = {
+            "approval_type": "BEST_VIABLE_POLICY",
+            "active": True,
+            "instrument": instrument,
+            "dataset_identity": dataset_identity,
+            "code_sha": code_sha,
+            "phase1_artifact": str(artifact_path),
+            "phase1_artifact_sha256": artifact_sha,
+            "target_population_sha256": target_sha,
+            "best_policy": dict(best),
+            "best_policy_sha256": best_sha,
+            "ia1_approved": True,
+            "production_authority": False,
+            "approved_at": utc_now(),
+        }
+        asset.setdefault("phase1_best_viable_approvals", []).append(approval)
+        self.save(state)
+
+        if artifact_path.read_bytes() != artifact_bytes_before:
+            raise RuntimeError("Phase 1 artifact changed during approval")
+
+        return approval
+
+    def active_phase1_best_viable_approval(
+        self, instrument: str, phase1_artifact: os.PathLike[str] | str,
+    ) -> Optional[Dict[str, Any]]:
+        state = self.load()
+        instrument = instrument.upper()
+        asset = state["assets"].get(instrument)
+        if asset is None:
+            return None
+        artifact_path = Path(phase1_artifact).resolve()
+        if not artifact_path.is_file():
+            return None
+        try:
+            phase1 = json.loads(artifact_path.read_text(encoding="utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return None
+        best = phase1.get("best_policy") if isinstance(phase1, Mapping) else None
+        if not isinstance(best, Mapping):
+            return None
+        artifact_sha = sha256_file(artifact_path)
+        best_sha = self._best_policy_sha256(best)
+        identity = asset.get("dataset_identity")
+        code_sha = (asset.get("provenance") or {}).get("code_sha")
+        for approval in reversed(asset.get("phase1_best_viable_approvals") or []):
+            if (
+                approval.get("active") is True
+                and approval.get("approval_type") == "BEST_VIABLE_POLICY"
+                and approval.get("instrument") == instrument
+                and approval.get("dataset_identity") == identity
+                and approval.get("code_sha") == code_sha
+                and approval.get("phase1_artifact_sha256") == artifact_sha
+                and approval.get("best_policy_sha256") == best_sha
+                and approval.get("ia1_approved") is True
+                and approval.get("production_authority") is False
+            ):
+                return dict(approval)
+        return None
+
     def approve_forward_candidate(
         self, instrument: str, candidate_id: str, *, ia1_approved: bool,
         ia2_verdict: str,
@@ -455,6 +627,10 @@ def main() -> None:
     phase.add_argument("phase", choices=PHASES)
     phase.add_argument("status", choices=PHASE_STATUSES)
     phase.add_argument("--artifact")
+    phase1_best = sub.add_parser("approve-phase1-best-viable")
+    phase1_best.add_argument("instrument")
+    phase1_best.add_argument("--artifact", required=True)
+    phase1_best.add_argument("--ia1-approved", action="store_true")
     forward = sub.add_parser("approve-forward")
     forward.add_argument("instrument");forward.add_argument("candidate_id")
     forward.add_argument("--ia1-approved",action="store_true")
@@ -470,6 +646,10 @@ def main() -> None:
         )
     elif args.command == "phase":
         result = manager.update_phase(args.instrument, args.phase, args.status, artifact=args.artifact)
+    elif args.command == "approve-phase1-best-viable":
+        result = manager.approve_phase1_best_viable(
+            args.instrument, args.artifact, ia1_approved=args.ia1_approved,
+        )
     elif args.command == "approve-forward":
         result = manager.approve_forward_candidate(
             args.instrument,args.candidate_id,ia1_approved=args.ia1_approved,

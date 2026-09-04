@@ -1,6 +1,8 @@
 """Research lifecycle gates with no production or trading authority."""
 from __future__ import annotations
 
+import hashlib
+import json
 from typing import Any, Dict, Mapping, Optional
 
 
@@ -19,6 +21,11 @@ class DecisionGateEngine:
         frozen: Optional[Mapping[str, Any]] = None,
         holdout: Optional[Mapping[str, Any]] = None,
         pre_audit: Optional[Mapping[str, Any]] = None,
+        phase1_approval: Optional[Mapping[str, Any]] = None,
+        instrument: Optional[str] = None,
+        dataset_identity: Optional[str] = None,
+        code_sha: Optional[str] = None,
+        phase1_artifact_sha256: Optional[str] = None,
         ia1_approved: bool = False,
     ) -> Dict[str, Any]:
         transition = transition.upper()
@@ -36,7 +43,32 @@ class DecisionGateEngine:
             require("replay_verified", methodology.get("no_lookahead_decision") is True, "REPLAY LOOK-AHEAD EVIDENCE MISSING")
             require("target_population_verified", bool(target_population) and target_population.get("lookahead_protection") is True, "TARGET POPULATION NOT VERIFIED")
             unrecovered = len((phase1 or {}).get("unrecovered_target_wins") or [])
-            require("phase_1_complete", bool(phase1) and phase1.get("all_target_wins_recovered") is True, f"{unrecovered} target WINs unrecovered in Phase 1")
+            recovered_all = bool(phase1) and phase1.get("all_target_wins_recovered") is True
+            reviewed_best_viable = False
+            if not recovered_all and isinstance(phase1_approval, Mapping):
+                best_policy = (phase1 or {}).get("best_policy")
+                best_policy_sha = None
+                if isinstance(best_policy, Mapping):
+                    material = json.dumps(
+                        dict(best_policy), sort_keys=True, separators=(",", ":"), default=str
+                    ).encode("utf-8")
+                    best_policy_sha = hashlib.sha256(material).hexdigest()
+                reviewed_best_viable = (
+                    phase1_approval.get("approval_type") == "BEST_VIABLE_POLICY"
+                    and phase1_approval.get("active") is True
+                    and phase1_approval.get("ia1_approved") is True
+                    and phase1_approval.get("production_authority") is False
+                    and phase1_approval.get("instrument") == str(instrument or "").upper()
+                    and phase1_approval.get("dataset_identity") == dataset_identity
+                    and phase1_approval.get("code_sha") == code_sha
+                    and phase1_approval.get("phase1_artifact_sha256") == phase1_artifact_sha256
+                    and phase1_approval.get("best_policy_sha256") == best_policy_sha
+                )
+            require(
+                "phase_1_complete_or_best_viable",
+                recovered_all or reviewed_best_viable,
+                f"{unrecovered} target WINs unrecovered in Phase 1",
+            )
             require("phase_1_discovery_only", bool(phase1) and phase1.get("selection_scope") == "DISCOVERY_ONLY", "PHASE 1 WAS NOT DISCOVERY-ONLY")
         elif transition == "HOLDOUT":
             require("discovery_complete", bool(discovery) and discovery.get("status") == "OK", "DISCOVERY NOT COMPLETE")

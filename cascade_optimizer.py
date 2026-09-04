@@ -99,8 +99,7 @@ class CascadeOptimizer:
         if forbidden:
             raise ValueError(f"Offline cascade forbids command containing: {forbidden}")
 
-    @staticmethod
-    def _transition_gate(name: str, stages: Mapping[str, Stage]) -> Optional[Dict[str, Any]]:
+    def _transition_gate(self, name: str, stages: Mapping[str, Stage], instrument: str) -> Optional[Dict[str, Any]]:
         if name not in {"phase_2", "holdout"}:
             return None
         from research_governance import DecisionGateEngine
@@ -110,9 +109,20 @@ class CascadeOptimizer:
                 return json.load(handle)
 
         if name == "phase_2":
+            phase1 = read("phase_1")
+            state = self.manager.load()
+            asset = state["assets"][instrument.upper()]
+            approval = self.manager.active_phase1_best_viable_approval(
+                instrument, stages["phase_1"].artifact,
+            )
             result = DecisionGateEngine.evaluate(
                 "PHASE_2", integrity=read("data_integrity"), replay=read("replay"),
-                target_population=read("target_population"), phase1=read("phase_1"),
+                target_population=read("target_population"), phase1=phase1,
+                phase1_approval=approval,
+                instrument=instrument.upper(),
+                dataset_identity=asset.get("dataset_identity"),
+                code_sha=(asset.get("provenance") or {}).get("code_sha"),
+                phase1_artifact_sha256=sha256_file(stages["phase_1"].artifact),
             )
         else:
             result = DecisionGateEngine.evaluate(
@@ -151,9 +161,29 @@ class CascadeOptimizer:
                 if expected and expected == sha256_file(stage.artifact):
                     completed.append(name)
                     continue
+            if name == "phase_1" and resume and stage.artifact.is_file():
+                approval = self.manager.active_phase1_best_viable_approval(instrument, stage.artifact)
+                if approval is not None:
+                    with stage.artifact.open("r", encoding="utf-8") as handle:
+                        reviewed_phase1 = json.load(handle)
+                    if (
+                        reviewed_phase1.get("status") == "REVIEW_REQUIRED"
+                        and reviewed_phase1.get("all_target_wins_recovered") is False
+                    ):
+                        self.manager.update_phase(
+                            instrument, name, "COMPLETED", artifact=str(stage.artifact),
+                            details={
+                                "review_status": "REVIEW_REQUIRED",
+                                "approval_type": "BEST_VIABLE_POLICY",
+                                "approval_phase1_artifact_sha256": approval.get("phase1_artifact_sha256"),
+                                "production_authority": False,
+                            },
+                        )
+                        completed.append(name)
+                        continue
             self.manager.update_phase(instrument, name, "RUNNING")
             try:
-                transition_gate = self._transition_gate(name, by_name)
+                transition_gate = self._transition_gate(name, by_name, instrument)
                 holdout_authorization = None
                 if name == "holdout":
                     with by_name["freeze"].artifact.open("r", encoding="utf-8") as handle:
@@ -235,8 +265,14 @@ class CascadeOptimizer:
                     )
                 completed.append(name)
             except BaseException as exc:
+                artifact_for_state = (
+                    str(stage.artifact)
+                    if name == "phase_1" and stage.artifact.is_file()
+                    else None
+                )
                 self.manager.update_phase(
                     instrument, name, "BLOCKED" if isinstance(exc, MethodologyViolation) else "FAILED",
+                    artifact=artifact_for_state,
                     details={"error": str(exc)},
                 )
                 raise
