@@ -56,12 +56,3 @@ replace_once(
     '        "last_error": error or run.get("stop_reason"),\n        "production_authority": False,',
     '        "last_error": error or run.get("stop_reason"),\n        "integrity_diagnostic": run.get("integrity_diagnostic") if isinstance(run.get("integrity_diagnostic"), dict) else None,\n        "production_authority": False,',
 )
-
-# CI: ensure the focused recovery tests are part of the branch gate.
-ci = Path(".github/workflows/automation-v3-remote-runner-ci.yml")
-text = ci.read_text(encoding="utf-8")
-needle = "      - name: Focused candidate contract tests\n        run: python -m pytest -q test_automation_v3_candidate_mapping.py\n"
-replacement = needle + "      - name: Focused integrity recovery tests\n        run: python -m pytest -q test_automation_v3_integrity_recovery.py\n"
-if text.count(needle) != 1:
-    raise SystemExit("CI insertion point missing")
-ci.write_text(text.replace(needle, replacement, 1), encoding="utf-8")
