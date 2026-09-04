@@ -9,6 +9,7 @@ from automation_v3_release import ReleaseController as GovernedReleaseController
 from automation_v3_candidate_mapping import CandidateNotDeployable,compile_and_write_release_plan
 from automation_v3_integrity_recovery import build_integrity_diagnostic,terminal_for_nonrecoverable
 from automation_v3_phase1_continuation import run_with_phase1_autonomous_continuation
+from automation_v3_discovery_pregate import build_pre_gate_diagnostic,classify_discovery_outcome
 
 LOOKBACK_SEQUENCE=(1,3,6,12);MAX_RESEARCH_LOOKBACK_MONTHS=12
 SUPPORTED_INSTRUMENTS=("AUD_USD","EUR_USD","GBP_USD","USD_JPY","USD_CAD")
@@ -139,8 +140,8 @@ class AutonomousAssetOptimizer:
    s=ledger.load();r=s.setdefault("runs",{}).setdefault(i,run);r.setdefault("decision_history",[]).append({"decision":"CODE_SHA_CHANGED","old":r.get("code_sha"),"new":sha,"at":utc_now()});
    for a in r.setdefault("approvals",[]):
     if a.get("active") is True:a["active"]=False;a["invalidated_reason"]="CODE_SHA_CHANGED"
-   r.update(status="NEW",paper_deployment=None,stop_reason=None,final_outcome=None,integrity_diagnostic=None,diagnostic=None,lookback_months=None,phase1_status=None,autonomous_approval=None);ledger.save(s)
-  end=aligned_research_end(self.now(),240);ledger.mutate(i,status="RUNNING",code_sha=sha,workspace=str(root),max_lookback_months=12,stop_reason=None,final_outcome=None,integrity_diagnostic=None,diagnostic=None,phase1_status=None,autonomous_approval=None)
+   r.update(status="NEW",paper_deployment=None,stop_reason=None,final_outcome=None,integrity_diagnostic=None,diagnostic=None,pre_gate_diagnostic=None,lookback_months=None,phase1_status=None,autonomous_approval=None);ledger.save(s)
+  end=aligned_research_end(self.now(),240);ledger.mutate(i,status="RUNNING",code_sha=sha,workspace=str(root),max_lookback_months=12,stop_reason=None,final_outcome=None,integrity_diagnostic=None,diagnostic=None,pre_gate_diagnostic=None,phase1_status=None,autonomous_approval=None)
   for months in LOOKBACK_SEQUENCE:
    ad=root/f"lookback_{months:02d}m_{sha[:12]}";ad.mkdir(parents=True,exist_ok=True);start=self._months_before(end,months);cache=root/"data"/f"{i}_{months:02d}m.json";cache_preexisting=cache.is_file();ledger.append(i,"lookback_attempts",{"months":months,"code_sha":sha,"start":start.isoformat(),"end":end.isoformat(),"status":"RUNNING","at":utc_now()})
    try:
@@ -187,11 +188,11 @@ class AutonomousAssetOptimizer:
     if err:
      dp=ad/"06_discovery.json"
      if dp.is_file():
-      diag=diagnose_discovery(load_json(dp));write_json(ad/"support_diagnostic.json",diag);ledger.append(i,"decision_history",{"decision":"DISCOVERY_DIAGNOSTIC","months":months,**diag,"at":utc_now()})
+      discovery=load_json(dp);pre_gate=build_pre_gate_diagnostic(ad/"03_target_population.json",ad/"05_phase_2.json",min_resolved=10);write_json(ad/"pre_gate_diagnostic.json",pre_gate);diag=classify_discovery_outcome(discovery,pre_gate,diagnose_discovery(discovery));write_json(ad/"support_diagnostic.json",diag);ledger.mutate(i,pre_gate_diagnostic=pre_gate,diagnostic=diag,lookback_months=months);ledger.append(i,"decision_history",{"decision":"DISCOVERY_DIAGNOSTIC","months":months,**diag,"at":utc_now()})
       if diag["recommended_action"]=="EXPAND_LOOKBACK":
-       if months==12:return self._terminal(ledger,i,"INSUFFICIENT_EVIDENCE","maximum lookback exhausted",diagnostic=diag)
+       if months==12:return self._terminal(ledger,i,"INSUFFICIENT_EVIDENCE","maximum lookback exhausted",diagnostic=diag,pre_gate_diagnostic=pre_gate)
        continue
-      if diag["recommended_action"]=="NO_VALID_CANDIDATE":return self._terminal(ledger,i,"NO_VALID_CANDIDATE",diag["dominant_failure"],diagnostic=diag)
+      if diag["recommended_action"]=="NO_VALID_CANDIDATE":return self._terminal(ledger,i,"NO_VALID_CANDIDATE",diag["dominant_failure"],diagnostic=diag,pre_gate_diagnostic=pre_gate)
      return self._terminal(ledger,i,"METHODOLOGY_BLOCKED",str(err),lookback_months=months)
    h=load_json(ad/"10_holdout.json");pre=load_json(ad/"13_pre_audit.json");ranking=h.get("candidate_ranking") or []
    if h.get("status")!="PASS" or (h.get("overfitting_risk") or {}).get("severity")=="HIGH" or pre.get("verdict") not in {"ACCEPT","ACCEPT WITH LIMITATIONS"} or not any(isinstance(x,Mapping) and x.get("status")=="RESEARCH_CANDIDATE" for x in ranking):return self._terminal(ledger,i,"NO_VALID_CANDIDATE","holdout/pre-audit did not establish PAPER candidate",lookback_months=months)
