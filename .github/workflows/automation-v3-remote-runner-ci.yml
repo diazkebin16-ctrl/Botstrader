@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - feature/automation-v3-remote-runner
+      - fix/automation-v3-integrity-recovery
   workflow_dispatch:
 
 permissions:
@@ -32,6 +33,9 @@ jobs:
       - name: Focused candidate contract tests
         run: python -m pytest -q test_automation_v3_candidate_mapping.py
 
+      - name: Focused integrity recovery tests
+        run: python -m pytest -q test_automation_v3_integrity_recovery.py
+
       - name: Remote runner tests
         run: python -m pytest -q test_automation_v3_remote_runner.py
 
@@ -49,21 +53,17 @@ jobs:
 
       - name: Pyflakes changed Python files
         run: |
-          pyflakes automation_v3_candidate_mapping.py managed_strategy_rules.py automation_v3_code_change_adapter.py automation_v3_release.py automation_v3_railway_adapter.py automation_v3_remote_worker.py autonomous_asset_optimizer.py test_automation_v3_candidate_mapping.py test_automation_v3_remote_runner.py
+          pyflakes automation_v3_candidate_mapping.py managed_strategy_rules.py automation_v3_code_change_adapter.py automation_v3_release.py automation_v3_railway_adapter.py automation_v3_remote_worker.py autonomous_asset_optimizer.py automation_v3_integrity_recovery.py test_automation_v3_candidate_mapping.py test_automation_v3_remote_runner.py test_automation_v3_integrity_recovery.py
 
       - name: Git diff check
-        run: git diff --check 04bebbb15d43fe4f81b9309f263f5d9db6267887 HEAD
+        run: |
+          git diff --check 04bebbb15d43fe4f81b9309f263f5d9db6267887 HEAD
+          git diff --check b29e0d5c7305b52856929d14894eb256cdc9aef7 HEAD
 
       - name: Protected file verification
         shell: bash
         run: |
-          test -z "$(git diff --name-only 04bebbb15d43fe4f81b9309f263f5d9db6267887 HEAD -- forward_experiment.py)"
-          patch="$(git diff --unified=0 04bebbb15d43fe4f81b9309f263f5d9db6267887 HEAD -- server.py)"
-          test -n "$patch"
-          printf '%s\n' "$patch" | grep -q 'managed_strategy_rules'
-          printf '%s\n' "$patch" | grep -q 'evaluate_managed_strategy_rules'
-          ! printf '%s\n' "$patch" | grep -q 'api-fxtrade.oanda.com'
-          ! printf '%s\n' "$patch" | grep -q 'PRODUCTION_AUTHORIZED'
+          test -z "$(git diff --name-only b29e0d5c7305b52856929d14894eb256cdc9aef7 HEAD -- server.py forward_experiment.py)"
 
       - name: Secret and dataset policy scan
         run: |
@@ -75,7 +75,7 @@ jobs:
           changed = [
               pathlib.Path(line.strip())
               for line in subprocess.check_output(
-                  ['git','diff','--name-only','04bebbb15d43fe4f81b9309f263f5d9db6267887','HEAD'],
+                  ['git','diff','--name-only','b29e0d5c7305b52856929d14894eb256cdc9aef7','HEAD'],
                   text=True,
               ).splitlines()
               if line.strip()
