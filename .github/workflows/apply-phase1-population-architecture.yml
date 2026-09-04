@@ -6,6 +6,7 @@ on:
       - fix/automation-v3-phase1-population-architecture
     paths:
       - apply_phase1_population_architecture.py
+      - .phase1-population-trigger
 
 permissions:
   contents: write
