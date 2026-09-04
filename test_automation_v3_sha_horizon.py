@@ -15,7 +15,7 @@ def _bundle(end, short=None):
     for tf,sec in steps.items():
         last=end-timedelta(seconds=sec)
         if short==tf:last-=timedelta(seconds=sec)
-        first=end-timedelta(days=11)
+        first=datetime(2026,7,20,0,0,tzinfo=timezone.utc)
         rows=[];t=first
         while t<=last:
             rows.append(_row(t));t+=timedelta(seconds=sec)
@@ -70,7 +70,6 @@ def test_no_double_add_of_horizon():
     now=datetime(2026,9,4,10,10,6,tzinfo=timezone.utc);assert aligned_research_end(now,240)==datetime(2026,9,4,6,0,tzinfo=timezone.utc)
 
 def test_production_authority_false_preserved():
-    # The new alignment is pure research-window selection and grants no authority.
     assert aligned_research_end(datetime(2026,9,4,10,10,tzinfo=timezone.utc),240).tzinfo==timezone.utc
 
 def test_run_33861871891_regression_fixture(tmp_path):
