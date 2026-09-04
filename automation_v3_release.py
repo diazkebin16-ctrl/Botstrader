@@ -1,6 +1,6 @@
 """Fail-closed Automation V3 code-change, merge and PAPER release controller."""
 from __future__ import annotations
-import os,subprocess,sys
+import os,subprocess,sys,shutil
 from pathlib import Path
 PRACTICE_OANDA_URL="https://api-fxpractice.oanda.com"
 PROTECTED_LIVE_FILES={"server.py","forward_experiment.py"}
@@ -35,6 +35,13 @@ class ReleaseController:
   if not ok:return self._blocked("DIFF_POLICY_BLOCK",detail=reason,branch=branch)
   t=self._run([sys.executable,"-m","pytest","-q",*TESTS],cwd=self.repo,env=env)
   if t.returncode:return self._blocked("TEST_FAILURE",branch=branch,test_output=(t.stdout+t.stderr)[-4000:])
+  for d in self.repo.rglob("__pycache__"): shutil.rmtree(d,ignore_errors=True)
+  shutil.rmtree(self.repo/".pytest_cache",ignore_errors=True)
+  for f in self.repo.rglob("*.pyc"):
+   try:f.unlink()
+   except FileNotFoundError:pass
+  ok,reason,names=self._scan(base_sha,working=True)
+  if not ok:return self._blocked("DIFF_POLICY_BLOCK",detail=reason,branch=branch)
   if self._git("diff","--check").returncode:return self._blocked("GIT_DIFF_CHECK_FAILED",branch=branch)
   self._git("add","-A")
   if self._git("commit","-m",f"Apply Automation V3 PAPER candidate for {instrument}").returncode:return self._blocked("COMMIT_FAILED",branch=branch)
