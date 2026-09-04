@@ -1,5 +1,4 @@
 import json
-from pathlib import Path
 
 import pytest
 
@@ -147,21 +146,18 @@ def test_no_lookahead_remains_enforced(tmp_path):
 
 
 def test_freeze_holdout_contract_remains_separate():
-    # Phase 1 produces policy/evidence only; it never marks holdout opened or frozen.
     assert "holdout_opened" not in analyze_phase1.__annotations__
 
 
 def test_lookback_expansion_only_for_insufficient_broad_support():
-    insufficient = {"dominant_failure": "INSUFFICIENT_SUPPORT", "recommended_action": "EXPAND_LOOKBACK"}
-    poor = {"dominant_failure": "NO_POSITIVE_EXPECTANCY", "recommended_action": "NO_VALID_CANDIDATE"}
-    assert classify_discovery_outcome(insufficient)["recommended_action"] == "EXPAND_LOOKBACK"
-    assert classify_discovery_outcome(poor)["recommended_action"] == "NO_VALID_CANDIDATE"
+    fallback = {"dominant_failure": "OTHER_METHODOLOGY_FAILURE", "recommended_action": "STOP"}
+    insufficient = {"available": True, "pass_all_pre_gate": 0, "dominant_failure": "INSUFFICIENT_SUPPORT", "recommended_action": "EXPAND_LOOKBACK"}
+    poor = {"available": True, "pass_all_pre_gate": 0, "dominant_failure": "NO_POSITIVE_EXPECTANCY", "recommended_action": "NO_VALID_CANDIDATE"}
+    assert classify_discovery_outcome({}, insufficient, fallback)["recommended_action"] == "EXPAND_LOOKBACK"
+    assert classify_discovery_outcome({}, poor, fallback)["recommended_action"] == "NO_VALID_CANDIDATE"
 
 
 def test_audusd_regression_shape_preserves_baseline_subset():
-    # The real run had 38 baseline WIN episodes but only 17 target WIN episodes.
-    # This synthetic shape reproduces the mechanism: pass windows separated by
-    # blocked strategy states must remain distinct in the broad population.
     rows = []
     for index in range(38):
         minute = index * 20
