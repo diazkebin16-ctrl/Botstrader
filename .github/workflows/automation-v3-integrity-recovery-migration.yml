@@ -19,15 +19,11 @@ jobs:
           python-version: '3.12'
       - name: Apply narrow integrity recovery patch
         run: python patch_v3_integrity_recovery.py
-      - name: Remove migration helpers
-        run: |
-          rm patch_v3_integrity_recovery.py
-          rm .github/workflows/automation-v3-integrity-recovery-migration.yml
-      - name: Commit migration
+      - name: Commit source migration
         run: |
           git config user.name "Botstrader Automation V3"
           git config user.email "automation-v3@users.noreply.github.com"
-          git add -A
+          git add autonomous_asset_optimizer.py automation_v3_remote_worker.py
           git diff --cached --check
           git commit -m "Add structured V3 integrity recovery"
           git push origin HEAD:fix/automation-v3-integrity-recovery
