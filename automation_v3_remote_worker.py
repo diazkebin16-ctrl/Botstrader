@@ -331,10 +331,17 @@ def run_worker(instrument: str) -> dict[str, Any]:
                 _mark_budget_checkpoint(root, instrument, "execution budget reached; safe resumable checkpoint persisted")
                 budget_checkpointed = True
                 break
+        communicated_stdout = ""
+        communicated_stderr = ""
         communicate = getattr(proc, "communicate", None)
         if callable(communicate):
             try:
-                communicate()
+                communicated = communicate()
+                if isinstance(communicated, tuple):
+                    if isinstance(communicated[0], str):
+                        communicated_stdout = communicated[0]
+                    if len(communicated) > 1 and isinstance(communicated[1], str):
+                        communicated_stderr = communicated[1]
             except ValueError:
                 pass
 
@@ -346,6 +353,10 @@ def run_worker(instrument: str) -> dict[str, Any]:
 
     stdout = stdout_path.read_text(encoding="utf-8") if stdout_path.exists() else ""
     stderr = stderr_path.read_text(encoding="utf-8") if stderr_path.exists() else ""
+    if not stdout.strip():
+        stdout = communicated_stdout
+    if not stderr.strip():
+        stderr = communicated_stderr
     result: dict[str, Any] = {}
     try:
         result = json.loads(stdout) if stdout.strip() else {}
