@@ -7,6 +7,7 @@ on:
       - fix/automation-v3-integrity-recovery
       - fix/automation-v3-sha-horizon
       - fix/automation-v3-discovery-expansion
+      - fix/automation-v3-phase1-continuation
   workflow_dispatch:
 
 permissions:
@@ -44,6 +45,9 @@ jobs:
       - name: Focused discovery expansion tests
         run: python -m pytest -q test_automation_v3_discovery_expansion.py
 
+      - name: Focused Phase 1 continuation tests
+        run: python -m pytest -q test_automation_v3_phase1_continuation.py
+
       - name: Remote runner tests
         run: python -m pytest -q test_automation_v3_remote_runner.py
 
@@ -61,16 +65,16 @@ jobs:
 
       - name: Pyflakes changed Python files
         run: |
-          pyflakes automation_v3_candidate_mapping.py managed_strategy_rules.py automation_v3_code_change_adapter.py automation_v3_release.py automation_v3_railway_adapter.py automation_v3_remote_worker.py autonomous_asset_optimizer.py automation_v3_integrity_recovery.py test_automation_v3_candidate_mapping.py test_automation_v3_remote_runner.py test_automation_v3_integrity_recovery.py test_automation_v3_sha_horizon.py test_automation_v3_discovery_expansion.py
+          pyflakes automation_v3_candidate_mapping.py managed_strategy_rules.py automation_v3_code_change_adapter.py automation_v3_release.py automation_v3_railway_adapter.py automation_v3_remote_worker.py autonomous_asset_optimizer.py automation_v3_integrity_recovery.py automation_v3_phase1_continuation.py test_automation_v3_candidate_mapping.py test_automation_v3_remote_runner.py test_automation_v3_integrity_recovery.py test_automation_v3_sha_horizon.py test_automation_v3_discovery_expansion.py test_automation_v3_phase1_continuation.py
 
       - name: Git diff check
         run: |
-          git diff --check 4bca8d1bf7aeb4fb15b91d5fb79f849bdf90288c HEAD
+          git diff --check 0a8cb00245f6c117e2fcd728b7a6b1084538879f HEAD
 
       - name: Protected file verification
         shell: bash
         run: |
-          test -z "$(git diff --name-only 4bca8d1bf7aeb4fb15b91d5fb79f849bdf90288c HEAD -- server.py forward_experiment.py)"
+          test -z "$(git diff --name-only 0a8cb00245f6c117e2fcd728b7a6b1084538879f HEAD -- server.py forward_experiment.py)"
 
       - name: Secret and dataset policy scan
         run: |
@@ -82,7 +86,7 @@ jobs:
           changed = [
               pathlib.Path(line.strip())
               for line in subprocess.check_output(
-                  ['git','diff','--name-only','4bca8d1bf7aeb4fb15b91d5fb79f849bdf90288c','HEAD'],
+                  ['git','diff','--name-only','0a8cb00245f6c117e2fcd728b7a6b1084538879f','HEAD'],
                   text=True,
               ).splitlines()
               if line.strip()
