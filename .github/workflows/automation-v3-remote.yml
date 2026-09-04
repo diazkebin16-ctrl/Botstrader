@@ -1,0 +1,132 @@
+name: Automation V3 Remote Optimizer
+
+on:
+  workflow_dispatch:
+    inputs:
+      instrument:
+        description: Instrument to optimize
+        required: true
+        type: choice
+        options:
+          - AUD_USD
+          - EUR_USD
+          - GBP_USD
+          - USD_JPY
+          - USD_CAD
+  repository_dispatch:
+    types: [automation-v3-optimize]
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: automation-v3-${{ github.event.inputs.instrument || github.event.client_payload.instrument || 'invalid' }}
+  cancel-in-progress: false
+
+jobs:
+  optimize-to-paper:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      INSTRUMENT: ${{ github.event.inputs.instrument || github.event.client_payload.instrument }}
+      GH_TOKEN: ${{ github.token }}
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      BOTS_V3_PRODUCTION_AUTHORITY: "false"
+      OANDA: https://api-fxpractice.oanda.com
+      BOTS_V3_RAILWAY_PROJECT_ID: c19fa79a-6284-4d9d-bddc-06a62c0f998b
+      BOTS_V3_RAILWAY_ENVIRONMENT_ID: 3f0906f8-56a4-471f-9c19-cea4d0a82f20
+      BOTS_V3_RAILWAY_SERVICE_ID: 06f23754-3652-4817-a119-2c9851408120
+      BOTS_V3_HEALTHCHECK_URL: https://botstrader-production.up.railway.app/
+      BOTS_RESEARCH_ROOT: ${{ runner.temp }}/Botstrader_Research
+      BOTS_V3_REMOTE_STATUS_PATH: ${{ runner.temp }}/Botstrader_Research/remote_status.json
+      BOTS_V3_REMOTE_DEPLOY_STATE: ${{ runner.temp }}/Botstrader_Research/deployment_state.json
+
+    steps:
+      - name: Validate trigger input
+        shell: bash
+        run: |
+          case "$INSTRUMENT" in
+            AUD_USD|EUR_USD|GBP_USD|USD_JPY|USD_CAD) ;;
+            *) echo "Unsupported instrument" >&2; exit 2 ;;
+          esac
+
+      - name: Checkout exact main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python and Railway tooling
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-research.txt
+          pip install pytest pyflakes
+          npm install -g @railway/cli@5.23.3
+          railway --version
+
+      - name: Configure ephemeral Git identity
+        shell: bash
+        run: |
+          git config user.name "Botstrader Automation V3"
+          git config user.email "automation-v3@users.noreply.github.com"
+          git status --porcelain
+
+      - name: Restore remote research state
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/Botstrader_Research
+          key: automation-v3-state-${{ env.INSTRUMENT }}-${{ github.run_id }}
+          restore-keys: |
+            automation-v3-state-${{ env.INSTRUMENT }}-
+
+      - name: Import PAPER credentials from Railway securely
+        shell: bash
+        run: python automation_v3_railway_adapter.py export-runtime
+
+      - name: Run remote Automation V3
+        shell: bash
+        env:
+          BOTS_V3_CODE_CHANGE_COMMAND: python automation_v3_code_change_adapter.py
+          BOTS_V3_PAPER_DEPLOY_COMMAND: python automation_v3_railway_adapter.py deploy
+          BOTS_V3_PAPER_VERIFY_COMMAND: python automation_v3_railway_adapter.py verify
+        run: python automation_v3_remote_worker.py "$INSTRUMENT"
+
+      - name: Save remote research state
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/Botstrader_Research
+          key: automation-v3-state-${{ env.INSTRUMENT }}-${{ github.run_id }}
+
+      - name: Upload status and governed evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: automation-v3-${{ env.INSTRUMENT }}-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/Botstrader_Research/**/*.json
+            ${{ runner.temp }}/Botstrader_Research/**/worker_stdout.log
+            ${{ runner.temp }}/Botstrader_Research/**/worker_stderr.log
+            !${{ runner.temp }}/Botstrader_Research/**/data/**
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Publish compact remote status
+        if: always()
+        shell: bash
+        run: |
+          if [ -f "$BOTS_V3_REMOTE_STATUS_PATH" ]; then
+            echo '### Automation V3 remote status' >> "$GITHUB_STEP_SUMMARY"
+            echo '```json' >> "$GITHUB_STEP_SUMMARY"
+            cat "$BOTS_V3_REMOTE_STATUS_PATH" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          fi
