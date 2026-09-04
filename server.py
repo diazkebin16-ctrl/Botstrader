@@ -8183,11 +8183,12 @@ def promote_validated_research_rule():
 
 def evaluate_active_research_rules(r):
     instrument=InstrumentRegistry.normalize_symbol((r or {}).get("instrument") or PRIMARY_INSTRUMENT)
-    if not instrument_profile(instrument).learned_research_veto_authority:
+    managed=evaluate_managed_strategy_rules(r or {})
+    legacy_authority=instrument_profile(instrument).learned_research_veto_authority
+    if not legacy_authority and not managed.get("active"):
         return {"ok":True,"active":False,"rules":[],"vetoes":[],
                 "reason":"instrument_scoped_research_not_validated","instrument":instrument}
-    managed=evaluate_managed_strategy_rules(r or {})
-    rules=get_active_research_rules()
+    rules=get_active_research_rules() if legacy_authority else []
     if not rules and not managed.get("active"):
         return {"ok":True,"active":False,"rules":[],"vetoes":[],"instrument":instrument}
     results=list(managed.get("rules") or []);vetoes=list(managed.get("vetoes") or [])

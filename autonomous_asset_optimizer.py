@@ -188,5 +188,5 @@ class AutonomousAssetOptimizer:
   return self._terminal(ledger,i,"INSUFFICIENT_EVIDENCE","lookback policy exhausted")
 
 def main():
- p=argparse.ArgumentParser(description="BotsTrader Automation V3 one-command optimizer; PAPER maximum authority");p.add_argument("instrument");a=p.parse_args();r=AutonomousAssetOptimizer(Path(__file__).resolve().parent).optimize(a.instrument);print(json.dumps(r,indent=2,sort_keys=True));raise SystemExit(0 if r.get("status") in {"PAPER_DEPLOYED","NO_VALID_CANDIDATE","INSUFFICIENT_EVIDENCE"} else 2)
+ p=argparse.ArgumentParser(description="BotsTrader Automation V3 one-command optimizer; PAPER maximum authority");p.add_argument("instrument");a=p.parse_args();r=AutonomousAssetOptimizer(Path(__file__).resolve().parent).optimize(a.instrument);print(json.dumps(r,indent=2,sort_keys=True));raise SystemExit(0 if r.get("status") in {"PAPER_DEPLOYED","CANDIDATE_NOT_DEPLOYABLE","NO_VALID_CANDIDATE","INSUFFICIENT_EVIDENCE"} else 2)
 if __name__=="__main__":main()
