@@ -1,0 +1,29 @@
+name: Automation V3 SHA Horizon Migration
+on:
+  push:
+    branches:
+      - fix/automation-v3-sha-horizon
+permissions:
+  contents: write
+jobs:
+  migrate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/automation-v3-sha-horizon
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Apply narrow SHA horizon patch
+        run: python patch_v3_sha_horizon.py
+      - name: Commit source change only
+        run: |
+          git config user.name "Botstrader Automation V3"
+          git config user.email "automation-v3@users.noreply.github.com"
+          git add autonomous_asset_optimizer.py
+          git diff --cached --check
+          git commit -m "Refresh V3 dataset identity after reacquire and align horizon"
+          git push origin HEAD:fix/automation-v3-sha-horizon
