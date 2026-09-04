@@ -1,0 +1,30 @@
+name: Automation V3 Managed Authority Fix
+on:
+  push:
+    branches: [feature/automation-v3-remote-runner]
+    paths:
+      - fix_v3_managed_authority.py
+      - .github/workflows/automation-v3-managed-authority-fix.yml
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/automation-v3-remote-runner
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python fix_v3_managed_authority.py
+      - run: |
+          git diff --check
+          python -m compileall -q autonomous_asset_optimizer.py server.py managed_strategy_rules.py
+      - run: |
+          git config user.name "Botstrader Automation V3"
+          git config user.email "automation-v3@users.noreply.github.com"
+          git add autonomous_asset_optimizer.py server.py
+          git commit -m "Isolate managed V3 authority by instrument"
+          git push origin HEAD:feature/automation-v3-remote-runner
