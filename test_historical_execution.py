@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 from historical_execution import HistoricalExecutionConfig, resolve_executed_outcome
 
