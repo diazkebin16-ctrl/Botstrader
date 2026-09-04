@@ -49,14 +49,10 @@ class DecisionGateEngine:
                 best_policy = (phase1 or {}).get("best_policy")
                 best_policy_sha = None
                 if isinstance(best_policy, Mapping):
-                    material = json.dumps(
-                        dict(best_policy), sort_keys=True, separators=(",", ":"), default=str
-                    ).encode("utf-8")
+                    material = json.dumps(dict(best_policy), sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
                     best_policy_sha = hashlib.sha256(material).hexdigest()
-                reviewed_best_viable = (
-                    phase1_approval.get("approval_type") == "BEST_VIABLE_POLICY"
-                    and phase1_approval.get("active") is True
-                    and phase1_approval.get("ia1_approved") is True
+                exact_binding = (
+                    phase1_approval.get("active") is True
                     and phase1_approval.get("production_authority") is False
                     and phase1_approval.get("instrument") == str(instrument or "").upper()
                     and phase1_approval.get("dataset_identity") == dataset_identity
@@ -64,11 +60,19 @@ class DecisionGateEngine:
                     and phase1_approval.get("phase1_artifact_sha256") == phase1_artifact_sha256
                     and phase1_approval.get("best_policy_sha256") == best_policy_sha
                 )
-            require(
-                "phase_1_complete_or_best_viable",
-                recovered_all or reviewed_best_viable,
-                f"{unrecovered} target WINs unrecovered in Phase 1",
-            )
+                human_review = (
+                    phase1_approval.get("approval_type") == "BEST_VIABLE_POLICY"
+                    and phase1_approval.get("ia1_approved") is True
+                )
+                autonomous_review = (
+                    phase1_approval.get("approval_type") == "AUTONOMOUS_RESEARCH_POLICY_APPROVAL"
+                    and phase1_approval.get("approval_authority") == "AUTOMATION_V3_POLICY"
+                    and phase1_approval.get("authorization_scope") == "RESEARCH_CONTINUATION_ONLY"
+                    and phase1_approval.get("ia1_approved") is False
+                    and phase1_approval.get("human_approval") is False
+                )
+                reviewed_best_viable = exact_binding and (human_review or autonomous_review)
+            require("phase_1_complete_or_best_viable", recovered_all or reviewed_best_viable, f"{unrecovered} target WINs unrecovered in Phase 1")
             require("phase_1_discovery_only", bool(phase1) and phase1.get("selection_scope") == "DISCOVERY_ONLY", "PHASE 1 WAS NOT DISCOVERY-ONLY")
         elif transition == "HOLDOUT":
             require("discovery_complete", bool(discovery) and discovery.get("status") == "OK", "DISCOVERY NOT COMPLETE")
