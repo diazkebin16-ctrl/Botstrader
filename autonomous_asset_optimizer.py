@@ -7,10 +7,11 @@ from pathlib import Path
 from typing import Any,Mapping
 from automation_v3_release import ReleaseController as GovernedReleaseController
 from automation_v3_candidate_mapping import CandidateNotDeployable,compile_and_write_release_plan
+from automation_v3_integrity_recovery import build_integrity_diagnostic,terminal_for_nonrecoverable
 
 LOOKBACK_SEQUENCE=(1,3,6,12);MAX_RESEARCH_LOOKBACK_MONTHS=12
 SUPPORTED_INSTRUMENTS=("AUD_USD","EUR_USD","GBP_USD","USD_JPY","USD_CAD")
-TERMINAL_STATES={"PAPER_DEPLOYED","PAPER_DEPLOYABLE_CANDIDATE","CANDIDATE_NOT_DEPLOYABLE","NO_VALID_CANDIDATE","INSUFFICIENT_EVIDENCE","DATA_SOURCE_UNAVAILABLE","METHODOLOGY_BLOCKED","TEST_FAILURE","DEPLOYMENT_FAILURE","UNSUPPORTED_INSTRUMENT"}
+TERMINAL_STATES={"PAPER_DEPLOYED","PAPER_DEPLOYABLE_CANDIDATE","CANDIDATE_NOT_DEPLOYABLE","NO_VALID_CANDIDATE","INSUFFICIENT_EVIDENCE","DATA_SOURCE_UNAVAILABLE","DATA_COVERAGE_INSUFFICIENT","DATA_INTEGRITY_FAILED","METHODOLOGY_BLOCKED","TEST_FAILURE","DEPLOYMENT_FAILURE","UNSUPPORTED_INSTRUMENT"}
 PRACTICE_OANDA_URL="https://api-fxpractice.oanda.com"
 AUTOMATION_APPROVAL_TYPE="AUTONOMOUS_RESEARCH_POLICY_APPROVAL";AUTOMATION_AUTHORITY="AUTOMATION_V3_POLICY";AUTOMATION_SCOPE="RESEARCH_CONTINUATION_ONLY"
 PROTECTED_LIVE_FILES={"server.py","forward_experiment.py"}
@@ -103,7 +104,7 @@ class OandaPracticeDataSource:
  async def acquire(self,instrument,start,end,cache,**kw):
   if not os.getenv("OANDA_TOKEN","").strip():raise RuntimeError("DATA_SOURCE_UNAVAILABLE: OANDA_TOKEN missing")
   from historical_candles import fetch_oanda_candles,save_bundle
-  fs=start-timedelta(days=int(kw.get("warmup_days",10)));fe=end+timedelta(minutes=int(kw.get("horizon_minutes",240)));tfs=("H1","M15","M5","M1")
+  fs=start-timedelta(days=int(kw.get("warmup_days",10))+int(kw.get("boundary_buffer_days",0)));fe=end+timedelta(minutes=int(kw.get("horizon_minutes",240))+int(kw.get("boundary_buffer_minutes",0)));tfs=("H1","M15","M5","M1")
   vals=await asyncio.gather(*(fetch_oanda_candles(instrument,tf,fs,fe,base_url=PRACTICE_OANDA_URL) for tf in tfs));bundle=dict(zip(tfs,vals))
   if any(not bundle[x] for x in tfs):raise RuntimeError("DATA_SOURCE_UNAVAILABLE: incomplete OANDA history")
   Path(cache).parent.mkdir(parents=True,exist_ok=True);save_bundle(str(cache),bundle);return Path(cache)
@@ -133,7 +134,7 @@ class AutonomousAssetOptimizer:
    r.update(status="NEW",paper_deployment=None,stop_reason=None);ledger.save(s)
   end=self.now().astimezone(timezone.utc)-timedelta(minutes=240);ledger.mutate(i,status="RUNNING",code_sha=sha,workspace=str(root),max_lookback_months=12)
   for months in LOOKBACK_SEQUENCE:
-   ad=root/f"lookback_{months:02d}m_{sha[:12]}";ad.mkdir(parents=True,exist_ok=True);start=self._months_before(end,months);cache=root/"data"/f"{i}_{months:02d}m.json";ledger.append(i,"lookback_attempts",{"months":months,"code_sha":sha,"start":start.isoformat(),"end":end.isoformat(),"status":"RUNNING","at":utc_now()})
+   ad=root/f"lookback_{months:02d}m_{sha[:12]}";ad.mkdir(parents=True,exist_ok=True);start=self._months_before(end,months);cache=root/"data"/f"{i}_{months:02d}m.json";cache_preexisting=cache.is_file();ledger.append(i,"lookback_attempts",{"months":months,"code_sha":sha,"start":start.isoformat(),"end":end.isoformat(),"status":"RUNNING","at":utc_now()})
    try:
     if not cache.is_file():asyncio.run(self.data_source.acquire(i,start,end,cache,warmup_days=10,horizon_minutes=240))
    except Exception as e:return self._terminal(ledger,i,"DATA_SOURCE_UNAVAILABLE",str(e),lookback_months=months)
@@ -157,12 +158,26 @@ class AutonomousAssetOptimizer:
     if err:
      ip=ad/"01_data_integrity.json"
      if ip.is_file():
-      failures=" ".join(str(x) for x in (load_json(ip).get("failures") or [])).upper()
-      if any(x in failures for x in ("COVERAGE","WARMUP","HORIZON","MISSING")):
+      diag=build_integrity_diagnostic(load_json(ip),artifact_path=ip,cache_path=cache,requested_start=start.isoformat(),requested_end=end.isoformat(),cache_preexisting=cache_preexisting,retry_count=0)
+      write_json(ad/"integrity_diagnostic.json",diag);ledger.mutate(i,integrity_diagnostic=diag,lookback_months=months);ledger.append(i,"decision_history",{"decision":"DATA_INTEGRITY_DIAGNOSTIC","months":months,"diagnostic":diag,"at":utc_now()})
+      if diag.get("recoverable") is True:
+       ledger.append(i,"decision_history",{"decision":"DATA_REACQUIRE_REQUIRED","months":months,"recommended_action":"REACQUIRE_SAME_LOOKBACK","at":utc_now()})
        try:
         if cache.exists():cache.unlink()
-        asyncio.run(self.data_source.acquire(i,start,end,cache,warmup_days=10,horizon_minutes=240));m.register_asset(i,code_sha=sha,start=start.isoformat(),end=end.isoformat(),warmup_days=10,horizon_minutes=240,data_sha256=sha256_file(cache));c.run(i,stages,through="prompts");err=None
-       except Exception as x:err=x
+        asyncio.run(self.data_source.acquire(i,start,end,cache,warmup_days=10,horizon_minutes=240,boundary_buffer_days=3,boundary_buffer_minutes=60))
+       except Exception as x:return self._terminal(ledger,i,"DATA_SOURCE_UNAVAILABLE",str(x),lookback_months=months,integrity_diagnostic=diag)
+       try:
+        m.register_asset(i,code_sha=sha,start=start.isoformat(),end=end.isoformat(),warmup_days=10,horizon_minutes=240,data_sha256=sha256_file(cache));c.run(i,stages,through="prompts");err=None;ledger.append(i,"decision_history",{"decision":"DATA_REACQUIRE_SUCCEEDED","months":months,"at":utc_now()})
+       except Exception as x:
+        err=x
+        if ip.is_file():
+         diag=build_integrity_diagnostic(load_json(ip),artifact_path=ip,cache_path=cache,requested_start=start.isoformat(),requested_end=end.isoformat(),cache_preexisting=False,retry_count=1)
+         write_json(ad/"integrity_diagnostic.json",diag);ledger.mutate(i,integrity_diagnostic=diag,lookback_months=months);ledger.append(i,"decision_history",{"decision":"DATA_INTEGRITY_RETRY_FAILED","months":months,"diagnostic":diag,"at":utc_now()})
+       if err and diag.get("recoverable") is True:
+        if months==12:return self._terminal(ledger,i,"DATA_COVERAGE_INSUFFICIENT","recoverable data coverage exhausted maximum lookback",lookback_months=months,integrity_diagnostic=diag)
+        ledger.append(i,"decision_history",{"decision":"EXPAND_LOOKBACK","months":months,"recommended_action":"EXPAND_LOOKBACK","at":utc_now()});continue
+      if err and diag.get("recoverable") is not True:
+       return self._terminal(ledger,i,terminal_for_nonrecoverable(diag),str(err),lookback_months=months,integrity_diagnostic=diag)
     if err:
      dp=ad/"06_discovery.json"
      if dp.is_file():
@@ -188,5 +203,5 @@ class AutonomousAssetOptimizer:
   return self._terminal(ledger,i,"INSUFFICIENT_EVIDENCE","lookback policy exhausted")
 
 def main():
- p=argparse.ArgumentParser(description="BotsTrader Automation V3 one-command optimizer; PAPER maximum authority");p.add_argument("instrument");a=p.parse_args();r=AutonomousAssetOptimizer(Path(__file__).resolve().parent).optimize(a.instrument);print(json.dumps(r,indent=2,sort_keys=True));raise SystemExit(0 if r.get("status") in {"PAPER_DEPLOYED","CANDIDATE_NOT_DEPLOYABLE","NO_VALID_CANDIDATE","INSUFFICIENT_EVIDENCE"} else 2)
+ p=argparse.ArgumentParser(description="BotsTrader Automation V3 one-command optimizer; PAPER maximum authority");p.add_argument("instrument");a=p.parse_args();r=AutonomousAssetOptimizer(Path(__file__).resolve().parent).optimize(a.instrument);print(json.dumps(r,indent=2,sort_keys=True));raise SystemExit(0 if r.get("status") in {"PAPER_DEPLOYED","CANDIDATE_NOT_DEPLOYABLE","NO_VALID_CANDIDATE","INSUFFICIENT_EVIDENCE","DATA_COVERAGE_INSUFFICIENT"} else 2)
 if __name__=="__main__":main()

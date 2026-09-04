@@ -18,9 +18,9 @@ from typing import Any, Mapping
 
 from autonomous_asset_optimizer import SUPPORTED_INSTRUMENTS
 
-EXPECTED_TERMINALS = {"PAPER_DEPLOYED", "CANDIDATE_NOT_DEPLOYABLE", "NO_VALID_CANDIDATE", "INSUFFICIENT_EVIDENCE"}
+EXPECTED_TERMINALS = {"PAPER_DEPLOYED", "CANDIDATE_NOT_DEPLOYABLE", "NO_VALID_CANDIDATE", "INSUFFICIENT_EVIDENCE", "DATA_COVERAGE_INSUFFICIENT"}
 FAIL_TERMINALS = {
-    "DATA_SOURCE_UNAVAILABLE", "METHODOLOGY_BLOCKED", "TEST_FAILURE",
+    "DATA_SOURCE_UNAVAILABLE", "DATA_INTEGRITY_FAILED", "METHODOLOGY_BLOCKED", "TEST_FAILURE",
     "DEPLOYMENT_FAILURE", "UNSUPPORTED_INSTRUMENT",
 }
 
@@ -110,6 +110,7 @@ def _snapshot(root: Path, instrument: str, run_id: str, *, terminal: str | None 
         "candidate": _candidate(root, instrument),
         "paper_deployment_status": paper_status,
         "last_error": error or run.get("stop_reason"),
+        "integrity_diagnostic": run.get("integrity_diagnostic") if isinstance(run.get("integrity_diagnostic"), dict) else None,
         "production_authority": False,
     }
 
