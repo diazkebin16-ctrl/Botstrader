@@ -233,7 +233,7 @@ def test_fresh_approval_minted_after_code_sha_change(tmp_path):
     phase1 = tmp_path / "04_phase_1.json"; write_json(phase1, _phase1(sha256_file(target)))
     fresh = manager.approve_phase1_autonomous(INSTRUMENT, phase1)
     history = ledger.run(INSTRUMENT)["approvals"]
-    assert history[0]["active"] is False and history[-1]["code_sha"] == CURRENT_SHA and history[-1]["active"] is True
+    assert history[0]["active"] is False and fresh["code_sha"] == CURRENT_SHA and fresh["active"] is True
 
 
 def test_resume_does_not_rerun_valid_earlier_stages(tmp_path):
