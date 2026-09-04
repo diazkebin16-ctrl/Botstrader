@@ -62,17 +62,18 @@ jobs:
           python - <<'PY'
           import pathlib
           import re
+          import subprocess
 
           changed = [
               pathlib.Path(line.strip())
-              for line in __import__('subprocess').check_output(
+              for line in subprocess.check_output(
                   ['git','diff','--name-only','04bebbb15d43fe4f81b9309f263f5d9db6267887','HEAD'],
                   text=True,
               ).splitlines()
               if line.strip()
           ]
           secret_assignment = re.compile(
-              r"(?i)(?:OANDA_TOKEN|RAILWAY_TOKEN|API_KEY|SECRET_KEY|PASSWORD)\s*=\s*['\"]([^'\"]+)['\"]"
+              r"(?im)^\s*(?:OANDA_TOKEN|RAILWAY_TOKEN|API_KEY|SECRET_KEY|PASSWORD)\s*=\s*['\"]([^'\"]+)['\"]"
           )
           placeholders = {
               'railway-secret', 'supersecret', 'x', 'y', 'g', 'r', 'o',
