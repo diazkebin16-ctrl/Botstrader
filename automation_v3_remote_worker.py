@@ -124,6 +124,8 @@ def _snapshot(root: Path, instrument: str, run_id: str, *, terminal: str | None 
         "paper_deployment_status": paper_status,
         "last_error": error or stored_error,
         "integrity_diagnostic": stored_integrity,
+        "phase1_status": run.get("phase1_status") if authoritative else None,
+        "autonomous_approval": run.get("autonomous_approval") if authoritative else None,
         "production_authority": False,
     }
 
