@@ -11,14 +11,15 @@ import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Mapping, Sequence
+from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence
 
 from research_manager import ResearchManager, sha256_file
 
 
 CASCADE = (
-    "replay", "target_population", "phase_1", "phase_2",
-    "discovery", "freeze", "holdout", "report",
+    "data_integrity", "replay", "target_population", "phase_1", "phase_2",
+    "discovery", "discovery_repeat", "determinism", "freeze", "holdout",
+    "audit", "report", "pre_audit", "prompts",
 )
 FORBIDDEN_COMMAND_PARTS = (
     "railway", "server.py", "deployment_manager.py", "deployment_runtime.py",
@@ -60,9 +61,22 @@ def validate_research_artifact(path: Path, phase: str) -> Dict[str, Any]:
             raise MethodologyViolation("dual-touch same-bar must be AMBIGUOUS")
     if report.get("lookahead_detected") is True:
         raise MethodologyViolation("artifact reports look-ahead")
-    if phase in {"phase_1", "phase_2", "discovery", "freeze", "holdout"}:
-        if report.get("lookahead_protection") is not True:
+    if phase in {"phase_1", "phase_2", "discovery", "discovery_repeat", "freeze", "holdout", "report", "pre_audit"}:
+        protected = report.get("lookahead_protection") is True
+        if phase == "report":
+            protected = (report.get("LOOK-AHEAD") or {}).get("status") == "PASS"
+        if not protected:
             raise MethodologyViolation(f"{phase} lacks explicit lookahead_protection=true")
+    if phase == "data_integrity" and str(report.get("status") or "").upper() != "PASS":
+        raise MethodologyViolation("dataset integrity gate did not pass")
+    if phase == "determinism" and str(report.get("status") or "").upper() != "PASS":
+        raise MethodologyViolation("determinism check did not pass")
+    if phase == "audit" and str(report.get("status") or "").upper() != "PASS":
+        raise MethodologyViolation("test/diff/package audit did not pass")
+    if phase == "freeze" and report.get("immutable") is not True:
+        raise MethodologyViolation("freeze artifact is not immutable")
+    if phase == "holdout" and report.get("retuning_after_holdout") is not False:
+        raise MethodologyViolation("holdout artifact does not prohibit retuning")
     return report
 
 
@@ -85,8 +99,31 @@ class CascadeOptimizer:
         if forbidden:
             raise ValueError(f"Offline cascade forbids command containing: {forbidden}")
 
+    @staticmethod
+    def _transition_gate(name: str, stages: Mapping[str, Stage]) -> Optional[Dict[str, Any]]:
+        if name not in {"phase_2", "holdout"}:
+            return None
+        from research_governance import DecisionGateEngine
+
+        def read(stage_name: str) -> Dict[str, Any]:
+            with stages[stage_name].artifact.open("r", encoding="utf-8") as handle:
+                return json.load(handle)
+
+        if name == "phase_2":
+            result = DecisionGateEngine.evaluate(
+                "PHASE_2", integrity=read("data_integrity"), replay=read("replay"),
+                target_population=read("target_population"), phase1=read("phase_1"),
+            )
+        else:
+            result = DecisionGateEngine.evaluate(
+                "HOLDOUT", discovery=read("discovery"), frozen=read("freeze"),
+            )
+        if result["status"] != "ALLOWED":
+            raise MethodologyViolation("; ".join(result["reasons"]))
+        return result
+
     def run(self, instrument: str, stages: Sequence[Stage], *, resume: bool = True,
-            through: str = "report") -> Dict[str, Any]:
+            through: str = "report", holdout_reproduction_read_only: bool = False) -> Dict[str, Any]:
         instrument = instrument.upper()
         if through not in CASCADE:
             raise ValueError(f"Unknown terminal stage: {through}")
@@ -100,7 +137,10 @@ class CascadeOptimizer:
             raise ValueError(f"Cascade manifest missing stages: {', '.join(missing)}")
 
         env = dict(os.environ)
-        env.update({"TRADING_ENVIRONMENT": "SIMULATION", "AUTO_TRADE": "false"})
+        env.update({
+            "TRADING_ENVIRONMENT": "SIMULATION", "AUTO_TRADE": "false",
+            "BOTS_RESEARCH_OFFLINE": "true",
+        })
         completed: List[str] = []
         for name in requested:
             stage = by_name[name]
@@ -113,6 +153,25 @@ class CascadeOptimizer:
                     continue
             self.manager.update_phase(instrument, name, "RUNNING")
             try:
+                transition_gate = self._transition_gate(name, by_name)
+                holdout_authorization = None
+                if name == "holdout":
+                    with by_name["freeze"].artifact.open("r", encoding="utf-8") as handle:
+                        frozen = json.load(handle)
+                    try:
+                        holdout_authorization = self.manager.begin_holdout(
+                            instrument,
+                            candidate_definition_sha256=str(frozen.get("candidate_definition_sha256") or ""),
+                            freeze_sha256=sha256_file(by_name["freeze"].artifact),
+                            read_only_reproduction=holdout_reproduction_read_only,
+                        )
+                        if (
+                            holdout_authorization.get("mode") == "READ_ONLY_REPRODUCTION"
+                            and Path(str(holdout_authorization.get("holdout_artifact") or "")).resolve() == stage.artifact.resolve()
+                        ):
+                            raise ValueError("Read-only reproduction requires a distinct holdout artifact path")
+                    except ValueError as exc:
+                        raise MethodologyViolation(str(exc)) from exc
                 result = self.runner(
                     list(stage.command), check=False, text=True,
                     capture_output=True, env=env,
@@ -122,12 +181,58 @@ class CascadeOptimizer:
                 if not stage.artifact.is_file():
                     raise RuntimeError(f"Expected artifact was not created: {stage.artifact}")
                 report = validate_research_artifact(stage.artifact, name)
-                if str(report.get("status") or "OK").upper() in {"FAILED", "BLOCKED", "REVIEW_REQUIRED"}:
+                blocking_statuses = {"FAIL", "FAILED", "BLOCKED", "REVIEW_REQUIRED", "NO_FREEZE_ELIGIBLE_CANDIDATE"}
+                if str(report.get("status") or "OK").upper() in blocking_statuses:
                     raise MethodologyViolation(f"Artifact status is {report['status']}")
+                if name == "holdout":
+                    try:
+                        self.manager.complete_holdout(
+                            instrument,
+                            candidate_definition_sha256=str(report.get("candidate_definition_sha256") or ""),
+                            freeze_sha256=sha256_file(by_name["freeze"].artifact),
+                            holdout_artifact=str(stage.artifact),
+                            read_only_reproduction=(holdout_authorization or {}).get("mode") == "READ_ONLY_REPRODUCTION",
+                        )
+                    except ValueError as exc:
+                        raise MethodologyViolation(str(exc)) from exc
+                evidence_summary = {
+                    key: report.get(key) for key in (
+                        "dataset_identity", "partitions", "candidate_space", "candidate_id",
+                        "freeze_status", "decision", "overfitting_risk", "verdict",
+                        "OUTPUT SHA256",
+                    ) if report.get(key) is not None
+                }
                 self.manager.update_phase(
                     instrument, name, "COMPLETED", artifact=str(stage.artifact),
-                    details={"command": list(stage.command)},
+                    details={
+                        "command": list(stage.command), "transition_gate": transition_gate,
+                        "evidence_summary": evidence_summary,
+                    },
                 )
+                if name == "freeze":
+                    current_identity = self.manager.load()["assets"][instrument]["dataset_identity"]
+                    self.manager.freeze_candidate(instrument, {
+                        "candidate_id": report.get("candidate_id"),
+                        "candidate_definition_sha256": report.get("candidate_definition_sha256"),
+                        "dataset_identity": current_identity,
+                        "artifact_dataset_identity": report.get("dataset_identity"),
+                        "code_sha": report.get("code_sha"),
+                        "target_population_sha256": report.get("target_population_sha256"),
+                        "phase2_sha256": report.get("phase2_sha256"),
+                        "discovery_sha256": report.get("discovery_sha256"),
+                        "artifact": str(stage.artifact),
+                        "artifact_sha256": sha256_file(stage.artifact),
+                        "rule": report.get("rule"),
+                        "threshold": report.get("threshold"),
+                    })
+                if name == "pre_audit":
+                    self.manager.add_audit(instrument, report)
+                    self.manager.record_risks_and_limitations(
+                        instrument,
+                        risks=[{"severity": key, "count": value} for key, value in (report.get("severities") or {}).items() if value],
+                        limitations=[] if report.get("verdict") == "ACCEPT" else ["Independent IA #2 and IA #1 review remain required."],
+                        forward_status="BLOCKED_HUMAN_IA1_REVIEW_REQUIRED",
+                    )
                 completed.append(name)
             except BaseException as exc:
                 self.manager.update_phase(
@@ -157,12 +262,14 @@ def main() -> None:
     parser.add_argument("--manifest", required=True)
     parser.add_argument("--state", default="research_state.json")
     parser.add_argument("--no-resume", action="store_true")
+    parser.add_argument("--holdout-reproduction-read-only", action="store_true")
     parser.add_argument("--through", choices=CASCADE, default="report")
     args = parser.parse_args()
     optimizer = CascadeOptimizer(ResearchManager(args.state))
     result = optimizer.run(
         args.instrument, load_manifest(args.manifest),
         resume=not args.no_resume, through=args.through,
+        holdout_reproduction_read_only=args.holdout_reproduction_read_only,
     )
     print(json.dumps(result, indent=2, sort_keys=True))
 

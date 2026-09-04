@@ -17,8 +17,7 @@ from __future__ import annotations
 from bisect import bisect_right
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
-import math
+from typing import Any, Dict, Iterable, List, Mapping, Sequence, Tuple
 
 from research_evidence import collapse_market_episodes
 from historical_execution import HistoricalExecutionConfig, resolve_executed_outcome
@@ -200,7 +199,13 @@ def replay_snapshot(server: Any, h1,m15,m5,m1,inst: str,variant: ReplayVariant, 
     filters["countertrend_strength_ok"]=not sel["countertrend"] or max(sel["buy_score"],sel["sell_score"])>=server.COUNTERTREND_EXECUTION_MIN_SCORE
     features={"rr_raw":float(chosen["rr_raw"]),"room_to_barrier_r":chosen.get("room_to_barrier_r"),
               "extension_atr":float(mt.get("extension_atr",0) or 0),"volatility_ratio":float(mt.get("volatility_ratio",0) or 0),
+              # Exact pre-entry M1 internals already produced by the strategy
+              # hypothesis.  No internal is reverse-engineered from outcomes.
+              "m1_momentum":float(mt.get("m1_momentum",0) or 0),
               "m1_confirm":1 if mt.get("m1_confirm") else 0,"m1_shadow_confirm":1 if mt.get("m1_shadow_confirm") else 0,
+              "m1_exception_shadow":1 if mt.get("m1_exception_shadow") else 0,
+              "m1_ema9_side_ok":1 if mt.get("m1_ema9_side_ok") else 0,
+              "m1_candle_color_ok":1 if mt.get("m1_candle_color_ok") else 0,
               "buy_score":sel["buy_score"],"sell_score":sel["sell_score"],"direction_edge":sel["direction_edge"],
               "h1_gap_atr":float(mt.get("h1_gap_atr",0) or 0),"h1_slope_atr":float(mt.get("h1_slope_atr",0) or 0),
               "m15_gap_atr":float(mt.get("m15_gap_atr",0) or 0),"m15_slope_atr":float(mt.get("m15_slope_atr",0) or 0),

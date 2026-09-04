@@ -6,7 +6,7 @@ import itertools
 import json
 from collections import Counter
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, Sequence, Tuple
+from typing import Any, Dict, Iterable, Mapping, Tuple
 
 from research_manager import sha256_file
 
@@ -52,6 +52,10 @@ def extract_target_population(replay_path: str, variant: str) -> Dict[str, Any]:
         "lookahead_protection": True,
         "future_bars_used_only_for_outcome": True,
         "scope": population.get("scope"),
+        "start": replay.get("start"),
+        "end": replay.get("end"),
+        "replay_methodology": methodology,
+        "dataset_identity": replay.get("input_identity") or {"status":"NOT TESTED"},
         "outcomes": outcome_counts(rows),
         "episodes": rows,
     }
@@ -86,13 +90,46 @@ def _eligible(row: Mapping[str, Any], opened: set[str]) -> bool:
     return not immutable and relaxable.issubset(opened)
 
 
-def analyze_phase1(target_population_path: str) -> Dict[str, Any]:
+def analyze_phase1(
+    target_population_path: str, *, discovery_only: bool = False,
+    horizon_minutes: int = 240, discovery_fraction: float = 0.60,
+    validation_fraction: float = 0.20, embargo_minutes: int = 30,
+) -> Dict[str, Any]:
     with open(target_population_path, "r", encoding="utf-8") as handle:
         source = json.load(handle)
     if source.get("lookahead_protection") is not True:
         raise ValueError("Target population lacks look-ahead protection")
     rows = list(source.get("episodes") or [])
     _validate_outcomes(rows)
+    partition = None
+    selection_scope = "FULL_POPULATION_LEGACY"
+    if discovery_only:
+        # Imported only for the Phase 1 discovery workflow.
+        from replay_validation import ReplayValidationConfig, chronological_holdout
+        from research_phase2 import _partition_hash
+        split = chronological_holdout(
+            rows, horizon_bars=horizon_minutes,
+            config=ReplayValidationConfig(
+                discovery_fraction=discovery_fraction,
+                validation_fraction=validation_fraction,
+                embargo_minutes=embargo_minutes,
+            ),
+        )
+        if split["status"] != "OK":
+            raise ValueError("Insufficient data for discovery-only Phase 1")
+        rows = split["discovery"]
+        selection_scope = "DISCOVERY_ONLY"
+        partition = {
+            "discovery_hash": _partition_hash(rows),
+            "discovery_episodes": len(rows),
+            "boundaries": split.get("boundaries") or {},
+            "purged": split.get("purged"),
+            "embargoed": split.get("embargoed"),
+            "horizon_minutes": int(horizon_minutes),
+            "discovery_fraction": float(discovery_fraction),
+            "validation_fraction": float(validation_fraction),
+            "embargo_minutes": int(embargo_minutes),
+        }
     target_wins = [row for row in rows if str(row.get("outcome_status") or "").upper() == "WIN"]
     candidates=[]
     gates=("M1_CONFIRMATION", "QUALITY_EXTENSION", "LOW_ROOM")
@@ -131,6 +168,8 @@ def analyze_phase1(target_population_path: str) -> Dict[str, Any]:
         "variant":source.get("variant"),
         "input_sha256":sha256_file(target_population_path),
         "lookahead_protection":True,
+        "selection_scope":selection_scope,
+        "partition":partition,
         "objective":"RECOVER_ALL_TARGET_WINS_THROUGH_STRATEGIC_CHAIN",
         "target_wins":len(target_wins),
         "best_policy":best,
@@ -158,9 +197,90 @@ def main() -> None:
     target.add_argument("--replay",required=True);target.add_argument("--variant",required=True);target.add_argument("--output",required=True)
     phase1=sub.add_parser("phase1")
     phase1.add_argument("--input",required=True);phase1.add_argument("--output",required=True)
+    phase1.add_argument("--discovery-only",action="store_true")
+    phase1.add_argument("--horizon",type=int,default=240)
+    phase1.add_argument("--discovery-fraction",type=float,default=.60)
+    phase1.add_argument("--validation-fraction",type=float,default=.20)
+    phase1.add_argument("--embargo-minutes",type=int,default=30)
+    integrity=sub.add_parser("data-integrity")
+    integrity.add_argument("--cache",required=True);integrity.add_argument("--instrument",required=True)
+    integrity.add_argument("--start",required=True);integrity.add_argument("--end",required=True)
+    integrity.add_argument("--warmup",type=int,required=True);integrity.add_argument("--horizon",type=int,required=True)
+    integrity.add_argument("--repo",default=".");integrity.add_argument("--data-sha256");integrity.add_argument("--code-sha")
+    integrity.add_argument("--output",required=True)
+    phase2=sub.add_parser("phase2")
+    phase2.add_argument("--input",required=True);phase2.add_argument("--phase1",required=True);phase2.add_argument("--output",required=True)
+    phase2.add_argument("--horizon",type=int,default=240);phase2.add_argument("--discovery-fraction",type=float,default=.60)
+    phase2.add_argument("--validation-fraction",type=float,default=.20);phase2.add_argument("--embargo-minutes",type=int,default=30)
+    discovery=sub.add_parser("discovery")
+    discovery.add_argument("--input",required=True);discovery.add_argument("--phase2",required=True);discovery.add_argument("--min-resolved",type=int,default=10);discovery.add_argument("--output",required=True)
+    freeze=sub.add_parser("freeze")
+    freeze.add_argument("--discovery",required=True);freeze.add_argument("--output",required=True)
+    holdout=sub.add_parser("holdout")
+    holdout.add_argument("--input",required=True);holdout.add_argument("--phase2",required=True);holdout.add_argument("--discovery",required=True);holdout.add_argument("--freeze",required=True);holdout.add_argument("--output",required=True)
+    report=sub.add_parser("report")
+    report.add_argument("--integrity",required=True);report.add_argument("--phase1",required=True);report.add_argument("--phase2",required=True)
+    report.add_argument("--discovery",required=True);report.add_argument("--freeze",required=True);report.add_argument("--holdout",required=True)
+    report.add_argument("--determinism",required=True);report.add_argument("--audit",required=True);report.add_argument("--output",required=True)
+    pre_audit=sub.add_parser("pre-audit")
+    pre_audit.add_argument("--report",required=True);pre_audit.add_argument("--output",required=True)
+    prompts=sub.add_parser("prompts")
+    prompts.add_argument("--report",required=True);prompts.add_argument("--pre-audit",required=True);prompts.add_argument("--state");prompts.add_argument("--output",required=True)
+    determinism=sub.add_parser("determinism")
+    determinism.add_argument("--first",required=True);determinism.add_argument("--second",required=True);determinism.add_argument("--output",required=True)
+    audit=sub.add_parser("audit")
+    audit.add_argument("--repo",default=".");audit.add_argument("--base-commit",required=True)
+    audit.add_argument("--new-tests",required=True,help="Comma-separated research test files")
+    audit.add_argument("--regression-tests",required=True,help="Comma-separated related historical regression test files")
+    audit.add_argument("--full-regression",action="store_true");audit.add_argument("--output",required=True)
     args=parser.parse_args()
-    if args.command=="target-population":payload=extract_target_population(args.replay,args.variant)
-    else:payload=analyze_phase1(args.input)
+    if args.command=="target-population":
+        payload=extract_target_population(args.replay,args.variant)
+    elif args.command=="phase1":
+        payload=analyze_phase1(
+            args.input,discovery_only=args.discovery_only,horizon_minutes=args.horizon,
+            discovery_fraction=args.discovery_fraction,validation_fraction=args.validation_fraction,
+            embargo_minutes=args.embargo_minutes,
+        )
+    elif args.command=="data-integrity":
+        from research_integrity import validate_dataset
+        payload=validate_dataset(
+            args.cache,instrument=args.instrument,start=args.start,end=args.end,
+            warmup_days=args.warmup,horizon_minutes=args.horizon,repo=args.repo,
+            expected_data_sha256=args.data_sha256,expected_code_sha=args.code_sha,
+        )
+    else:
+        # Heavy Phase 2 engines remain dormant for replay/Phase 1 commands.
+        from research_phase2 import (
+            automatic_pre_audit, automatic_report, discover_candidates,
+            evaluate_holdout, freeze_candidate, generate_ai_prompts, prepare_phase2,
+        )
+        if args.command=="phase2":
+            payload=prepare_phase2(
+                args.input,args.phase1,horizon_minutes=args.horizon,
+                discovery_fraction=args.discovery_fraction,validation_fraction=args.validation_fraction,
+                embargo_minutes=args.embargo_minutes,
+            )
+        elif args.command=="discovery":payload=discover_candidates(args.input,args.phase2,min_resolved=args.min_resolved)
+        elif args.command=="freeze":payload=freeze_candidate(args.discovery,args.output)
+        elif args.command=="holdout":payload=evaluate_holdout(args.input,args.phase2,args.discovery,args.freeze)
+        elif args.command=="report":payload=automatic_report(args.integrity,args.phase1,args.phase2,args.discovery,args.freeze,args.holdout,args.determinism,args.audit)
+        elif args.command=="pre-audit":payload=automatic_pre_audit(args.report)
+        elif args.command=="prompts":payload=generate_ai_prompts(args.report,args.pre_audit,args.state)
+        elif args.command=="determinism":
+            from research_integrity import compare_determinism
+            payload=compare_determinism(args.first,args.second)
+        else:
+            from research_audit import combined_audit
+            new_files=[item.strip() for item in args.new_tests.split(",") if item.strip()]
+            regression_files=[item.strip() for item in args.regression_tests.split(",") if item.strip()]
+            if not new_files or not regression_files:raise ValueError("Both new and regression test sets must be non-empty")
+            payload=combined_audit(
+                args.repo,base_commit=args.base_commit,
+                new_test_commands=[["python","-m","pytest","-q",*new_files]],
+                regression_commands=[["python","-m","pytest","-q",*regression_files]],
+                run_full_regression=args.full_regression,
+            )
     _write(args.output,payload)
     print(json.dumps({k:payload.get(k) for k in ("status","stage","instrument","variant")},sort_keys=True))
 

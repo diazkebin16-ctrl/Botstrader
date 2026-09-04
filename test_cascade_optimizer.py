@@ -27,17 +27,75 @@ def test_full_cascade_records_artifacts_and_resumes(tmp_path):
     def runner(command, **kwargs):
         name = command[-1]
         payload = {"status": "OK"}
-        if name in {"phase_1", "phase_2", "discovery", "freeze", "holdout"}:
+        if name == "data_integrity":payload["status"]="PASS"
+        if name == "replay":payload["methodology"]={"no_lookahead_decision":True}
+        if name == "target_population":payload["lookahead_protection"]=True
+        if name == "phase_1":payload.update({"lookahead_protection":True,"all_target_wins_recovered":True,"selection_scope":"DISCOVERY_ONLY"})
+        if name in {"phase_2", "discovery", "discovery_repeat", "freeze", "holdout", "pre_audit"}:
             payload["lookahead_protection"] = True
+        if name in {"discovery","discovery_repeat"}:payload["status"]="OK"
+        if name == "determinism":payload["status"]="PASS"
+        if name == "freeze":payload.update({"immutable":True,"holdout_opened":False,"candidate_id":"c1","candidate_definition_sha256":"d1"})
+        if name == "holdout":payload.update({"retuning_after_holdout":False,"candidate_definition_sha256":"d1"})
+        if name == "audit":payload.update({"status":"PASS","production_modifications":"NONE"})
+        if name == "report":payload={"LOOK-AHEAD":{"status":"PASS"}}
+        if name == "pre_audit":payload.update({"verdict":"ACCEPT","severities":{}})
         (tmp_path / f"{name}.json").write_text(json.dumps(payload), encoding="utf-8")
         calls.append(name)
         return subprocess.CompletedProcess(command, 0, "", "")
 
     optimizer = CascadeOptimizer(manager, runner=runner)
-    assert optimizer.run("AUD_USD", stages)["status"] == "COMPLETED"
+    assert optimizer.run("AUD_USD", stages,through="prompts")["status"] == "COMPLETED"
     assert calls == list(CASCADE)
-    assert optimizer.run("AUD_USD", stages)["status"] == "COMPLETED"
+    assert optimizer.run("AUD_USD", stages,through="prompts")["status"] == "COMPLETED"
     assert calls == list(CASCADE)
+
+
+@pytest.mark.parametrize("failed_stage", ["holdout", "pre_audit"])
+def test_fail_artifact_blocks_cascade_and_later_stages(tmp_path, failed_stage):
+    manager = _registered(tmp_path)
+    calls = []
+    stages = [Stage(name, ("research-tool", name), tmp_path / f"{name}.json") for name in CASCADE]
+
+    def runner(command, **kwargs):
+        name = command[-1]
+        payload = {"status": "OK"}
+        if name == "data_integrity":
+            payload["status"] = "PASS"
+        if name == "replay":
+            payload["methodology"] = {"no_lookahead_decision": True}
+        if name == "target_population":
+            payload["lookahead_protection"] = True
+        if name == "phase_1":
+            payload.update({"lookahead_protection": True, "all_target_wins_recovered": True, "selection_scope": "DISCOVERY_ONLY"})
+        if name in {"phase_2", "discovery", "discovery_repeat", "freeze", "holdout", "pre_audit"}:
+            payload["lookahead_protection"] = True
+        if name == "determinism":
+            payload["status"] = "PASS"
+        if name == "freeze":
+            payload.update({"immutable": True, "holdout_opened": False, "candidate_id": "c1", "candidate_definition_sha256": "d1"})
+        if name == "holdout":
+            payload.update({"retuning_after_holdout": False, "candidate_definition_sha256": "d1"})
+        if name == "audit":
+            payload.update({"status": "PASS", "production_modifications": "NONE"})
+        if name == "report":
+            payload = {"LOOK-AHEAD": {"status": "PASS"}}
+        if name == "pre_audit":
+            payload.update({"verdict": "ACCEPT", "severities": {}})
+        if name == failed_stage:
+            payload["status"] = "FAIL"
+        (tmp_path / f"{name}.json").write_text(json.dumps(payload), encoding="utf-8")
+        calls.append(name)
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    with pytest.raises(MethodologyViolation, match="Artifact status is FAIL"):
+        CascadeOptimizer(manager, runner=runner).run("AUD_USD", stages, through="prompts")
+
+    phases = manager.load()["assets"]["AUD_USD"]["phases"]
+    assert phases[failed_stage]["status"] == "BLOCKED"
+    assert phases[failed_stage]["status"] != "COMPLETED"
+    assert calls[-1] == failed_stage
+    assert all(phases[name]["status"] == "PENDING" for name in CASCADE[CASCADE.index(failed_stage) + 1:])
 
 
 @pytest.mark.parametrize("status", ["TIMEOUT", "AMBIGUOUS", "NOT_HISTORICALLY_RECONSTRUCTABLE"])
@@ -73,13 +131,14 @@ def test_production_commands_are_forbidden(tmp_path):
 def test_can_stop_after_phase1_with_a_prefix_manifest(tmp_path):
     manager = _registered(tmp_path)
     calls=[]
-    stages=[Stage(name,("research-tool",name),tmp_path/f"{name}.json") for name in CASCADE[:3]]
+    stages=[Stage(name,("research-tool",name),tmp_path/f"{name}.json") for name in CASCADE[:4]]
     def runner(command,**kwargs):
         name=command[-1]
         payload={"status":"OK","lookahead_protection":True}
+        if name=="data_integrity":payload["status"]="PASS"
         (tmp_path/f"{name}.json").write_text(json.dumps(payload),encoding="utf-8")
         calls.append(name)
         return subprocess.CompletedProcess(command,0,"","")
     result=CascadeOptimizer(manager,runner=runner).run("AUD_USD",stages,through="phase_1")
-    assert result["phases"]==list(CASCADE[:3])
-    assert calls==list(CASCADE[:3])
+    assert result["phases"]==list(CASCADE[:4])
+    assert calls==list(CASCADE[:4])
