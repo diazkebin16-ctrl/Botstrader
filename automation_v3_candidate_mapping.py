@@ -11,6 +11,15 @@ from managed_strategy_rules import APPROVED_FEATURES, APPROVED_OPERATORS, SUPPOR
 MANAGED_PATH = "managed_strategy_rules.py"
 ACCEPTED_AUDIT_VERDICTS = {"ACCEPT", "ACCEPT WITH LIMITATIONS"}
 MAX_COMPOSITE_RULES = 3
+ARTIFACT_FILES = {
+    "target_population": "03_target_population.json",
+    "phase_2": "05_phase_2.json",
+    "discovery": "06_discovery.json",
+    "freeze": "09_freeze.json",
+    "holdout": "10_holdout.json",
+    "audit": "11_audit.json",
+    "pre_audit": "13_pre_audit.json",
+}
 
 
 class CandidateNotDeployable(ValueError):
@@ -39,10 +48,13 @@ def load_object(path: str | Path) -> dict[str, Any]:
 
 
 def _artifact(workspace: Path, name: str) -> Path:
-    matches = sorted(workspace.glob(f"*_{name}.json"))
-    if len(matches) != 1:
-        raise CandidateNotDeployable(f"required artifact missing or ambiguous: {name}")
-    return matches[0]
+    filename = ARTIFACT_FILES.get(name)
+    if not filename:
+        raise CandidateNotDeployable(f"unknown governed artifact stage: {name}")
+    path = workspace / filename
+    if not path.is_file():
+        raise CandidateNotDeployable(f"required artifact missing: {filename}")
+    return path
 
 
 def _exact_assignment(path: Path, instrument: str) -> str:
@@ -89,11 +101,7 @@ def _assignment(instrument: str, payload: list[dict[str, Any]]) -> str:
 def compile_release_plan(
     *, repo: str | Path, plan_path: str | Path, instrument: str, source_code_sha: str,
 ) -> dict[str, Any]:
-    """Compile an existing research release request into one bounded managed config edit.
-
-    The compiler never derives code from prose.  It consumes only the immutable
-    frozen candidate definition and refuses any unsupported feature/operator/form.
-    """
+    """Compile a governed research candidate into one bounded managed-config edit."""
     repo = Path(repo)
     plan_path = Path(plan_path)
     workspace = plan_path.parent
@@ -116,6 +124,7 @@ def compile_release_plan(
     phase2 = load_object(phase2_path)
     discovery = load_object(discovery_path)
     target = load_object(target_path)
+    audit = load_object(audit_path)
     pre_audit = load_object(pre_audit_path)
 
     if request.get("production_authority") is not False:
@@ -162,6 +171,8 @@ def compile_release_plan(
         raise CandidateNotDeployable("discovery/freeze binding mismatch")
     if holdout.get("input_sha256") != target_sha or freeze.get("target_population_sha256") != target_sha:
         raise CandidateNotDeployable("target population binding mismatch")
+    if audit.get("status") != "PASS" or audit.get("stage") not in (None, "audit"):
+        raise CandidateNotDeployable("audit stage did not pass")
     if pre_audit.get("verdict") not in ACCEPTED_AUDIT_VERDICTS:
         raise CandidateNotDeployable("pre-audit rejected candidate")
 
@@ -198,6 +209,7 @@ def compile_release_plan(
         "freeze_sha256": freeze_sha,
         "holdout_sha256": holdout_sha,
         "audit_sha256": audit_sha,
+        "audit_status": audit.get("status"),
         "pre_audit_sha256": pre_audit_sha,
         "audit_verdict": pre_audit.get("verdict"),
         "retuning_after_holdout": False,
@@ -223,7 +235,7 @@ def compile_release_plan(
         "production_authority": False,
         "freeze_artifact": {"path": freeze_path.name, "sha256": freeze_sha},
         "holdout_artifact": {"path": holdout_path.name, "sha256": holdout_sha},
-        "audit_artifact": {"path": audit_path.name, "sha256": audit_sha},
+        "audit_artifact": {"path": audit_path.name, "sha256": audit_sha, "status": audit.get("status")},
         "pre_audit": {"path": pre_audit_path.name, "sha256": pre_audit_sha, "verdict": pre_audit.get("verdict")},
         "code_changes": [change],
     }
