@@ -94,6 +94,7 @@ def summarize_pre_gate_results(
         )
 
     return {
+        "available": True,
         "generated_candidates": total,
         "discovery_rows": int(discovery_rows or 0),
         "max_resolved": max_resolved,
@@ -136,8 +137,16 @@ def build_pre_gate_diagnostic(
         candidate_analysis,
     )
 
-    source = _load(target_population_path)
-    spec = _load(phase2_path)
+    try:
+        source = _load(target_population_path)
+        spec = _load(phase2_path)
+    except FileNotFoundError:
+        return {
+            "available": False,
+            "reason": "PRE_GATE_SOURCE_ARTIFACT_UNAVAILABLE",
+            "min_resolved_required": int(min_resolved),
+            "production_authority": False,
+        }
     split = _split_from_spec(source, spec)
     discovery_rows = _phase1_eligible_rows(spec, split["discovery"])
     candidates = _generate_candidates(discovery_rows)
@@ -156,6 +165,9 @@ def classify_discovery_outcome(
     """Prefer complete pre-gate evidence only when no candidate passed it."""
     diagnostic = dict(fallback)
     diagnostic["pre_gate_diagnostic"] = dict(pre_gate)
+    if pre_gate.get("available") is not True:
+        diagnostic["production_authority"] = False
+        return diagnostic
     diagnostic["generated_candidates"] = int(pre_gate.get("generated_candidates") or diagnostic.get("generated_candidates") or 0)
     diagnostic["discovery_rows"] = int(pre_gate.get("discovery_rows") or diagnostic.get("discovery_rows") or 0)
     diagnostic["max_resolved"] = int(pre_gate.get("max_resolved") or diagnostic.get("max_resolved") or 0)
