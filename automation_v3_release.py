@@ -2,6 +2,7 @@
 from __future__ import annotations
 import os,subprocess,sys,shutil
 from pathlib import Path
+from automation_v3_candidate_mapping import CandidateNotDeployable,compile_and_write_release_plan
 PRACTICE_OANDA_URL="https://api-fxpractice.oanda.com"
 PROTECTED_LIVE_FILES={"server.py","forward_experiment.py"}
 TESTS=("test_automation_v3.py","test_cascade_optimizer.py","test_research_manager.py","test_research_governance.py","test_research_phase2.py","test_research_integrity.py","test_research_pipeline.py","test_replay_validation.py","test_forward_paper_release.py")
@@ -26,6 +27,8 @@ class ReleaseController:
   adapter=os.getenv("BOTS_V3_CODE_CHANGE_COMMAND","").strip()
   if not adapter:return self._blocked("CODE_CHANGE_ADAPTER_UNAVAILABLE")
   if self._git("rev-parse","HEAD").stdout.strip()!=base_sha or self._git("branch","--show-current").stdout.strip()!="main" or self._git("status","--porcelain").stdout.strip():return self._blocked("BASE_OR_WORKTREE_MISMATCH")
+  try:compile_and_write_release_plan(repo=self.repo,plan_path=plan,instrument=instrument,source_code_sha=base_sha)
+  except CandidateNotDeployable as e:return {"status":"CANDIDATE_NOT_DEPLOYABLE","reason":str(e),"production_authority":False}
   branch=f"automation-v3/{instrument.lower()}-{base_sha[:12]}"
   if self._git("checkout","-b",branch).returncode:return self._blocked("BRANCH_CREATE_FAILED")
   env=dict(os.environ,BOTS_V3_RELEASE_PLAN=str(plan),BOTS_V3_BASE_SHA=base_sha,BOTS_V3_INSTRUMENT=instrument,BOTS_V3_PRODUCTION_AUTHORITY="false",TRADING_ENVIRONMENT="PAPER",PRIMARY_OANDA_ENV="practice",OANDA=PRACTICE_OANDA_URL)
