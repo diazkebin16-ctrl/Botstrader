@@ -17,6 +17,8 @@ AUTOMATION_APPROVAL_TYPE="AUTONOMOUS_RESEARCH_POLICY_APPROVAL";AUTOMATION_AUTHOR
 PROTECTED_LIVE_FILES={"server.py","forward_experiment.py"}
 
 def utc_now():return datetime.now(timezone.utc).isoformat().replace("+00:00","Z")
+def aligned_research_end(now,horizon_minutes=240):
+ d=now.astimezone(timezone.utc)-timedelta(minutes=int(horizon_minutes));return d.replace(minute=0,second=0,microsecond=0)
 def canonical_sha256(v):return hashlib.sha256(json.dumps(dict(v),sort_keys=True,separators=(",",":"),default=str).encode()).hexdigest()
 def sha256_file(p):
  d=hashlib.sha256()
@@ -132,7 +134,7 @@ class AutonomousAssetOptimizer:
    for a in r.setdefault("approvals",[]):
     if a.get("active") is True:a["active"]=False;a["invalidated_reason"]="CODE_SHA_CHANGED"
    r.update(status="NEW",paper_deployment=None,stop_reason=None);ledger.save(s)
-  end=self.now().astimezone(timezone.utc)-timedelta(minutes=240);ledger.mutate(i,status="RUNNING",code_sha=sha,workspace=str(root),max_lookback_months=12)
+  end=aligned_research_end(self.now(),240);ledger.mutate(i,status="RUNNING",code_sha=sha,workspace=str(root),max_lookback_months=12)
   for months in LOOKBACK_SEQUENCE:
    ad=root/f"lookback_{months:02d}m_{sha[:12]}";ad.mkdir(parents=True,exist_ok=True);start=self._months_before(end,months);cache=root/"data"/f"{i}_{months:02d}m.json";cache_preexisting=cache.is_file();ledger.append(i,"lookback_attempts",{"months":months,"code_sha":sha,"start":start.isoformat(),"end":end.isoformat(),"status":"RUNNING","at":utc_now()})
    try:
@@ -142,7 +144,7 @@ class AutonomousAssetOptimizer:
    if self.stage_builder is None:
     from research_asset import build_stages;builder=build_stages
    else:builder=self.stage_builder
-   stages=builder(repo=self.repo,python=sys.executable,instrument=i,cache=cache,workspace=ad,start=start.isoformat(),end=end.isoformat(),warmup=10,horizon=240,variant="V331_BASELINE",embargo=30,discovery_fraction=.60,validation_fraction=.20,min_resolved=10,code_sha=sha,state=state);write_json(ad/"cascade_manifest.json",{"schema_version":3,"automation":"V3","instrument":i,"code_sha":sha,"production_authority":False,"stages":[{"name":x.name,"artifact":str(x.artifact),"command":list(x.command)} for x in stages]})
+   stages=builder(repo=self.repo,python=sys.executable,instrument=i,cache=cache,workspace=ad,start=start.isoformat(),end=end.isoformat(),warmup=10,horizon=240,variant="V331_BASELINE",embargo=30,discovery_fraction=.60,validation_fraction=.20,min_resolved=10,code_sha=sha,state=state);write_json(ad/"cascade_manifest.json",{"schema_version":3,"automation":"V3","instrument":i,"code_sha":sha,"data_sha256":sha256_file(cache),"production_authority":False,"stages":[{"name":x.name,"artifact":str(x.artifact),"command":list(x.command)} for x in stages]})
    if self.cascade_factory:c=self.cascade_factory(m)
    else:
     from cascade_optimizer import CascadeOptimizer;c=CascadeOptimizer(m)
@@ -167,7 +169,7 @@ class AutonomousAssetOptimizer:
         asyncio.run(self.data_source.acquire(i,start,end,cache,warmup_days=10,horizon_minutes=240,boundary_buffer_days=3,boundary_buffer_minutes=60))
        except Exception as x:return self._terminal(ledger,i,"DATA_SOURCE_UNAVAILABLE",str(x),lookback_months=months,integrity_diagnostic=diag)
        try:
-        m.register_asset(i,code_sha=sha,start=start.isoformat(),end=end.isoformat(),warmup_days=10,horizon_minutes=240,data_sha256=sha256_file(cache));c.run(i,stages,through="prompts");err=None;ledger.append(i,"decision_history",{"decision":"DATA_REACQUIRE_SUCCEEDED","months":months,"at":utc_now()})
+        final_data_sha=sha256_file(cache);m.register_asset(i,code_sha=sha,start=start.isoformat(),end=end.isoformat(),warmup_days=10,horizon_minutes=240,data_sha256=final_data_sha);stages=builder(repo=self.repo,python=sys.executable,instrument=i,cache=cache,workspace=ad,start=start.isoformat(),end=end.isoformat(),warmup=10,horizon=240,variant="V331_BASELINE",embargo=30,discovery_fraction=.60,validation_fraction=.20,min_resolved=10,code_sha=sha,state=state);write_json(ad/"cascade_manifest.json",{"schema_version":3,"automation":"V3","instrument":i,"code_sha":sha,"data_sha256":final_data_sha,"production_authority":False,"stages":[{"name":x.name,"artifact":str(x.artifact),"command":list(x.command)} for x in stages]});c.run(i,stages,through="prompts");err=None;ledger.append(i,"decision_history",{"decision":"DATA_REACQUIRE_SUCCEEDED","months":months,"data_sha256":final_data_sha,"at":utc_now()})
        except Exception as x:
         err=x
         if ip.is_file():
