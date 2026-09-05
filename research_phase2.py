@@ -16,6 +16,8 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 from replay_validation import ReplayValidationConfig, chronological_holdout, walk_forward_splits
 from research_manager import sha256_file, utc_now
+from managed_strategy_rules import rules_for
+from automation_v3_incumbent_challenger import build_incumbent_definition, compare_metrics, diagnostic_state
 
 
 BINARY_OUTCOMES = {"WIN", "LOSS"}
@@ -218,6 +220,47 @@ def candidate_analysis(candidate: Mapping[str, Any], rows: Sequence[Mapping[str,
         ),
         "outcome_effect": outcome_effect,
     }
+
+
+
+def _incumbent_methodology(min_resolved: int) -> Dict[str, Any]:
+    return {
+        "contract":"INCUMBENT_VS_CHALLENGER_V1",
+        "min_resolved":int(min_resolved),
+        "phase2_win_retention":0.60,
+        "phase2_min_losses_rejected":2,
+        "same_partition_required":True,
+        "bid_ask_required":True,
+        "operational_schedule_fixed":True,
+        "outcome_semantics":"TP_SL_OR_1650_ET",
+    }
+
+def _incumbent_definition(source: Mapping[str, Any], spec: Mapping[str, Any], *, min_resolved: int) -> Dict[str, Any]:
+    identity=spec.get("dataset_identity")
+    if not isinstance(identity,Mapping):
+        raise ValueError("Unknown incumbent dataset identity")
+    instrument=str(source.get("instrument") or spec.get("instrument") or "").upper()
+    if not instrument or instrument!=str(spec.get("instrument") or "").upper():
+        raise ValueError("Incumbent instrument identity mismatch")
+    code_sha=identity.get("code_sha")
+    return build_incumbent_definition(
+        instrument=instrument,code_sha=str(code_sha or ""),dataset_identity=identity,
+        managed_rules=rules_for(instrument),methodology=_incumbent_methodology(min_resolved),
+    )
+
+def _incumbent_rows(rows: Sequence[Mapping[str, Any]], definition: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    rule_candidate={"rules":list(definition.get("managed_rules") or [])}
+    return [dict(row) for row in rows if row.get("operational_entry_allowed") is not False and row.get("actionable") is True and candidate_passes(rule_candidate,row)]
+
+def _comparison_vs_incumbent(analysis: Mapping[str, Any], partition_rows: Sequence[Mapping[str, Any]], definition: Mapping[str, Any]) -> Dict[str, Any]:
+    incumbent=metrics(_incumbent_rows(partition_rows,definition))
+    challenger=analysis.get("selected") or {}
+    return compare_metrics(incumbent=incumbent,challenger=challenger,evaluation_population_sha256=_partition_hash(partition_rows))
+
+def _robustness_pass(*, risk: Mapping[str, Any], directional: Mapping[str, Any], temporal: Mapping[str, Any], sensitivity_result: Mapping[str, Any], walk_forward: Mapping[str, Any]) -> bool:
+    sensitivity_class=str(sensitivity_result.get("classification") or "").upper()
+    sensitivity_ok=sensitivity_class in {"STABLE","NOT APPLICABLE","NOT_APPLICABLE"} and sensitivity_result.get("all_positive") is not False
+    return risk.get("severity")!="HIGH" and directional.get("stable") is True and temporal.get("stable") is True and sensitivity_ok and walk_forward.get("status")=="PASS"
 
 
 def _phase1_policy(phase1: Mapping[str, Any]) -> Dict[str, Any]:
@@ -610,30 +653,60 @@ def overfitting_risk(
     return {"severity": severity, "flags": flags, "overfit_detected": severity == "HIGH"}
 
 
-def decision_gate(
-    candidate: Mapping[str, Any],
-    discovery: Mapping[str, Any],
-    validation: Mapping[str, Any],
-    risk: Mapping[str, Any],
-    *,
-    min_resolved: int,
-) -> Dict[str, Any]:
-    checks = {
-        "entry_time_only": candidate.get("entry_time_only") is True,
-        "not_single_trade_rule": validation.get("losses_rejected", 0) >= 2,
-        "minimum_validation_sample": (validation.get("selected") or {}).get("resolved_binary", 0) >= min_resolved,
-        "validation_expectancy_positive": (validation.get("selected") or {}).get("expectancy_r") is not None and (validation.get("selected") or {}).get("expectancy_r") > 0,
-        "validation_expectancy_improves": (validation.get("expectancy_delta_r") or 0) > 0,
-        "validation_profit_factor": ((validation.get("selected") or {}).get("profit_factor") or 0) >= 1.05,
-        "win_retention": (validation.get("win_retention") or 0) >= 0.60,
-        "overfit_risk_not_high": risk.get("severity") != "HIGH",
-    }
-    return {
-        "decision": "FREEZE_ELIGIBLE" if all(checks.values()) else "REJECT",
-        "checks": checks,
-        "failed": [name for name, passed in checks.items() if not passed],
-    }
 
+def decision_gate(
+    candidate: Mapping[str, Any], discovery: Mapping[str, Any], validation: Mapping[str, Any],
+    risk: Mapping[str, Any], *, min_resolved: int,
+    discovery_comparison: Optional[Mapping[str, Any]] = None,
+    validation_comparison: Optional[Mapping[str, Any]] = None,
+    directional: Optional[Mapping[str, Any]] = None,
+    temporal: Optional[Mapping[str, Any]] = None,
+    sensitivity_result: Optional[Mapping[str, Any]] = None,
+    walk_forward: Optional[Mapping[str, Any]] = None,
+) -> Dict[str, Any]:
+    selected=validation.get("selected") or {}
+    legacy=validation_comparison is None
+    if legacy:
+        checks={
+            "entry_time_only":candidate.get("entry_time_only") is True,
+            "not_single_trade_rule":validation.get("losses_rejected",0)>=2,
+            "minimum_validation_sample":selected.get("resolved_binary",0)>=min_resolved,
+            "validation_expectancy_positive":selected.get("expectancy_r") is not None and selected.get("expectancy_r")>0,
+            "validation_expectancy_improves":validation.get("expectancy_delta_r",0)>0,
+            "validation_profit_factor":(selected.get("profit_factor") or 0)>=1.05,
+            "win_retention":validation.get("win_retention",0)>=0.60,
+            "overfit_risk_not_high":risk.get("severity")!="HIGH",
+        }
+        return {"decision":"FREEZE_ELIGIBLE" if all(checks.values()) else "REJECT","checks":checks,"failed":[k for k,v in checks.items() if not v]}
+    disc_comp=dict(discovery_comparison or {}); val_comp=dict(validation_comparison or {})
+    wf=dict(walk_forward or {}); direction=dict(directional or {}); time_stability=dict(temporal or {}); sens=dict(sensitivity_result or {})
+    robust=_robustness_pass(risk=risk,directional=direction,temporal=time_stability,sensitivity_result=sens,walk_forward=wf)
+    same_edge=disc_comp.get("challenger_beats_incumbent") is True and val_comp.get("challenger_beats_incumbent") is True
+    checks={
+        "entry_time_only":candidate.get("entry_time_only") is True,
+        "not_single_trade_rule":validation.get("losses_rejected",0)>=2,
+        "minimum_validation_sample":selected.get("resolved_binary",0)>=min_resolved,
+        "win_retention":validation.get("win_retention",0)>=0.60,
+        "challenger_beats_incumbent_discovery":disc_comp.get("challenger_beats_incumbent") is True,
+        "challenger_beats_incumbent_validation":val_comp.get("challenger_beats_incumbent") is True,
+        "material_relative_improvement":val_comp.get("material_improvement") is True,
+        "directional_stability":direction.get("stable") is True,
+        "temporal_stability":time_stability.get("stable") is True,
+        "sensitivity":str(sens.get("classification") or "").upper() in {"STABLE","NOT APPLICABLE","NOT_APPLICABLE"} and sens.get("all_positive") is not False,
+        "walk_forward_stability":wf.get("status")=="PASS",
+        "overfit_risk_not_high":risk.get("severity")!="HIGH",
+    }
+    deployable=all(checks.values())
+    negative=(selected.get("expectancy_r") is not None and selected.get("expectancy_r")<0)
+    return {
+        "decision":"FREEZE_ELIGIBLE" if deployable else "REJECT",
+        "checks":checks,"failed":[k for k,v in checks.items() if not v],
+        "diagnostic_state":diagnostic_state(discovery_comparison=disc_comp,validation_comparison=val_comp,robust=robust,deployable=deployable),
+        "comparison_contract":"ACTUAL_INCUMBENT_SAME_PARTITION",
+        "paper_candidate_classification":"RELATIVE_IMPROVEMENT_PAPER_CANDIDATE" if deployable and negative else ("CHALLENGER_DEPLOYABLE" if deployable else None),
+        "absolute_profitability":{"validation_expectancy_positive":selected.get("expectancy_r") is not None and selected.get("expectancy_r")>0,"validation_profit_factor_ge_1_05":(selected.get("profit_factor") or 0)>=1.05},
+        "production_authority":False,
+    }
 
 def final_reliability(
     candidate: Mapping[str, Any], frozen: Mapping[str, Any], holdout_analysis: Mapping[str, Any],
@@ -728,6 +801,10 @@ def candidate_record(
         "loss_rejection": analysis.get("loss_rejection"),
         "expectancy": (analysis.get("selected") or {}).get("expectancy_r"),
         "profit_factor": (analysis.get("selected") or {}).get("profit_factor"),
+        "incumbent_comparison": holdout.get("incumbent_comparison"),
+        "paper_release_policy": holdout.get("paper_release_policy"),
+        "relative_improvement": holdout.get("relative_improvement") is True,
+        "profit_certified": holdout.get("profit_certified") is True,
         "directional_stability": holdout.get("directional_stability"),
         "temporal_stability": holdout.get("temporal_stability"),
         "sensitivity": holdout.get("sensitivity"),
@@ -742,94 +819,61 @@ def candidate_record(
         ],
         "auto_production_change": False,
     }
-def discover_candidates(target_population_path: str, phase2_path: str, *, min_resolved: int = 10) -> Dict[str, Any]:
-    source = _load(target_population_path)
-    spec = _load(phase2_path)
-    if spec.get("lookahead_protection") is not True:
-        raise ValueError("Phase 2 artifact lacks look-ahead protection")
-    split = _split_from_spec(source, spec)
-    discovery_rows = _phase1_eligible_rows(spec, split["discovery"])
-    validation_rows = _phase1_eligible_rows(spec, split["validation"])
-    candidates = _generate_candidates(discovery_rows)
-    evaluated = []
-    for candidate in candidates:
-        discovery_result = candidate_analysis(candidate, discovery_rows)
-        if not _eligible_analysis(discovery_result, min_resolved):
-            continue
-        validation_result = candidate_analysis(candidate, validation_rows)
-        sensitivity_result = sensitivity(candidate, validation_rows)
-        directional = directional_stability(candidate, validation_rows)
-        temporal = temporal_stability(candidate, validation_rows)
-        risk = overfitting_risk(candidate, discovery_result, validation_result, sensitivity_result, directional, temporal)
-        gate = decision_gate(candidate, discovery_result, validation_result, risk, min_resolved=min_resolved)
-        evaluated.append({
-            "candidate": candidate,
-            "discovery": discovery_result,
-            "validation": validation_result,
-            "sensitivity": sensitivity_result,
-            "directional_stability": directional,
-            "temporal_stability": temporal,
-            "walk_forward_stability": walk_forward_stability(candidate, discovery_rows),
-            "overfitting_risk": risk,
-            "decision_gate": gate,
-        })
-    evaluated.sort(key=_candidate_rank, reverse=True)
-    for rank, item in enumerate(evaluated, 1):
-        item["rank"] = rank
-        item["status"] = "RESEARCH_CANDIDATE" if item["decision_gate"]["decision"] == "FREEZE_ELIGIBLE" else "REJECT"
-        item["holdout_status"] = "NOT TESTED"
-    eligible = [item for item in evaluated if item["decision_gate"]["decision"] == "FREEZE_ELIGIBLE"]
-    eligible.sort(key=_candidate_rank, reverse=True)
-    selected_components = [item["candidate"] for item in eligible[:3]]
-    proposed = _combine(selected_components) if selected_components else None
-    composite = None
-    if proposed:
-        discovery_result = candidate_analysis(proposed, discovery_rows)
-        validation_result = candidate_analysis(proposed, validation_rows)
-        sensitivity_result = {"status": "NOT_APPLICABLE", "reason": "Composite sensitivity is represented by component analyses"}
-        directional = directional_stability(proposed, validation_rows)
-        temporal = temporal_stability(proposed, validation_rows)
-        risk = overfitting_risk(proposed, discovery_result, validation_result, sensitivity_result, directional, temporal)
-        gate = decision_gate(proposed, discovery_result, validation_result, risk, min_resolved=min_resolved)
-        composite = {
-            "candidate": proposed,
-            "discovery": discovery_result,
-            "validation": validation_result,
-            "directional_stability": directional,
-            "temporal_stability": temporal,
-            "walk_forward_stability": walk_forward_stability(proposed, discovery_rows),
-            "overlap_remove_one": overlap_remove_one(proposed, validation_rows),
-            "overfitting_risk": risk,
-            "decision_gate": gate,
-        }
-        if gate["decision"] != "FREEZE_ELIGIBLE":
-            composite = None
-            if eligible:
-                top = eligible[0]
-                composite = {**top, "overlap_remove_one": overlap_remove_one(top["candidate"], validation_rows)}
-    return {
-        "status": "OK" if composite else "NO_FREEZE_ELIGIBLE_CANDIDATE",
-        "stage": "discovery",
-        "instrument": source.get("instrument"),
-        "variant": source.get("variant"),
-        "input_sha256": sha256_file(target_population_path),
-        "phase2_sha256": sha256_file(phase2_path),
-        "dataset_identity": spec.get("dataset_identity") or {"status": "NOT TESTED"},
-        "lookahead_protection": True,
-        "holdout_opened": False,
-        "candidate_space": {"generated": len(candidates), "evaluated_after_discovery_gate": len(evaluated), "freeze_eligible": len(eligible)},
-        "discovery_metrics": metrics(discovery_rows),
-        "validation_metrics": metrics(validation_rows),
-        "ranked_candidates": evaluated,
-        "proposed_frozen_candidate": composite,
-        "m1_internals": m1_internals_analysis(discovery_rows),
-        "notes": [
-            "Thresholds are derived only from the discovery partition.",
-            "Validation selects among discovery-defined candidates; final holdout remains unopened.",
-            "TIMEOUT, AMBIGUOUS and PENDING are excluded from binary expectancy and remain separately counted.",
-        ],
-    }
 
+def discover_candidates(target_population_path: str, phase2_path: str, *, min_resolved: int = 10) -> Dict[str, Any]:
+    source=_load(target_population_path); spec=_load(phase2_path)
+    if spec.get("lookahead_protection") is not True: raise ValueError("Phase 2 artifact lacks look-ahead protection")
+    split=_split_from_spec(source,spec)
+    discovery_partition=list(split["discovery"]); validation_partition=list(split["validation"])
+    discovery_rows=_phase1_eligible_rows(spec,discovery_partition); validation_rows=_phase1_eligible_rows(spec,validation_partition)
+    incumbent=_incumbent_definition(source,spec,min_resolved=min_resolved)
+    incumbent_evidence={
+        "definition":incumbent,"incumbent_definition_sha256":incumbent["incumbent_definition_sha256"],
+        "discovery":{"population_sha256":_partition_hash(discovery_partition),"metrics":metrics(_incumbent_rows(discovery_partition,incumbent))},
+        "validation":{"population_sha256":_partition_hash(validation_partition),"metrics":metrics(_incumbent_rows(validation_partition,incumbent))},
+        "production_authority":False,
+    }
+    candidates=_generate_candidates(discovery_rows); evaluated=[]
+    for candidate in candidates:
+        discovery_result=candidate_analysis(candidate,discovery_rows)
+        if not _eligible_analysis(discovery_result,min_resolved): continue
+        validation_result=candidate_analysis(candidate,validation_rows)
+        sensitivity_result=sensitivity(candidate,validation_rows)
+        directional=directional_stability(candidate,validation_rows); temporal=temporal_stability(candidate,validation_rows)
+        walk=walk_forward_stability(candidate,discovery_rows)
+        risk=overfitting_risk(candidate,discovery_result,validation_result,sensitivity_result,directional,temporal)
+        disc_comp=_comparison_vs_incumbent(discovery_result,discovery_partition,incumbent)
+        val_comp=_comparison_vs_incumbent(validation_result,validation_partition,incumbent)
+        gate=decision_gate(candidate,discovery_result,validation_result,risk,min_resolved=min_resolved,discovery_comparison=disc_comp,validation_comparison=val_comp,directional=directional,temporal=temporal,sensitivity_result=sensitivity_result,walk_forward=walk)
+        evaluated.append({"candidate":candidate,"discovery":discovery_result,"validation":validation_result,"incumbent_comparison":{"discovery":disc_comp,"validation":val_comp},"sensitivity":sensitivity_result,"directional_stability":directional,"temporal_stability":temporal,"walk_forward_stability":walk,"overfitting_risk":risk,"decision_gate":gate})
+    evaluated.sort(key=_candidate_rank,reverse=True)
+    for rank,item in enumerate(evaluated,1):
+        item["rank"]=rank; item["status"]="RESEARCH_CANDIDATE" if item["decision_gate"]["decision"]=="FREEZE_ELIGIBLE" else "REJECT"; item["holdout_status"]="NOT TESTED"
+    eligible=[item for item in evaluated if item["decision_gate"]["decision"]=="FREEZE_ELIGIBLE"]
+    eligible.sort(key=_candidate_rank,reverse=True)
+    selected_components=[item["candidate"] for item in eligible[:3]]; proposed=_combine(selected_components) if selected_components else None; composite=None
+    if proposed:
+        discovery_result=candidate_analysis(proposed,discovery_rows); validation_result=candidate_analysis(proposed,validation_rows)
+        sensitivity_result={"status":"NOT_APPLICABLE","classification":"NOT_APPLICABLE","reason":"Composite components already passed sensitivity"}
+        directional=directional_stability(proposed,validation_rows); temporal=temporal_stability(proposed,validation_rows); walk=walk_forward_stability(proposed,discovery_rows)
+        risk=overfitting_risk(proposed,discovery_result,validation_result,sensitivity_result,directional,temporal)
+        disc_comp=_comparison_vs_incumbent(discovery_result,discovery_partition,incumbent); val_comp=_comparison_vs_incumbent(validation_result,validation_partition,incumbent)
+        gate=decision_gate(proposed,discovery_result,validation_result,risk,min_resolved=min_resolved,discovery_comparison=disc_comp,validation_comparison=val_comp,directional=directional,temporal=temporal,sensitivity_result=sensitivity_result,walk_forward=walk)
+        composite={"candidate":proposed,"discovery":discovery_result,"validation":validation_result,"incumbent_comparison":{"discovery":disc_comp,"validation":val_comp},"sensitivity":sensitivity_result,"directional_stability":directional,"temporal_stability":temporal,"walk_forward_stability":walk,"overlap_remove_one":overlap_remove_one(proposed,validation_rows),"overfitting_risk":risk,"decision_gate":gate}
+        if gate["decision"]!="FREEZE_ELIGIBLE":
+            composite=None
+            if eligible:
+                top=eligible[0]; composite={**top,"overlap_remove_one":overlap_remove_one(top["candidate"],validation_rows)}
+    states=[str((item.get("decision_gate") or {}).get("diagnostic_state") or "") for item in evaluated]
+    overall_state="CHALLENGER_DEPLOYABLE" if composite else ("CHALLENGER_BETTER_BUT_NOT_ROBUST" if "CHALLENGER_BETTER_BUT_NOT_ROBUST" in states else "NO_MEANINGFUL_IMPROVEMENT")
+    return {
+        "status":"OK" if composite else "NO_FREEZE_ELIGIBLE_CANDIDATE","stage":"discovery","instrument":source.get("instrument"),"variant":source.get("variant"),
+        "input_sha256":sha256_file(target_population_path),"phase2_sha256":sha256_file(phase2_path),"dataset_identity":spec.get("dataset_identity") or {"status":"NOT TESTED"},
+        "lookahead_protection":True,"holdout_opened":False,"candidate_space":{"generated":len(candidates),"evaluated_after_discovery_gate":len(evaluated),"freeze_eligible":len(eligible)},
+        "incumbent":incumbent_evidence,"decision_state":overall_state,"discovery_metrics":metrics(discovery_rows),"validation_metrics":metrics(validation_rows),"ranked_candidates":evaluated,
+        "proposed_frozen_candidate":composite,"m1_internals":m1_internals_analysis(discovery_rows),"production_authority":False,
+        "notes":["Thresholds are derived only from discovery.","Incumbent and challengers are compared on identical chronological partitions.","Absolute profitability is evidence, not a substitute for robust incumbent-relative improvement.","TIMEOUT, AMBIGUOUS and PENDING remain non-binary."],
+    }
 
 def freeze_candidate(discovery_path: str, output_path: str | Path) -> Dict[str, Any]:
     discovery = _load(discovery_path)
@@ -858,6 +902,11 @@ def freeze_candidate(discovery_path: str, output_path: str | Path) -> Dict[str, 
         "dataset_identity": discovery.get("dataset_identity"),
         "code_sha": (discovery.get("dataset_identity") or {}).get("code_sha"),
         "discovery_metrics": proposed.get("discovery"),
+        "incumbent": discovery.get("incumbent"),
+        "incumbent_definition": (discovery.get("incumbent") or {}).get("definition"),
+        "incumbent_definition_sha256": (discovery.get("incumbent") or {}).get("incumbent_definition_sha256"),
+        "incumbent_comparison": proposed.get("incumbent_comparison"),
+        "paper_candidate_classification": (proposed.get("decision_gate") or {}).get("paper_candidate_classification"),
         "candidate_definition": definition,
         "candidate_definition_sha256": _canonical_hash(definition),
         "validation_evidence": {
@@ -875,7 +924,7 @@ def freeze_candidate(discovery_path: str, output_path: str | Path) -> Dict[str, 
         existing = _load(output)
         binding_keys = (
             "instrument", "dataset_identity", "code_sha", "target_population_sha256",
-            "phase2_sha256", "discovery_sha256", "candidate_definition_sha256",
+            "phase2_sha256", "discovery_sha256", "candidate_definition_sha256", "incumbent_definition_sha256",
         )
         if any(existing.get(key) != payload.get(key) for key in binding_keys):
             raise ValueError("Freeze artifact is immutable and cannot be replaced")
@@ -883,101 +932,50 @@ def freeze_candidate(discovery_path: str, output_path: str | Path) -> Dict[str, 
     return payload
 
 
-def evaluate_holdout(
-    target_population_path: str, phase2_path: str,
-    discovery_path: str, freeze_path: str,
-) -> Dict[str, Any]:
-    target_sha = sha256_file(target_population_path)
-    phase2_sha = sha256_file(phase2_path)
-    discovery_sha = sha256_file(discovery_path)
-    spec = _load(phase2_path)
-    discovery = _load(discovery_path)
-    frozen = _load(freeze_path)
-    target_bindings = (
-        spec.get("input_sha256"), discovery.get("input_sha256"),
-        frozen.get("target_population_sha256"), frozen.get("input_sha256"),
-    )
-    if any(value != target_sha for value in target_bindings):
-        raise ValueError("Target population SHA identity mismatch")
-    if discovery.get("phase2_sha256") != phase2_sha or frozen.get("phase2_sha256") != phase2_sha:
-        raise ValueError("Phase2 SHA identity mismatch")
-    if frozen.get("discovery_sha256") != discovery_sha:
-        raise ValueError("Discovery/freeze provenance mismatch")
-    upstream_instruments = [str(item.get("instrument") or "").upper() for item in (spec, discovery, frozen)]
-    if not all(upstream_instruments) or len(set(upstream_instruments)) != 1:
-        raise ValueError("Cross-asset isolation failure: artifact instruments differ")
-    upstream_identities = [item.get("dataset_identity") for item in (spec, discovery, frozen)]
-    if any(not isinstance(identity, Mapping) for identity in upstream_identities):
-        raise ValueError("Dataset identity binding is missing")
-    if len({_canonical_hash(identity) for identity in upstream_identities}) != 1:
-        raise ValueError("Dataset identity mismatch")
-    source = _load(target_population_path)
-    if str(source.get("instrument") or "").upper() != upstream_instruments[0]:
-        raise ValueError("Cross-asset isolation failure: artifact instruments differ")
-    identities = [source.get("dataset_identity"), *upstream_identities]
-    if any(not isinstance(identity, Mapping) for identity in identities):
-        raise ValueError("Dataset identity binding is missing")
-    if len({_canonical_hash(identity) for identity in identities}) != 1:
-        raise ValueError("Dataset identity mismatch")
-    code_sha = identities[0].get("code_sha")
-    if not code_sha or any(identity.get("code_sha") != code_sha for identity in identities):
-        raise ValueError("Dataset code SHA identity mismatch")
-    if frozen.get("code_sha") != code_sha:
-        raise ValueError("Freeze code SHA identity mismatch")
-    if frozen.get("immutable") is not True or frozen.get("holdout_opened") is not False:
-        raise ValueError("Invalid freeze artifact")
-    definition = frozen.get("candidate_definition") or {}
-    if _canonical_hash(definition) != frozen.get("candidate_definition_sha256"):
-        raise ValueError("Frozen candidate definition hash mismatch")
-    proposed = (discovery.get("proposed_frozen_candidate") or {}).get("candidate") or {}
-    if _canonical_hash(proposed) != frozen.get("candidate_definition_sha256"):
-        raise ValueError("Discovery candidate does not match frozen candidate definition")
-    split = _split_from_spec(source, spec)
-    holdout_rows = _phase1_eligible_rows(spec, split["test"])
-    analysis = candidate_analysis(definition, holdout_rows)
-    directional = directional_stability(definition, holdout_rows)
-    temporal = temporal_stability(definition, holdout_rows)
-    sensitivity_result = sensitivity(definition, holdout_rows) if len(definition.get("rules") or []) == 1 else {"status": "NOT APPLICABLE", "classification": "NOT APPLICABLE"}
-    overlap_result = overlap_remove_one(definition, holdout_rows)
-    walk_forward = walk_forward_stability(
-        definition, _phase1_eligible_rows(spec, [*split["discovery"], *split["validation"]]),
-        horizon_minutes=int((spec.get("partition_config") or {}).get("horizon_minutes", 240)),
-    )
-    reliability = final_reliability(
-        definition, frozen, analysis, directional, temporal,
-        sensitivity_result, overlap_result, walk_forward,
-    )
-    status = "PASS" if (
-        (analysis.get("selected") or {}).get("resolved_binary", 0) >= 5
-        and (analysis.get("selected") or {}).get("expectancy_r") is not None
-        and (analysis.get("selected") or {}).get("expectancy_r") > 0
-        and (analysis.get("win_retention") or 0) >= 0.50
-    ) else "FAIL"
-    result = {
-        "status": status,
-        "stage": "holdout",
-        "instrument": source.get("instrument"),
-        "variant": source.get("variant"),
-        "lookahead_protection": True,
-        "retuning_after_holdout": False,
-        "holdout_opened_once": True,
-        "input_sha256": sha256_file(target_population_path),
-        "phase2_sha256": sha256_file(phase2_path),
-        "freeze_sha256": sha256_file(freeze_path),
-        "candidate_definition_sha256": frozen["candidate_definition_sha256"],
-        "analysis": analysis,
-        "sensitivity": sensitivity_result,
-        "directional_stability": directional,
-        "temporal_stability": temporal,
-        "walk_forward_stability": walk_forward,
-        "overlap_remove_one": overlap_result,
-        "overfitting_risk": reliability,
-        "decision": "RESEARCH_CANDIDATE_SURVIVED_HOLDOUT" if status == "PASS" else "RESEARCH_CANDIDATE_REJECTED",
-        "production_authority": False,
-    }
-    result["candidate_ranking"] = [candidate_record(definition, frozen, result, reliability)]
-    return result
 
+def evaluate_holdout(target_population_path: str, phase2_path: str, discovery_path: str, freeze_path: str) -> Dict[str, Any]:
+    target_sha=sha256_file(target_population_path); phase2_sha=sha256_file(phase2_path); discovery_sha=sha256_file(discovery_path)
+    spec=_load(phase2_path); discovery=_load(discovery_path); frozen=_load(freeze_path); source=_load(target_population_path)
+    target_bindings=(spec.get("input_sha256"),discovery.get("input_sha256"),frozen.get("target_population_sha256"),frozen.get("input_sha256"))
+    if any(value!=target_sha for value in target_bindings): raise ValueError("Target population SHA identity mismatch")
+    if discovery.get("phase2_sha256")!=phase2_sha or frozen.get("phase2_sha256")!=phase2_sha: raise ValueError("Phase2 SHA identity mismatch")
+    if frozen.get("discovery_sha256")!=discovery_sha: raise ValueError("Discovery/freeze provenance mismatch")
+    upstream=[str(item.get("instrument") or "").upper() for item in (spec,discovery,frozen,source)]
+    if not all(upstream) or len(set(upstream))!=1: raise ValueError("Cross-asset isolation failure: artifact instruments differ")
+    identities=[item.get("dataset_identity") for item in (source,spec,discovery,frozen)]
+    if any(not isinstance(identity,Mapping) for identity in identities) or len({_canonical_hash(identity) for identity in identities})!=1: raise ValueError("Dataset identity mismatch")
+    code_sha=identities[0].get("code_sha")
+    if not code_sha or any(identity.get("code_sha")!=code_sha for identity in identities) or frozen.get("code_sha")!=code_sha: raise ValueError("Dataset code SHA identity mismatch")
+    if frozen.get("immutable") is not True or frozen.get("holdout_opened") is not False: raise ValueError("Invalid freeze artifact")
+    definition=frozen.get("candidate_definition") or {}
+    if _canonical_hash(definition)!=frozen.get("candidate_definition_sha256"): raise ValueError("Frozen candidate definition hash mismatch")
+    proposed=(discovery.get("proposed_frozen_candidate") or {}).get("candidate") or {}
+    if _canonical_hash(proposed)!=frozen.get("candidate_definition_sha256"): raise ValueError("Discovery candidate does not match frozen candidate definition")
+    incumbent=_incumbent_definition(source,spec,min_resolved=10)
+    if frozen.get("incumbent_definition_sha256")!=incumbent.get("incumbent_definition_sha256"): raise ValueError("Frozen incumbent identity mismatch")
+    split=_split_from_spec(source,spec); holdout_partition=list(split["test"]); holdout_rows=_phase1_eligible_rows(spec,holdout_partition)
+    analysis=candidate_analysis(definition,holdout_rows); comparison=_comparison_vs_incumbent(analysis,holdout_partition,incumbent)
+    directional=directional_stability(definition,holdout_rows); temporal=temporal_stability(definition,holdout_rows)
+    sensitivity_result=sensitivity(definition,holdout_rows) if len(definition.get("rules") or [])==1 else {"status":"NOT APPLICABLE","classification":"NOT APPLICABLE"}
+    overlap_result=overlap_remove_one(definition,holdout_rows)
+    walk_forward=walk_forward_stability(definition,_phase1_eligible_rows(spec,[*split["discovery"],*split["validation"]]),horizon_minutes=int((spec.get("partition_config") or {}).get("horizon_minutes",240)))
+    reliability=final_reliability(definition,frozen,analysis,directional,temporal,sensitivity_result,overlap_result,walk_forward)
+    robust=(directional.get("stable") is True and temporal.get("stable") is True and str(sensitivity_result.get("classification") or "").upper()!="FRAGILE" and walk_forward.get("status")=="PASS" and reliability.get("severity")!="HIGH")
+    selected=analysis.get("selected") or {}; relative_ok=comparison.get("challenger_beats_incumbent") is True and comparison.get("material_improvement") is True
+    status="PASS" if selected.get("resolved_binary",0)>=5 and (analysis.get("win_retention") or 0)>=0.50 and relative_ok and robust else "FAIL"
+    negative=selected.get("expectancy_r") is not None and selected.get("expectancy_r")<0
+    paper_policy="PAPER_EXPERIMENT_ONLY" if status=="PASS" and negative else ("STANDARD_PAPER_CANDIDATE" if status=="PASS" else None)
+    result={
+        "status":status,"stage":"holdout","instrument":source.get("instrument"),"variant":source.get("variant"),"lookahead_protection":True,"retuning_after_holdout":False,"holdout_opened_once":True,
+        "input_sha256":target_sha,"phase2_sha256":phase2_sha,"freeze_sha256":sha256_file(freeze_path),"candidate_definition_sha256":frozen["candidate_definition_sha256"],
+        "incumbent_definition":incumbent,"incumbent_definition_sha256":incumbent["incumbent_definition_sha256"],"incumbent_comparison":comparison,
+        "analysis":analysis,"sensitivity":sensitivity_result,"directional_stability":directional,"temporal_stability":temporal,"walk_forward_stability":walk_forward,"overlap_remove_one":overlap_result,"overfitting_risk":reliability,
+        "decision":"RESEARCH_CANDIDATE_SURVIVED_HOLDOUT" if status=="PASS" else "RESEARCH_CANDIDATE_REJECTED",
+        "decision_state":"CHALLENGER_DEPLOYABLE" if status=="PASS" else ("CHALLENGER_BETTER_BUT_NOT_ROBUST" if relative_ok and not robust else "NO_MEANINGFUL_IMPROVEMENT"),
+        "paper_release_policy":paper_policy,"relative_improvement":bool(status=="PASS" and relative_ok),"profit_certified":bool(status=="PASS" and not negative),"production_authority":False,
+    }
+    result["candidate_ranking"]=[candidate_record(definition,frozen,result,reliability)]
+    return result
 
 def automatic_report(
     integrity_path: str, phase1_path: str, phase2_path: str, discovery_path: str,

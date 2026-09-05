@@ -164,6 +164,10 @@ def compile_release_plan(
     pre_audit_sha = sha256_file(pre_audit_path)
     if holdout.get("status") != "PASS" or holdout.get("decision") != "RESEARCH_CANDIDATE_SURVIVED_HOLDOUT":
         raise CandidateNotDeployable("holdout did not approve candidate")
+    if (holdout.get("incumbent_comparison") or {}).get("challenger_beats_incumbent") is not True:
+        raise CandidateNotDeployable("challenger does not beat frozen incumbent")
+    if freeze.get("incumbent_definition_sha256") != holdout.get("incumbent_definition_sha256"):
+        raise CandidateNotDeployable("incumbent freeze/holdout binding mismatch")
     if holdout.get("retuning_after_holdout") is not False or holdout.get("holdout_opened_once") is not True:
         raise CandidateNotDeployable("post-holdout retune/opening invariant failed")
     if holdout.get("candidate_definition_sha256") != definition_sha or holdout.get("freeze_sha256") != freeze_sha:
@@ -216,6 +220,9 @@ def compile_release_plan(
         "pre_audit_sha256": pre_audit_sha,
         "audit_verdict": pre_audit.get("verdict"),
         "retuning_after_holdout": False,
+        "incumbent_definition_sha256": freeze.get("incumbent_definition_sha256"),
+        "relative_improvement": holdout.get("relative_improvement") is True,
+        "paper_release_policy": holdout.get("paper_release_policy"),
     }
     change = {
         "path": MANAGED_PATH,
@@ -236,6 +243,9 @@ def compile_release_plan(
         "source_code_sha": source_code_sha,
         "dataset_identity": dataset_identity,
         "production_authority": False,
+        "paper_release_policy": holdout.get("paper_release_policy"),
+        "release_labels": (["PAPER_EXPERIMENT_ONLY","RELATIVE_IMPROVEMENT","NOT_PROFIT_CERTIFIED","PRODUCTION_AUTHORITY_FALSE"] if holdout.get("paper_release_policy")=="PAPER_EXPERIMENT_ONLY" else ["PRODUCTION_AUTHORITY_FALSE"]),
+        "incumbent_definition_sha256": freeze.get("incumbent_definition_sha256"),
         "freeze_artifact": {"path": freeze_path.name, "sha256": freeze_sha},
         "holdout_artifact": {"path": holdout_path.name, "sha256": holdout_sha},
         "audit_artifact": {"path": audit_path.name, "sha256": audit_sha, "status": audit.get("status")},
