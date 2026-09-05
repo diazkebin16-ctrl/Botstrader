@@ -41,3 +41,17 @@ def test_incumbent_hash_deterministic():
     kw=dict(instrument='GBP_USD',code_sha='a'*40,dataset_identity={'code_sha':'a'*40},managed_rules=[],methodology={'x':1}); assert build_incumbent_definition(**kw)['incumbent_definition_sha256']==build_incumbent_definition(**kw)['incumbent_definition_sha256']
 def test_negative_relative_policy_does_not_forge_profitability():
     g=gate(-.1,-.1,ip=-.3,ipf=.5,vpf=.8); assert g['absolute_profitability']['validation_expectancy_positive'] is False and g['paper_candidate_classification']=='RELATIVE_IMPROVEMENT_PAPER_CANDIDATE'
+
+
+def test_gbpusd_run_33933709146_relative_audit_fixture():
+    incumbent=m(-0.2554050843431774,0.6513758492645462,0.34782608695652173,46)
+    challenger=m(-0.14914944365755894,0.7826555083542742,0.39035087719298245,456)
+    comparison=compare_metrics(incumbent=incumbent,challenger=challenger,evaluation_population_sha256='9'*64)
+    assert comparison['expectancy_delta_vs_incumbent']==pytest.approx(0.10625564068561846)
+    assert comparison['profit_factor_delta_vs_incumbent']==pytest.approx(0.131279659089728)
+    assert comparison['challenger_beats_incumbent'] is True
+    discovery=compare_metrics(incumbent=m(-0.21996462264162758,0.6932061155193046,.3625,160),challenger=m(-0.13358187735146465,0.803041,.3967007,1273),evaluation_population_sha256='8'*64)
+    gate_result=decision_gate({'entry_time_only':True},analysis(-.13358187735146465,.803041),analysis(-.14914944365755894,.7826555083542742),{'severity':'MEDIUM'},min_resolved=10,discovery_comparison=discovery,validation_comparison=comparison,directional={'stable':False},temporal={'stable':True},sensitivity_result={'classification':'STABLE','all_positive':True},walk_forward={'status':'PASS'})
+    assert gate_result['decision']=='REJECT'
+    assert gate_result['diagnostic_state']=='CHALLENGER_BETTER_BUT_NOT_ROBUST'
+    assert gate_result['production_authority'] is False

@@ -42,6 +42,7 @@ def _fixture(tmp_path, *, instrument="AUD_USD", rules=None, verdict="ACCEPT", re
         "direction_semantics": "SAME_NUMERIC_PREDICATE_FOR_BUY_AND_SELL", "entry_time_only": True,
     }
     definition_sha = mapping.canonical_sha256(definition)
+    incumbent_sha = "e" * 64
     identity = {"instrument": instrument, "code_sha": SHA, "data_sha256": "d" * 64}
     target = _write(ws / "03_target_population.json", {"instrument": instrument, "dataset_identity": identity})
     phase2 = _write(ws / "05_phase_2.json", {"instrument": instrument, "dataset_identity": identity, "input_sha256": _sha(target)})
@@ -49,12 +50,14 @@ def _fixture(tmp_path, *, instrument="AUD_USD", rules=None, verdict="ACCEPT", re
         "input_sha256": _sha(target), "phase2_sha256": _sha(phase2), "proposed_frozen_candidate": {"candidate": definition}})
     freeze = _write(ws / "09_freeze.json", {"status":"OK", "freeze_status":"FROZEN_IMMUTABLE", "immutable":True,
         "holdout_opened":False, "instrument":instrument, "candidate_id":"candidate-1", "candidate_definition":definition,
-        "candidate_definition_sha256":definition_sha, "dataset_identity":identity, "code_sha":SHA,
+        "candidate_definition_sha256":definition_sha, "incumbent_definition_sha256":incumbent_sha, "dataset_identity":identity, "code_sha":SHA,
         "target_population_sha256":_sha(target), "phase2_sha256":_sha(phase2), "discovery_sha256":_sha(discovery)})
     holdout = _write(ws / "10_holdout.json", {"status":"PASS", "stage":"holdout", "instrument":instrument,
         "decision":"RESEARCH_CANDIDATE_SURVIVED_HOLDOUT", "retuning_after_holdout":retune, "holdout_opened_once":True,
         "input_sha256":_sha(target), "phase2_sha256":_sha(phase2), "freeze_sha256":_sha(freeze),
-        "candidate_definition_sha256":definition_sha})
+        "candidate_definition_sha256":definition_sha, "incumbent_definition_sha256":incumbent_sha,
+        "incumbent_comparison":{"challenger_beats_incumbent":True,"material_improvement":True},
+        "relative_improvement":True, "paper_release_policy":"STANDARD_PAPER_CANDIDATE"})
     audit = _write(ws / "11_audit.json", {"status":"PASS", "stage":"audit", "production_authority":False})
     pre = _write(ws / "13_pre_audit.json", {"verdict":verdict, "production_authority":False})
     plan = _write(ws / "paper_release_plan.json", {"instrument":instrument,
