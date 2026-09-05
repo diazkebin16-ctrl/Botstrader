@@ -18,6 +18,16 @@ replace_once('research_phase2.py',
         "relative_improvement_classification":relative_label,
 ''')
 
+# Static cleanup after the policy transformation.
+replace_once('research_phase2.py',
+'''    robust=confidence.get("confidence_class")=="STANDARD"
+''',
+''' ''')
+replace_once('test_automation_v3_adaptive_paper_confidence.py',
+'''import copy
+''',
+''' ''')
+
 # Historical tests that encoded "all instability is fatal" are policy tests,
 # not immutable safety tests. Update them to the new governed confidence contract.
 replace_once('test_automation_v3_incumbent_challenger.py',
