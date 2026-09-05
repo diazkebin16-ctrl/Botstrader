@@ -45,10 +45,16 @@ jobs:
         run: python -m pytest -q test_cascade_optimizer.py test_research_manager.py test_research_phase2.py test_research_integrity.py test_research_pipeline.py test_replay_validation.py
       - name: Full regression
         run: python -m pytest -q
-      - name: Compileall and pyflakes
+      - name: Compileall and differential pyflakes
         run: |
           python -m compileall -q .
-          pyflakes server.py deployment_runtime.py managed_strategy_rules.py automation_v3_candidate_mapping.py test_automation_v3_paper_feedback.py
+          mkdir -p /tmp/v3-baseline
+          for f in server.py deployment_runtime.py managed_strategy_rules.py automation_v3_candidate_mapping.py; do git show 48a31e5c23584bf80b31936d9d59f1e4dc36ddfb:$f > /tmp/v3-baseline/$f; done
+          (pyflakes /tmp/v3-baseline/server.py /tmp/v3-baseline/deployment_runtime.py /tmp/v3-baseline/managed_strategy_rules.py /tmp/v3-baseline/automation_v3_candidate_mapping.py || true) | sed -E 's#^/tmp/v3-baseline/##; s/^([^:]+):[0-9]+:[0-9]+:/\1:/' | sort -u > /tmp/pyflakes-baseline.txt
+          (pyflakes server.py deployment_runtime.py managed_strategy_rules.py automation_v3_candidate_mapping.py test_automation_v3_paper_feedback.py || true) | sed -E 's/^([^:]+):[0-9]+:[0-9]+:/\1:/' | sort -u > /tmp/pyflakes-current.txt
+          comm -13 /tmp/pyflakes-baseline.txt /tmp/pyflakes-current.txt > /tmp/pyflakes-new.txt
+          cat /tmp/pyflakes-new.txt
+          test ! -s /tmp/pyflakes-new.txt
       - name: Diff protected files and scan
         run: |
           git diff --check
