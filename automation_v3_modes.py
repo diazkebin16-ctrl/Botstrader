@@ -302,7 +302,12 @@ def build_review_shortlist(workspace: str | Path, *, run_id: str) -> tuple[Path,
         "methodology_identity_sha256": canonical_sha256(methodology),
         "holdout_opened": False,
         "selection_required_before_holdout": True,
-        "incumbent_metrics": ((incumbent.get("validation") or {}).get("metrics") or (diagnostic_top_candidates[0].get("incumbent_metrics") if diagnostic_top_candidates else {})),
+        "incumbent_metrics": (
+            (diagnostic_top_candidates[0].get("incumbent_metrics") if diagnostic_top_candidates else None)
+            or ((incumbent.get("validation") or {}).get("metrics") if isinstance(incumbent.get("validation"), Mapping) else None)
+            or (incumbent.get("validation") if isinstance(incumbent.get("validation"), Mapping) else None)
+            or {}
+        ),
         "diagnostic_top_candidates": diagnostic_top_candidates,
         "deployable_candidates": deployable_candidates,
         "candidates": diagnostic_top_candidates,
@@ -486,29 +491,88 @@ class ReviewBeforeHoldoutOptimizer(AutonomousAssetOptimizer):
         )
         raise RuntimeError(REVIEW_PAUSE_SENTINEL)
 
+    def _review_workspace(self, ledger: V3Ledger, instrument: str) -> tuple[Path, int] | None:
+        run = ledger.run(instrument)
+        attempts = run.get("lookback_attempts") or []
+        if not attempts or not isinstance(attempts[-1], Mapping):
+            return None
+        months = int(attempts[-1].get("months") or 0)
+        code_sha = str(run.get("code_sha") or "")
+        workspace_root = str(run.get("workspace") or "")
+        if not months or len(code_sha) != 40 or not workspace_root:
+            return None
+        return Path(workspace_root) / f"lookback_{months:02d}m_{code_sha[:12]}", months
+
+    def _persist_review_result(
+        self,
+        ledger: V3Ledger,
+        instrument: str,
+        *,
+        status: str,
+        reason: str,
+        final_outcome: str,
+        **extra: Any,
+    ) -> dict[str, Any] | None:
+        resolved = self._review_workspace(ledger, instrument)
+        if resolved is None:
+            return None
+        workspace, months = resolved
+        discovery_path = workspace / "06_discovery.json"
+        if not discovery_path.is_file():
+            return None
+        try:
+            path, shortlist = build_review_shortlist(
+                workspace, run_id=os.getenv("GITHUB_RUN_ID", "local-review-run")
+            )
+        except ValueError:
+            return None
+        return ledger.mutate(
+            instrument,
+            status=status,
+            final_outcome=final_outcome,
+            stop_reason=reason,
+            lookback_months=months,
+            review_shortlist=str(path),
+            review_shortlist_sha256=shortlist["shortlist_sha256"],
+            review_candidates=shortlist["diagnostic_top_candidates"],
+            diagnostic_top_candidates=shortlist["diagnostic_top_candidates"],
+            deployable_candidates=shortlist["deployable_candidates"],
+            incumbent_metrics=shortlist["incumbent_metrics"],
+            mode=REVIEW_BEFORE_HOLDOUT_DEPLOY,
+            **extra,
+        )
+
     def _terminal(self, ledger: V3Ledger, instrument: str, status: str, reason: str, **extra: Any) -> dict[str, Any]:
         if status == "METHODOLOGY_BLOCKED" and reason == REVIEW_PAUSE_SENTINEL:
-            run = ledger.run(instrument)
-            attempts = run.get("lookback_attempts") or []
-            if not attempts:
-                return super()._terminal(ledger, instrument, "NO_VALID_CANDIDATE", "review workspace unavailable", **extra)
-            months = int(attempts[-1]["months"])
-            code_sha = str(run.get("code_sha") or "")
-            workspace = Path(run.get("workspace") or "") / f"lookback_{months:02d}m_{code_sha[:12]}"
-            try:
-                path, shortlist = build_review_shortlist(workspace, run_id=os.getenv("GITHUB_RUN_ID", "local-review-run"))
-            except ValueError as exc:
-                return super()._terminal(ledger, instrument, "NO_VALID_CANDIDATE", str(exc), lookback_months=months, **extra)
-            return ledger.mutate(
-                instrument, status=REVIEW_READY, final_outcome=REVIEW_READY,
-                stop_reason="awaiting exact pre-holdout candidate selection",
-                lookback_months=months, review_shortlist=str(path),
-                review_shortlist_sha256=shortlist["shortlist_sha256"],
-                review_candidates=shortlist["diagnostic_top_candidates"],
-                diagnostic_top_candidates=shortlist["diagnostic_top_candidates"],
-                deployable_candidates=shortlist["deployable_candidates"],
-                incumbent_metrics=shortlist["incumbent_metrics"], mode=REVIEW_BEFORE_HOLDOUT_DEPLOY,
+            persisted = self._persist_review_result(
+                ledger,
+                instrument,
+                status=REVIEW_READY,
+                reason="awaiting exact pre-holdout candidate selection",
+                final_outcome=REVIEW_READY,
+                **extra,
             )
+            if persisted is not None:
+                return persisted
+            return super()._terminal(
+                ledger, instrument, "NO_VALID_CANDIDATE", "review workspace unavailable", **extra
+            )
+
+        # Scientific terminal and review reporting are separate concerns. The
+        # base optimizer can classify discovery as NO_VALID_CANDIDATE before it
+        # reaches the review sentinel. In REVIEW mode we preserve that terminal
+        # decision while still persisting the immutable diagnostic evidence.
+        if status == "NO_VALID_CANDIDATE":
+            persisted = self._persist_review_result(
+                ledger,
+                instrument,
+                status=status,
+                reason=reason,
+                final_outcome=status,
+                **extra,
+            )
+            if persisted is not None:
+                return persisted
         return super()._terminal(ledger, instrument, status, reason, **extra)
 
     def optimize(self, instrument: str) -> dict[str, Any]:

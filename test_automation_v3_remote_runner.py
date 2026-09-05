@@ -215,3 +215,33 @@ def test_code_adapter_rejects_protected_file(monkeypatch, tmp_path):
     payload={"schema_version":2,"status":"PAPER_DEPLOYABLE_CANDIDATE","instrument":"AUD_USD","candidate_id":"c","candidate_definition_sha256":"d"*64,"source_code_sha":"e"*40,"dataset_identity":identity,"production_authority":False,"freeze_artifact":{"path":"x.json","sha256":_sha(artifact)},"holdout_artifact":{"path":"x.json","sha256":_sha(artifact)},"audit_artifact":{"path":"x.json","sha256":_sha(artifact)},"pre_audit":{"path":"x.json","sha256":_sha(artifact),"verdict":"ACCEPT"},"code_changes":[{"operation":"replace_text","path":"server.py","expected_file_sha256":_sha(target),"old_text":"x","new_text":"y","expected_occurrences":1,"evidence_binding":binding}]}
     payload["plan_binding_sha256"]=code_adapter._canonical_sha256(payload);plan.write_text(json.dumps(payload));monkeypatch.setenv("BOTS_V3_PRODUCTION_AUTHORITY","false")
     with pytest.raises(ValueError,match="approved Automation V3 managed surface"):code_adapter.apply_release_plan(tmp_path,plan,base_sha="e"*40,instrument="AUD_USD")
+
+
+
+def test_snapshot_surfaces_review_diagnostics_on_scientific_terminal(tmp_path, monkeypatch):
+    import automation_v3_remote_worker as worker
+    root = tmp_path
+    base = root / "GBP_USD" / "autonomous_v3"
+    base.mkdir(parents=True)
+    sha = "c" * 40
+    payload = {
+        "runs": {"GBP_USD": {
+            "instrument": "GBP_USD", "status": "NO_VALID_CANDIDATE", "final_outcome": "NO_VALID_CANDIDATE",
+            "code_sha": sha, "lookback_attempts": [{"months": 1, "code_sha": sha}],
+            "mode": "REVIEW_BEFORE_HOLDOUT_DEPLOY",
+            "incumbent_metrics": {"resolved_binary": 46, "win_rate": 0.3478, "expectancy_r": -0.255, "profit_factor": 0.651},
+            "diagnostic_top_candidates": [{"rank": 1, "candidate_id": "x", "deployment_eligible": False}],
+            "deployable_candidates": [], "review_shortlist_sha256": "a" * 64,
+            "production_authority": False,
+        }}
+    }
+    worker._write_json(base / "automation_v3_state.json", payload)
+    monkeypatch.delenv("GITHUB_WORKFLOW", raising=False)
+    snap = worker._snapshot(root, "GBP_USD", "33938856618")
+    assert snap["terminal_state"] == "NO_VALID_CANDIDATE"
+    assert snap["incumbent_metrics"]["resolved_binary"] == 46
+    assert len(snap["diagnostic_top_candidates"]) == 1
+    assert snap["deployable_candidates"] == []
+    assert snap["shortlist_sha256"] == "a" * 64
+    assert snap["paper_deployment_status"] is None
+    assert snap["production_authority"] is False

@@ -237,6 +237,11 @@ def _snapshot(root: Path, instrument: str, run_id: str, *, terminal: str | None 
         "performance": _performance_snapshot(root, instrument, run) if authoritative else None,
         "phase1_status": run.get("phase1_status") if authoritative else None,
         "autonomous_approval": run.get("autonomous_approval") if authoritative else None,
+        "mode": run.get("mode") if authoritative else None,
+        "incumbent_metrics": run.get("incumbent_metrics") if authoritative else None,
+        "diagnostic_top_candidates": run.get("diagnostic_top_candidates") if authoritative else None,
+        "deployable_candidates": run.get("deployable_candidates") if authoritative else None,
+        "shortlist_sha256": run.get("review_shortlist_sha256") if authoritative else None,
         "production_authority": False,
     }
 

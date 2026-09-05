@@ -7,6 +7,9 @@ from automation_v3_candidate_mapping import CandidateNotDeployable
 from automation_v3_modes import (
     FULL_AUTO_TO_PAPER,
     KEEP_INCUMBENT,
+    load_json,
+    ReviewBeforeHoldoutOptimizer,
+    V3Ledger,
     REVIEW_BEFORE_HOLDOUT_DEPLOY,
     SELECT_REVIEW_CANDIDATE,
     _bind_selection,
@@ -363,3 +366,90 @@ def test_holdout_binding_cannot_switch_candidate(tmp_path):
 
 def test_full_auto_constant_and_deployment_policy_not_redefined_here():
     assert FULL_AUTO_TO_PAPER == "FULL_AUTO_TO_PAPER"
+
+
+
+def _terminal_workspace(tmp_path: Path, *, status_kind="HIGH_OVERFITTING_RISK", count=30):
+    sha = "b" * 40
+    root = tmp_path / "GBP_USD" / "autonomous_v3"
+    workspace = root / f"lookback_01m_{sha[:12]}"
+    workspace.mkdir(parents=True)
+    dataset = {"code_sha": sha, "data_sha256": "d" * 64}
+    write_json(workspace / "03_target_population.json", {"instrument": "GBP_USD", "dataset_identity": dataset})
+    write_json(workspace / "04_phase_1.json", {"stage": "phase_1"})
+    write_json(workspace / "05_phase_2.json", {
+        "instrument": "GBP_USD", "dataset_identity": dataset,
+        "selection_protocol": "DISCOVERY_DEFINE__VALIDATION_SELECT__FREEZE__HOLDOUT_ONCE",
+        "partition_config": {"horizon_minutes": 240, "embargo_minutes": 30},
+        "lookahead_protection": True,
+    })
+    records = []
+    for i in range(count):
+        rec = _candidate(f"diag{i}", 0.20 - i * 0.001, 0.12 - i * 0.001, eligible=False)
+        rec["validation"]["selected"].update({"wins": 40 + i, "losses": 60, "resolved_binary": 100 + i})
+        rec["incumbent_comparison"]["validation"]["incumbent"].update({"wins": 16, "losses": 30, "resolved_binary": 46})
+        if status_kind == "HIGH_OVERFITTING_RISK":
+            rec["overfitting_risk"] = {"severity": "HIGH", "flags": ["HIGH_OVERFITTING_RISK"]}
+            rec["decision_gate"] = {"decision": "REJECT", "diagnostic_state": "NO_VALID_CANDIDATE", "failed": ["HIGH_OVERFITTING_RISK"]}
+        elif status_kind == "NO_MEANINGFUL_IMPROVEMENT":
+            rec["incumbent_comparison"]["validation"].update({"challenger_beats_incumbent": False, "material_improvement": False})
+            rec["decision_gate"] = {"decision": "REJECT", "diagnostic_state": "NO_MEANINGFUL_IMPROVEMENT", "failed": ["NO_MEANINGFUL_IMPROVEMENT"]}
+        elif status_kind == "CHALLENGER_BETTER_BUT_NOT_ROBUST":
+            rec["incumbent_comparison"]["validation"].update({"challenger_beats_incumbent": True, "material_improvement": True})
+            rec["directional_stability"] = {"stable": False}
+            rec["decision_gate"] = {"decision": "REJECT", "diagnostic_state": "CHALLENGER_BETTER_BUT_NOT_ROBUST", "failed": ["DIRECTIONAL_INSTABILITY"]}
+        records.append(rec)
+    discovery = {
+        "instrument": "GBP_USD", "dataset_identity": dataset, "holdout_opened": False,
+        "incumbent": {"definition": {"methodology_identity": "m" * 64}, "incumbent_definition_sha256": "i" * 64},
+        "candidate_space": {"generated": 120 if count else 0, "evaluated_after_discovery_gate": count, "freeze_eligible": 0},
+        "ranked_candidates": records, "proposed_frozen_candidate": None, "production_authority": False,
+    }
+    write_json(workspace / "06_discovery.json", discovery)
+    write_json(workspace / "08_determinism.json", {"status": "PASS"})
+    ledger = V3Ledger(root / "automation_v3_state.json")
+    ledger.mutate("GBP_USD", status="RUNNING", code_sha=sha, workspace=str(root), lookback_attempts=[{"months": 1, "code_sha": sha}])
+    optimizer = ReviewBeforeHoldoutOptimizer(Path.cwd(), code_sha_provider=lambda: sha)
+    return optimizer, ledger, root, workspace, sha
+
+
+def test_review_no_valid_candidate_terminal_persists_real_diagnostics(tmp_path):
+    optimizer, ledger, root, workspace, sha = _terminal_workspace(tmp_path, status_kind="HIGH_OVERFITTING_RISK", count=30)
+    result = optimizer._terminal(
+        ledger, "GBP_USD", "NO_VALID_CANDIDATE", "HIGH_OVERFITTING_RISK",
+        diagnostic={"generated_candidates": 120, "evaluated_after_discovery_gate": 30, "freeze_eligible": 0, "dominant_failure": "HIGH_OVERFITTING_RISK"},
+    )
+    assert result["status"] == "NO_VALID_CANDIDATE"
+    assert result["final_outcome"] == "NO_VALID_CANDIDATE"
+    assert result["incumbent_metrics"]
+    assert len(result["diagnostic_top_candidates"]) == 3
+    assert result["deployable_candidates"] == []
+    assert len(result["review_shortlist_sha256"]) == 64
+    assert all(c["deployment_eligible"] is False for c in result["diagnostic_top_candidates"])
+    assert all(c["status"] == "HIGH_OVERFITTING_RISK" for c in result["diagnostic_top_candidates"])
+    shortlist = load_json(Path(result["review_shortlist"]))
+    assert shortlist["shortlist_sha256"] == result["review_shortlist_sha256"]
+    assert shortlist["holdout_opened"] is False
+    assert result.get("paper_deployment") is None
+    assert result["production_authority"] is False
+
+
+@pytest.mark.parametrize("kind", ["NO_MEANINGFUL_IMPROVEMENT", "CHALLENGER_BETTER_BUT_NOT_ROBUST"])
+def test_review_scientific_rejection_still_reports_top3(tmp_path, kind):
+    optimizer, ledger, *_ = _terminal_workspace(tmp_path, status_kind=kind, count=6)
+    result = optimizer._terminal(ledger, "GBP_USD", "NO_VALID_CANDIDATE", kind)
+    assert result["status"] == "NO_VALID_CANDIDATE"
+    assert len(result["diagnostic_top_candidates"]) == 3
+    assert result["deployable_candidates"] == []
+    assert result["review_shortlist_sha256"]
+    assert result["production_authority"] is False
+
+
+def test_review_zero_evaluated_candidates_may_return_empty_diagnostic(tmp_path):
+    optimizer, ledger, *_ = _terminal_workspace(tmp_path, count=0)
+    result = optimizer._terminal(ledger, "GBP_USD", "NO_VALID_CANDIDATE", "NO_EVALUATED_CANDIDATES")
+    assert result["status"] == "NO_VALID_CANDIDATE"
+    assert result["diagnostic_top_candidates"] == []
+    assert result["deployable_candidates"] == []
+    assert result["review_shortlist_sha256"]
+    assert result["production_authority"] is False
