@@ -166,3 +166,162 @@ if needle not in text:
 text = text.replace(needle, repl, 1)
 text = text.replace('        "review_candidates": result.get("review_candidates"),', '        "review_candidates": result.get("review_candidates"),\n        "diagnostic_top_candidates": result.get("diagnostic_top_candidates") or result.get("review_candidates"),\n        "deployable_candidates": result.get("deployable_candidates"),\n        "incumbent_metrics": result.get("incumbent_metrics"),')
 p.write_text(text, encoding='utf-8')
+
+t = Path('test_automation_v3_modes.py')
+tests = t.read_text(encoding='utf-8')
+tests = tests.replace('    assert parse_natural_language_intent("Automatiza EUR/USD y antes de desplegar dame los resultados")["mode"] == REVIEW_BEFORE_HOLDOUT_DEPLOY\n', '    assert parse_natural_language_intent("Automatiza EUR/USD y antes de desplegar dame los resultados")["mode"] == REVIEW_BEFORE_HOLDOUT_DEPLOY\n    assert parse_natural_language_intent("Automatiza GBP/USD, muéstrame primero")["mode"] == REVIEW_BEFORE_HOLDOUT_DEPLOY\n')
+old = '''def test_shortlist_is_immutable_top4_and_excludes_noneligible(tmp_path):
+    sha = _workspace(tmp_path, count=5)
+    path, shortlist = build_review_shortlist(tmp_path, run_id="123")
+    assert path.name == f"review_shortlist_{shortlist['shortlist_sha256']}.json"
+    assert shortlist["production_authority"] is False
+    assert shortlist["holdout_opened"] is False
+    assert len(shortlist["candidates"]) == 4
+    assert [item["candidate_id"] for item in shortlist["candidates"]] == ["c0", "c1", "c2", "c3"]
+    assert all(item["pre_holdout_eligible"] for item in shortlist["candidates"])
+    material = dict(shortlist); material.pop("shortlist_sha256")
+    assert shortlist["shortlist_sha256"] == canonical_sha256(material)
+    assert verify_review_shortlist(path, current_code_sha=sha)["shortlist_sha256"] == shortlist["shortlist_sha256"]
+'''
+new = '''def test_review_shortlist_separates_top3_from_deployability(tmp_path):
+    sha = _workspace(tmp_path, count=5)
+    path, shortlist = build_review_shortlist(tmp_path, run_id="123")
+    assert path.name == f"review_shortlist_{shortlist['shortlist_sha256']}.json"
+    assert shortlist["production_authority"] is False
+    assert shortlist["holdout_opened"] is False
+    assert len(shortlist["diagnostic_top_candidates"]) == 3
+    assert len(shortlist["deployable_candidates"]) == 4
+    assert all(item["deployment_eligible"] for item in shortlist["deployable_candidates"])
+    material = dict(shortlist); material.pop("shortlist_sha256")
+    assert shortlist["shortlist_sha256"] == canonical_sha256(material)
+    assert verify_review_shortlist(path, current_code_sha=sha)["shortlist_sha256"] == shortlist["shortlist_sha256"]
+'''
+if old not in tests:
+    raise SystemExit('old shortlist test anchor missing')
+tests = tests.replace(old, new)
+tests = tests.replace('    assert source["candidate"]["id"] == "c1"\n    assert canonical_sha256(source["candidate"]) == shortlist["candidates"][1]["candidate_definition_sha256"]', '    assert source["candidate"]["id"] == shortlist["diagnostic_top_candidates"][1]["candidate_id"]\n    assert canonical_sha256(source["candidate"]) == shortlist["diagnostic_top_candidates"][1]["candidate_definition_sha256"]')
+old = '''def test_review_shortlist_does_not_manufacture_four(tmp_path):
+    _workspace(tmp_path, count=2)
+    _, shortlist = build_review_shortlist(tmp_path, run_id="123")
+    assert len(shortlist["candidates"]) == 2
+'''
+new = '''def test_review_shortlist_shows_real_available_candidates_only(tmp_path):
+    _workspace(tmp_path, count=2)
+    _, shortlist = build_review_shortlist(tmp_path, run_id="123")
+    assert len(shortlist["diagnostic_top_candidates"]) == 3
+'''
+if old not in tests:
+    raise SystemExit('old available-count test anchor missing')
+tests = tests.replace(old, new)
+append = '''
+
+def _diag_candidate(cid, exp_delta, pf_delta, *, eligible=False, directional=True, risk="LOW", beats=None):
+    record = _candidate(cid, exp_delta, pf_delta, expectancy=-0.25541 + exp_delta, eligible=eligible)
+    record["candidate"]["candidate_rule"] = f"room_to_barrier_r <= {0.50 + len(cid)/1000:.3f}"
+    record["validation"]["selected"].update({"wins": 40, "losses": 60, "resolved_binary": 100, "win_rate": 0.40, "profit_factor": 0.75})
+    comp = record["incumbent_comparison"]["validation"]
+    comp["incumbent"] = {"resolved_binary": 46, "wins": 16, "losses": 30, "win_rate": 0.3478, "expectancy_r": -0.25541, "profit_factor": 0.6514}
+    comp["challenger_beats_incumbent"] = (exp_delta > 0 and pf_delta > 0) if beats is None else beats
+    comp["material_improvement"] = comp["challenger_beats_incumbent"]
+    record["directional_stability"] = {"stable": directional}
+    record["temporal_stability"] = {"stable": True}
+    record["sensitivity"] = {"classification": "STABLE", "all_positive": True}
+    record["walk_forward_stability"] = {"status": "PASS"}
+    record["overfitting_risk"] = {"severity": risk, "flags": ["DISCOVERY_EDGE_FAILED_VALIDATION"] if risk == "HIGH" else []}
+    if not eligible:
+        record["decision_gate"] = {"decision": "REJECT", "diagnostic_state": "CHALLENGER_BETTER_BUT_NOT_ROBUST" if comp["challenger_beats_incumbent"] else "NO_MEANINGFUL_IMPROVEMENT", "failed": [] if directional else ["directional_stability"], "paper_candidate_classification": None}
+    return record
+
+
+def _diagnostic_workspace(tmp_path, candidates):
+    sha = "a" * 40
+    dataset = {"code_sha": sha, "data_sha256": "d" * 64}
+    write_json(tmp_path / "03_target_population.json", {"instrument": "GBP_USD", "dataset_identity": dataset})
+    write_json(tmp_path / "04_phase_1.json", {"stage": "phase_1"})
+    write_json(tmp_path / "05_phase_2.json", {"instrument": "GBP_USD", "dataset_identity": dataset, "selection_protocol": "DISCOVERY_DEFINE__VALIDATION_SELECT__FREEZE__HOLDOUT_ONCE", "partition_config": {"horizon_minutes": 240, "embargo_minutes": 30}, "lookahead_protection": True})
+    write_json(tmp_path / "06_discovery.json", {"instrument": "GBP_USD", "dataset_identity": dataset, "holdout_opened": False, "incumbent": {"definition": {"methodology_identity": "m" * 64}, "incumbent_definition_sha256": "i" * 64, "validation": {"metrics": {"resolved_binary": 46, "wins": 16, "losses": 30, "win_rate": 0.3478, "expectancy_r": -0.25541, "profit_factor": 0.6514}}}, "ranked_candidates": candidates, "proposed_frozen_candidate": None, "production_authority": False})
+    write_json(tmp_path / "08_determinism.json", {"status": "PASS"})
+    return sha
+
+
+def test_120_evaluated_zero_deployable_returns_top3(tmp_path):
+    candidates = [_diag_candidate(f"c{i:03d}", 0.20-i*0.001, 0.15-i*0.001) for i in range(120)]
+    _diagnostic_workspace(tmp_path, candidates)
+    _, shortlist = build_review_shortlist(tmp_path, run_id="33937616832")
+    assert len(shortlist["diagnostic_top_candidates"]) == 3
+    assert shortlist["deployable_candidates"] == []
+    assert all(item["deployment_eligible"] is False for item in shortlist["diagnostic_top_candidates"])
+
+
+def test_directionally_unstable_better_candidate_is_visible(tmp_path):
+    _diagnostic_workspace(tmp_path, [_diag_candidate("unstable", .20, .10, directional=False), _diag_candidate("b", .10, .05), _diag_candidate("worse", -.01, -.02, beats=False)])
+    _, shortlist = build_review_shortlist(tmp_path, run_id="1")
+    first = shortlist["diagnostic_top_candidates"][0]
+    assert first["status"] == "BETTER_THAN_INCUMBENT_NOT_ROBUST"
+    assert first["deployment_eligible"] is False
+    assert "directional_stability" in first["reason"]
+
+
+def test_high_overfitting_is_visible_but_not_selectable(tmp_path):
+    from automation_v3_candidate_mapping import CandidateNotDeployable
+    sha = _diagnostic_workspace(tmp_path, [_diag_candidate("overfit", .30, .20, risk="HIGH"), _diag_candidate("b", .10, .05), _diag_candidate("c", .05, .02)])
+    path, shortlist = build_review_shortlist(tmp_path, run_id="1")
+    assert shortlist["diagnostic_top_candidates"][0]["status"] == "HIGH_OVERFITTING_RISK"
+    with pytest.raises(CandidateNotDeployable, match="CANDIDATE_NOT_DEPLOYABLE"):
+        resolve_review_candidate(path, current_code_sha=sha, rank=1)
+
+
+def test_worse_than_incumbent_can_be_ranked_in_top3(tmp_path):
+    _diagnostic_workspace(tmp_path, [_diag_candidate("a", .20, .10), _diag_candidate("b", .10, .05), _diag_candidate("worse", -.10, -.05, beats=False)])
+    _, shortlist = build_review_shortlist(tmp_path, run_id="1")
+    assert shortlist["diagnostic_top_candidates"][2]["status"] == "WORSE_THAN_INCUMBENT"
+
+
+def test_incumbent_metrics_always_in_review_artifact(tmp_path):
+    _diagnostic_workspace(tmp_path, [_diag_candidate("a", .1, .1)])
+    _, shortlist = build_review_shortlist(tmp_path, run_id="1")
+    assert shortlist["incumbent_metrics"] == {"resolved_binary": 46, "wins": 16, "losses": 30, "win_rate": 0.3478, "expectancy_r": -0.25541, "profit_factor": 0.6514}
+
+
+def test_deployable_diagnostic_candidate_can_be_selected(tmp_path):
+    sha = _diagnostic_workspace(tmp_path, [_diag_candidate("good", .3, .2, eligible=True), _diag_candidate("b", .1, .05), _diag_candidate("c", .05, .02)])
+    path, shortlist = build_review_shortlist(tmp_path, run_id="1")
+    assert shortlist["diagnostic_top_candidates"][0]["deployment_eligible"] is True
+    _, source = resolve_review_candidate(path, current_code_sha=sha, rank=1)
+    assert source["candidate"]["id"] == "good"
+
+
+def test_fewer_than_three_and_zero_candidates(tmp_path):
+    _diagnostic_workspace(tmp_path, [_diag_candidate("only", .1, .1)])
+    _, shortlist = build_review_shortlist(tmp_path, run_id="1")
+    assert len(shortlist["diagnostic_top_candidates"]) == 1
+    empty = tmp_path / "empty"; empty.mkdir()
+    _diagnostic_workspace(empty, [])
+    _, no_candidates = build_review_shortlist(empty, run_id="2")
+    assert no_candidates["diagnostic_top_candidates"] == []
+    assert no_candidates["deployable_candidates"] == []
+
+
+def test_diagnostic_ranking_is_deterministic_and_hash_bound(tmp_path):
+    sha = _diagnostic_workspace(tmp_path, [_diag_candidate("a", .2, .1), _diag_candidate("b", .2, .1), _diag_candidate("c", .1, .05)])
+    path, first = build_review_shortlist(tmp_path, run_id="1")
+    _, second = build_review_shortlist(tmp_path, run_id="1")
+    assert first["diagnostic_top_candidates"] == second["diagnostic_top_candidates"]
+    assert first["shortlist_sha256"] == second["shortlist_sha256"]
+    tampered = dict(first)
+    tampered["diagnostic_top_candidates"] = list(reversed(first["diagnostic_top_candidates"]))
+    write_json(path, tampered)
+    with pytest.raises(ValueError, match="shortlist hash mismatch"):
+        verify_review_shortlist(path, current_code_sha=sha)
+
+
+def test_review_never_opens_holdout_and_authority_false(tmp_path):
+    _diagnostic_workspace(tmp_path, [_diag_candidate("a", .1, .1), _diag_candidate("b", .05, .02), _diag_candidate("c", -.01, -.01, beats=False)])
+    _, shortlist = build_review_shortlist(tmp_path, run_id="1")
+    assert shortlist["holdout_opened"] is False
+    assert shortlist["production_authority"] is False
+    assert not (tmp_path / "10_holdout.json").exists()
+'''
+if 'test_120_evaluated_zero_deployable_returns_top3' not in tests:
+    tests += append
+t.write_text(tests, encoding='utf-8')
