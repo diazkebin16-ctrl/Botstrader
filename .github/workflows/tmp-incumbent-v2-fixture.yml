@@ -1,0 +1,32 @@
+name: Temporary V2 incumbent fixture compatibility
+on:
+  push:
+    branches: [fix/automation-v3-incumbent-challenger]
+permissions:
+  contents: write
+jobs:
+  patch:
+    if: "github.event.head_commit.message != 'Use valid code SHA in Phase2 fixtures'"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/automation-v3-incumbent-challenger
+          fetch-depth: 0
+      - name: Update Phase2 identity fixtures
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('test_research_phase2.py'); text=p.read_text(encoding='utf-8')
+          text=text.replace('"code_sha": "abc"','"code_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"')
+          text=text.replace('"code_sha":"abc"','"code_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"')
+          text=text.replace('== "abc"','== "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"')
+          p.write_text(text,encoding='utf-8')
+          PY
+          git config user.name "Botstrader Automation V3"
+          git config user.email "automation-v3@users.noreply.github.com"
+          git add test_research_phase2.py
+          git diff --cached --check
+          git commit -m "Use valid code SHA in Phase2 fixtures"
+          git push origin HEAD:fix/automation-v3-incumbent-challenger
