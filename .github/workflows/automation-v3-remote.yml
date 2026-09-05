@@ -13,6 +13,24 @@ on:
           - GBP_USD
           - USD_JPY
           - USD_CAD
+      mode:
+        description: Governed Automation V3 mode
+        required: true
+        default: FULL_AUTO_TO_PAPER
+        type: choice
+        options:
+          - FULL_AUTO_TO_PAPER
+          - REVIEW_BEFORE_HOLDOUT_DEPLOY
+          - SELECT_REVIEW_CANDIDATE
+          - KEEP_INCUMBENT
+      shortlist_sha256:
+        description: Required for candidate selection; optional for keep-incumbent when exactly one review is active
+        required: false
+        type: string
+      rank:
+        description: Immutable shortlist rank (1-4) for SELECT_REVIEW_CANDIDATE
+        required: false
+        type: string
   repository_dispatch:
     types: [automation-v3-optimize]
 
@@ -30,6 +48,9 @@ jobs:
     timeout-minutes: 360
     env:
       INSTRUMENT: ${{ github.event.inputs.instrument || github.event.client_payload.instrument }}
+      MODE: ${{ github.event.inputs.mode || github.event.client_payload.mode || 'FULL_AUTO_TO_PAPER' }}
+      SHORTLIST_SHA256: ${{ github.event.inputs.shortlist_sha256 || github.event.client_payload.shortlist_sha256 || '' }}
+      RANK: ${{ github.event.inputs.rank || github.event.client_payload.rank || '' }}
       GH_TOKEN: ${{ github.token }}
       RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
       BOTS_V3_PRODUCTION_AUTHORITY: "false"
@@ -40,13 +61,24 @@ jobs:
       BOTS_V3_HEALTHCHECK_URL: https://botstrader-production.up.railway.app/
 
     steps:
-      - name: Validate trigger input
+      - name: Validate structured trigger input
         shell: bash
         run: |
           case "$INSTRUMENT" in
             AUD_USD|EUR_USD|GBP_USD|USD_JPY|USD_CAD) ;;
             *) echo "Unsupported instrument" >&2; exit 2 ;;
           esac
+          case "$MODE" in
+            FULL_AUTO_TO_PAPER|REVIEW_BEFORE_HOLDOUT_DEPLOY|SELECT_REVIEW_CANDIDATE|KEEP_INCUMBENT) ;;
+            *) echo "Unsupported mode" >&2; exit 2 ;;
+          esac
+          if [ "$MODE" = "SELECT_REVIEW_CANDIDATE" ]; then
+            case "$SHORTLIST_SHA256" in
+              *[!0-9a-f]*|'') echo "Invalid shortlist SHA256" >&2; exit 2 ;;
+            esac
+            [ "${#SHORTLIST_SHA256}" -eq 64 ] || { echo "Invalid shortlist SHA256 length" >&2; exit 2; }
+            case "$RANK" in 1|2|3|4) ;; *) echo "Rank must be 1-4" >&2; exit 2 ;; esac
+          fi
 
       - name: Checkout exact main
         uses: actions/checkout@v4
@@ -102,7 +134,15 @@ jobs:
           BOTS_V3_CODE_CHANGE_COMMAND: python automation_v3_code_change_adapter.py
           BOTS_V3_PAPER_DEPLOY_COMMAND: python automation_v3_railway_adapter.py deploy
           BOTS_V3_PAPER_VERIFY_COMMAND: python automation_v3_railway_adapter.py verify
-        run: python automation_v3_remote_worker.py "$INSTRUMENT"
+        run: |
+          if [ "$MODE" = "FULL_AUTO_TO_PAPER" ]; then
+            python automation_v3_remote_worker.py "$INSTRUMENT"
+          else
+            args=(--instrument "$INSTRUMENT" --mode "$MODE")
+            if [ -n "$SHORTLIST_SHA256" ]; then args+=(--shortlist-sha256 "$SHORTLIST_SHA256"); fi
+            if [ -n "$RANK" ]; then args+=(--rank "$RANK"); fi
+            python automation_v3_modes.py "${args[@]}"
+          fi
 
       - name: Save remote research state
         if: always()
