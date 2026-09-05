@@ -44,6 +44,13 @@ def compare_metrics(*, incumbent: Mapping[str,Any], challenger: Mapping[str,Any]
     exp=delta("expectancy_r"); pf=delta("profit_factor"); wr=delta("win_rate")
     resolved=int(challenger.get("resolved_binary") or 0)-int(incumbent.get("resolved_binary") or 0)
     beats=exp is not None and pf is not None and exp>0 and pf>0
+    incumbent_n=int(incumbent.get("resolved_binary") or 0); challenger_n=int(challenger.get("resolved_binary") or 0)
+    common_support=min(x for x in (incumbent_n,challenger_n) if x>0) if incumbent_n>0 and challenger_n>0 else 0
+    # A replacement must improve expectancy by at least one R-unit distributed
+    # across the smaller same-partition support. This is sample-adaptive and
+    # rejects sub-trade-granularity numerical noise without a fixed percentage.
+    materiality_floor_r=(1.0/common_support) if common_support else None
+    material=bool(beats and materiality_floor_r is not None and exp>=materiality_floor_r)
     return {
         "incumbent":dict(incumbent),"challenger":dict(challenger),
         "evaluation_population_sha256":evaluation_population_sha256,
@@ -53,8 +60,10 @@ def compare_metrics(*, incumbent: Mapping[str,Any], challenger: Mapping[str,Any]
         "drawdown_delta_vs_incumbent":None,
         "resolved_delta_vs_incumbent":resolved,
         "challenger_beats_incumbent":beats,
-        "material_improvement":beats,
-        "materiality_basis":"EXPECTANCY_AND_PROFIT_FACTOR_IMPROVE_WITH_EXISTING_ROBUSTNESS_GATES",
+        "material_improvement":material,
+        "materiality_floor_r":materiality_floor_r,
+        "materiality_support":common_support,
+        "materiality_basis":"EXPECTANCY_DELTA_AT_LEAST_ONE_R_UNIT_OVER_SMALLER_SAME_PARTITION_SUPPORT_AND_PF_IMPROVES",
         "production_authority":False,
     }
 

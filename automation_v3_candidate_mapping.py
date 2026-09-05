@@ -89,9 +89,10 @@ def _canonical_rules(definition: Mapping[str, Any]) -> list[dict[str, Any]]:
     return result
 
 
-def _managed_payload(candidate_id: str, definition_sha: str, rules: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _managed_payload(candidate_id: str, definition_sha: str, rules: list[dict[str, Any]], *, confidence_class: str, experimental: bool) -> list[dict[str, Any]]:
     return [
-        {"candidate_definition_sha256": definition_sha, "candidate_id": candidate_id, **rule}
+        {"candidate_definition_sha256": definition_sha, "candidate_id": candidate_id,
+         "confidence_class": confidence_class, "experimental": bool(experimental), "paper_only": True, **rule}
         for rule in rules
     ]
 
@@ -198,7 +199,9 @@ def compile_release_plan(
     if not managed_path.is_file():
         raise CandidateNotDeployable("approved managed change surface missing")
     old_text = _exact_assignment(managed_path, symbol)
-    payload = _managed_payload(candidate_id, definition_sha, rules)
+    confidence_class=str(holdout.get("confidence_class") or freeze.get("confidence_class") or "STANDARD").upper()
+    experimental=confidence_class=="EXPERIMENTAL" or holdout.get("experimental") is True
+    payload = _managed_payload(candidate_id, definition_sha, rules, confidence_class=confidence_class, experimental=experimental)
     new_text = _assignment(symbol, payload)
     if any(marker in new_text.upper() for marker in ("OANDA_TOKEN", "API_KEY", "SECRET_KEY", "PASSWORD", "API-FXTRADE.OANDA.COM")):
         raise CandidateNotDeployable("generated managed text contains prohibited marker")
@@ -223,6 +226,9 @@ def compile_release_plan(
         "incumbent_definition_sha256": freeze.get("incumbent_definition_sha256"),
         "relative_improvement": holdout.get("relative_improvement") is True,
         "paper_release_policy": holdout.get("paper_release_policy"),
+        "confidence_class": confidence_class,
+        "experimental": experimental,
+        "reason_for_experimental": list(holdout.get("reason_for_experimental") or freeze.get("reason_for_experimental") or []),
     }
     change = {
         "path": MANAGED_PATH,
@@ -244,7 +250,10 @@ def compile_release_plan(
         "dataset_identity": dataset_identity,
         "production_authority": False,
         "paper_release_policy": holdout.get("paper_release_policy"),
-        "release_labels": (["PAPER_EXPERIMENT_ONLY","RELATIVE_IMPROVEMENT","NOT_PROFIT_CERTIFIED","PRODUCTION_AUTHORITY_FALSE"] if holdout.get("paper_release_policy")=="PAPER_EXPERIMENT_ONLY" else ["PRODUCTION_AUTHORITY_FALSE"]),
+        "confidence_class": confidence_class,"experimental": experimental,"paper_only": True,
+        "not_profit_certified": bool(holdout.get("not_profit_certified") or experimental),
+        "reason_for_experimental": list(holdout.get("reason_for_experimental") or freeze.get("reason_for_experimental") or []),
+        "release_labels": (["PAPER_EXPERIMENT_ONLY","RELATIVE_IMPROVEMENT","NOT_PROFIT_CERTIFIED","PRODUCTION_AUTHORITY_FALSE"] if holdout.get("paper_release_policy")=="PAPER_EXPERIMENT_ONLY" or experimental else ["PRODUCTION_AUTHORITY_FALSE"]),
         "incumbent_definition_sha256": freeze.get("incumbent_definition_sha256"),
         "freeze_artifact": {"path": freeze_path.name, "sha256": freeze_sha},
         "holdout_artifact": {"path": holdout_path.name, "sha256": holdout_sha},

@@ -257,6 +257,76 @@ def _comparison_vs_incumbent(analysis: Mapping[str, Any], partition_rows: Sequen
     challenger=analysis.get("selected") or {}
     return compare_metrics(incumbent=incumbent,challenger=challenger,evaluation_population_sha256=_partition_hash(partition_rows))
 
+STANDARD_PAPER_CANDIDATE = "STANDARD_PAPER_CANDIDATE"
+EXPERIMENTAL_PAPER_CANDIDATE = "EXPERIMENTAL_PAPER_CANDIDATE"
+REJECTED_CHALLENGER = "REJECTED_CHALLENGER"
+# A walk-forward FAIL is considered moderate only when at least half of valid
+# chronological folds retain positive edge. The existing STANDARD threshold is
+# two-thirds; 50% is the explicit lower experimental envelope, not a PASS.
+EXPERIMENTAL_MIN_WALK_FORWARD_POSITIVE_FRACTION = 0.50
+EXPERIMENTAL_MIN_WALK_FORWARD_VALID_FOLDS = 2
+
+
+def _walk_forward_experimental_ok(walk_forward: Mapping[str, Any]) -> bool:
+    if walk_forward.get("status") == "PASS":
+        return True
+    if walk_forward.get("status") != "FAIL":
+        return False
+    return (
+        int(walk_forward.get("valid_folds") or 0) >= EXPERIMENTAL_MIN_WALK_FORWARD_VALID_FOLDS
+        and float(walk_forward.get("positive_fold_fraction") or 0.0) >= EXPERIMENTAL_MIN_WALK_FORWARD_POSITIVE_FRACTION
+    )
+
+
+def classify_paper_confidence(*, candidate: Mapping[str, Any], validation: Mapping[str, Any], risk: Mapping[str, Any],
+                              discovery_comparison: Mapping[str, Any], validation_comparison: Mapping[str, Any],
+                              directional: Mapping[str, Any], temporal: Mapping[str, Any],
+                              sensitivity_result: Mapping[str, Any], walk_forward: Mapping[str, Any],
+                              min_resolved: int) -> Dict[str, Any]:
+    selected=validation.get("selected") or {}
+    sensitivity_class=str(sensitivity_result.get("classification") or sensitivity_result.get("status") or "").upper().replace(" ","_")
+    core_checks={
+        "entry_time_only":candidate.get("entry_time_only") is True,
+        "not_single_trade_rule":validation.get("losses_rejected",0)>=2,
+        "minimum_validation_sample":selected.get("resolved_binary",0)>=min_resolved,
+        "win_retention":validation.get("win_retention",0)>=0.60,
+        "challenger_beats_incumbent_discovery":discovery_comparison.get("challenger_beats_incumbent") is True,
+        "challenger_beats_incumbent_validation":validation_comparison.get("challenger_beats_incumbent") is True,
+        "material_relative_improvement":validation_comparison.get("material_improvement") is True,
+        "overfit_risk_not_high":str(risk.get("severity") or "").upper()!="HIGH",
+    }
+    hard_failures=[k for k,v in core_checks.items() if not v]
+    if hard_failures:
+        return {"classification":REJECTED_CHALLENGER,"confidence_class":"REJECTED","experimental":False,
+                "eligible":False,"hard_failures":hard_failures,"warnings":[],"production_authority":False}
+    if sensitivity_class in {"FRAGILE","NOT_TESTED"} or sensitivity_result.get("all_positive") is False:
+        return {"classification":REJECTED_CHALLENGER,"confidence_class":"REJECTED","experimental":False,
+                "eligible":False,"hard_failures":["sensitivity_not_credible"],"warnings":[],"production_authority":False}
+    standard_checks={
+        "directional_stability":directional.get("stable") is True,
+        "temporal_stability":temporal.get("stable") is True,
+        "sensitivity":sensitivity_class in {"STABLE","NOT_APPLICABLE"},
+        "walk_forward_stability":walk_forward.get("status")=="PASS",
+        "overfit_risk_low":str(risk.get("severity") or "").upper()=="LOW",
+    }
+    if all(standard_checks.values()):
+        return {"classification":STANDARD_PAPER_CANDIDATE,"confidence_class":"STANDARD","experimental":False,
+                "eligible":True,"hard_failures":[],"warnings":[],"production_authority":False}
+    warnings=[k for k,v in standard_checks.items() if not v]
+    if not _walk_forward_experimental_ok(walk_forward):
+        return {"classification":REJECTED_CHALLENGER,"confidence_class":"REJECTED","experimental":False,
+                "eligible":False,"hard_failures":["walk_forward_outside_experimental_envelope"],"warnings":warnings,
+                "production_authority":False}
+    if sensitivity_class not in {"STABLE","MODERATE","NOT_APPLICABLE"}:
+        return {"classification":REJECTED_CHALLENGER,"confidence_class":"REJECTED","experimental":False,
+                "eligible":False,"hard_failures":["sensitivity_outside_experimental_envelope"],"warnings":warnings,
+                "production_authority":False}
+    return {"classification":EXPERIMENTAL_PAPER_CANDIDATE,"confidence_class":"EXPERIMENTAL","experimental":True,
+            "eligible":True,"hard_failures":[],"warnings":warnings,
+            "reason_for_experimental":warnings,"paper_only":True,"not_profit_certified":True,
+            "production_authority":False}
+
+
 def _robustness_pass(*, risk: Mapping[str, Any], directional: Mapping[str, Any], temporal: Mapping[str, Any], sensitivity_result: Mapping[str, Any], walk_forward: Mapping[str, Any]) -> bool:
     sensitivity_class=str(sensitivity_result.get("classification") or "").upper()
     sensitivity_ok=sensitivity_class in {"STABLE","NOT APPLICABLE","NOT_APPLICABLE"} and sensitivity_result.get("all_positive") is not False
@@ -680,7 +750,12 @@ def decision_gate(
         return {"decision":"FREEZE_ELIGIBLE" if all(checks.values()) else "REJECT","checks":checks,"failed":[k for k,v in checks.items() if not v]}
     disc_comp=dict(discovery_comparison or {}); val_comp=dict(validation_comparison or {})
     wf=dict(walk_forward or {}); direction=dict(directional or {}); time_stability=dict(temporal or {}); sens=dict(sensitivity_result or {})
-    robust=_robustness_pass(risk=risk,directional=direction,temporal=time_stability,sensitivity_result=sens,walk_forward=wf)
+    confidence=classify_paper_confidence(candidate=candidate,validation=validation,risk=risk,
+        discovery_comparison=disc_comp,validation_comparison=val_comp,directional=direction,temporal=time_stability,
+        sensitivity_result=sens,walk_forward=wf,min_resolved=min_resolved)
+    deployable=confidence["eligible"] is True
+    robust=confidence.get("confidence_class")=="STANDARD"
+    negative=(selected.get("expectancy_r") is not None and selected.get("expectancy_r")<0)
     checks={
         "entry_time_only":candidate.get("entry_time_only") is True,
         "not_single_trade_rule":validation.get("losses_rejected",0)>=2,
@@ -695,14 +770,23 @@ def decision_gate(
         "walk_forward_stability":wf.get("status")=="PASS",
         "overfit_risk_not_high":risk.get("severity")!="HIGH",
     }
-    deployable=all(checks.values())
-    negative=(selected.get("expectancy_r") is not None and selected.get("expectancy_r")<0)
+    paper_class=confidence["classification"]
+    if deployable and negative:
+        relative_label=("EXPERIMENTAL_RELATIVE_IMPROVEMENT_PAPER_CANDIDATE" if confidence.get("experimental") else "RELATIVE_IMPROVEMENT_PAPER_CANDIDATE")
+    else:
+        relative_label=paper_class if deployable else None
     return {
         "decision":"FREEZE_ELIGIBLE" if deployable else "REJECT",
-        "checks":checks,"failed":[k for k,v in checks.items() if not v],
+        "checks":checks,"failed":confidence.get("hard_failures") or [k for k,v in checks.items() if not v],
         "diagnostic_state":diagnostic_state(discovery_comparison=disc_comp,validation_comparison=val_comp,robust=robust,deployable=deployable),
         "comparison_contract":"ACTUAL_INCUMBENT_SAME_PARTITION",
-        "paper_candidate_classification":"RELATIVE_IMPROVEMENT_PAPER_CANDIDATE" if deployable and negative else ("CHALLENGER_DEPLOYABLE" if deployable else None),
+        "paper_candidate_classification":relative_label,
+        "confidence_candidate_classification":paper_class,
+        "relative_improvement_classification":relative_label,
+        "confidence_class":confidence.get("confidence_class"),"experimental":confidence.get("experimental") is True,
+        "reason_for_experimental":list(confidence.get("reason_for_experimental") or []),
+        "robustness_warnings":list(confidence.get("warnings") or []),
+        "paper_only":bool(confidence.get("experimental")),"not_profit_certified":bool(confidence.get("experimental") or negative),
         "absolute_profitability":{"validation_expectancy_positive":selected.get("expectancy_r") is not None and selected.get("expectancy_r")>0,"validation_profit_factor_ge_1_05":(selected.get("profit_factor") or 0)>=1.05},
         "production_authority":False,
     }
@@ -742,7 +826,10 @@ def final_reliability(
     if validation_delta is not None and validation_delta > 0 and (holdout_delta is None or holdout_delta <= 0):
         reasons.append({"severity": "HIGH", "reason": "VALIDATION_EDGE_FAILED_HOLDOUT"})
     if walk_forward.get("status") == "FAIL":
-        reasons.append({"severity": "HIGH", "reason": "WALK_FORWARD_INSTABILITY"})
+        if _walk_forward_experimental_ok(walk_forward):
+            reasons.append({"severity": "MEDIUM", "reason": "WALK_FORWARD_INSTABILITY_EXPERIMENTAL_ENVELOPE"})
+        else:
+            reasons.append({"severity": "HIGH", "reason": "WALK_FORWARD_INSTABILITY"})
     elif walk_forward.get("status") == "NOT TESTED":
         reasons.append({"severity": "MEDIUM", "reason": "WALK_FORWARD_NOT_TESTED"})
     if (outcome_effect.get("LOSS") or {}).get("blocked", 0) < 2:
@@ -772,13 +859,7 @@ def candidate_record(
     analysis = holdout.get("analysis") or {}
     disc_effect = discovery.get("outcome_effect") or {}
     hold_effect = analysis.get("outcome_effect") or {}
-    robust = (
-        (holdout.get("directional_stability") or {}).get("stable") is True
-        and (holdout.get("temporal_stability") or {}).get("stable") is True
-        and (holdout.get("sensitivity") or {}).get("classification") != "FRAGILE"
-        and (holdout.get("walk_forward_stability") or {}).get("status") == "PASS"
-    )
-    status = "RESEARCH_CANDIDATE" if holdout.get("status") == "PASS" and reliability.get("severity") != "HIGH" and robust else "REJECT"
+    status = "RESEARCH_CANDIDATE" if holdout.get("status") == "PASS" and reliability.get("severity") != "HIGH" else "REJECT"
     def count(effect: Mapping[str, Any], outcome: str, key: str = "kept") -> int:
         return int((effect.get(outcome) or {}).get(key) or 0)
     return {
@@ -802,6 +883,12 @@ def candidate_record(
         "profit_factor": (analysis.get("selected") or {}).get("profit_factor"),
         "incumbent_comparison": holdout.get("incumbent_comparison"),
         "paper_release_policy": holdout.get("paper_release_policy"),
+        "paper_candidate_classification": holdout.get("paper_candidate_classification"),
+        "confidence_class": holdout.get("confidence_class"),
+        "experimental": holdout.get("experimental") is True,
+        "reason_for_experimental": list(holdout.get("reason_for_experimental") or []),
+        "paper_only": True,
+        "not_profit_certified": holdout.get("not_profit_certified") is True,
         "relative_improvement": holdout.get("relative_improvement") is True,
         "profit_certified": holdout.get("profit_certified") is True,
         "directional_stability": holdout.get("directional_stability"),
@@ -849,8 +936,11 @@ def discover_candidates(target_population_path: str, phase2_path: str, *, min_re
     for rank,item in enumerate(evaluated,1):
         item["rank"]=rank; item["status"]="RESEARCH_CANDIDATE" if item["decision_gate"]["decision"]=="FREEZE_ELIGIBLE" else "REJECT"; item["holdout_status"]="NOT TESTED"
     eligible=[item for item in evaluated if item["decision_gate"]["decision"]=="FREEZE_ELIGIBLE"]
-    eligible.sort(key=_candidate_rank,reverse=True)
-    selected_components=[item["candidate"] for item in eligible[:3]]; proposed=_combine(selected_components) if selected_components else None; composite=None
+    standard=[item for item in eligible if (item.get("decision_gate") or {}).get("confidence_class")=="STANDARD"]
+    experimental=[item for item in eligible if (item.get("decision_gate") or {}).get("confidence_class")=="EXPERIMENTAL"]
+    standard.sort(key=_candidate_rank,reverse=True); experimental.sort(key=_candidate_rank,reverse=True)
+    eligible=[*standard,*experimental]
+    selected_components=[item["candidate"] for item in standard[:3]]; proposed=_combine(selected_components) if selected_components else None; composite=None
     if proposed:
         discovery_result=candidate_analysis(proposed,discovery_rows); validation_result=candidate_analysis(proposed,validation_rows)
         sensitivity_result={"status":"NOT_APPLICABLE","classification":"NOT_APPLICABLE","reason":"Composite components already passed sensitivity"}
@@ -861,8 +951,10 @@ def discover_candidates(target_population_path: str, phase2_path: str, *, min_re
         composite={"candidate":proposed,"discovery":discovery_result,"validation":validation_result,"incumbent_comparison":{"discovery":disc_comp,"validation":val_comp},"sensitivity":sensitivity_result,"directional_stability":directional,"temporal_stability":temporal,"walk_forward_stability":walk,"overlap_remove_one":overlap_remove_one(proposed,validation_rows),"overfitting_risk":risk,"decision_gate":gate}
         if gate["decision"]!="FREEZE_ELIGIBLE":
             composite=None
-            if eligible:
-                top=eligible[0]; composite={**top,"overlap_remove_one":overlap_remove_one(top["candidate"],validation_rows)}
+            if standard:
+                top=standard[0]; composite={**top,"overlap_remove_one":overlap_remove_one(top["candidate"],validation_rows)}
+    if composite is None and not standard and experimental:
+        top=experimental[0]; composite={**top,"overlap_remove_one":overlap_remove_one(top["candidate"],validation_rows)}
     states=[str((item.get("decision_gate") or {}).get("diagnostic_state") or "") for item in evaluated]
     overall_state="CHALLENGER_DEPLOYABLE" if composite else ("CHALLENGER_BETTER_BUT_NOT_ROBUST" if "CHALLENGER_BETTER_BUT_NOT_ROBUST" in states else "NO_MEANINGFUL_IMPROVEMENT")
     return {
@@ -906,6 +998,11 @@ def freeze_candidate(discovery_path: str, output_path: str | Path) -> Dict[str, 
         "incumbent_definition_sha256": (discovery.get("incumbent") or {}).get("incumbent_definition_sha256"),
         "incumbent_comparison": proposed.get("incumbent_comparison"),
         "paper_candidate_classification": (proposed.get("decision_gate") or {}).get("paper_candidate_classification"),
+        "confidence_class": (proposed.get("decision_gate") or {}).get("confidence_class"),
+        "experimental": (proposed.get("decision_gate") or {}).get("experimental") is True,
+        "reason_for_experimental": list((proposed.get("decision_gate") or {}).get("reason_for_experimental") or []),
+        "paper_only": True,
+        "not_profit_certified": (proposed.get("decision_gate") or {}).get("not_profit_certified") is True,
         "candidate_definition": definition,
         "candidate_definition_sha256": _canonical_hash(definition),
         "validation_evidence": {
@@ -961,9 +1058,13 @@ def evaluate_holdout(target_population_path: str, phase2_path: str, discovery_pa
     reliability=final_reliability(definition,frozen,analysis,directional,temporal,sensitivity_result,overlap_result,walk_forward)
     robust=(directional.get("stable") is True and temporal.get("stable") is True and str(sensitivity_result.get("classification") or "").upper()!="FRAGILE" and walk_forward.get("status")=="PASS" and reliability.get("severity")!="HIGH")
     selected=analysis.get("selected") or {}; relative_ok=comparison.get("challenger_beats_incumbent") is True and comparison.get("material_improvement") is True
-    status="PASS" if selected.get("resolved_binary",0)>=5 and (analysis.get("win_retention") or 0)>=0.50 and relative_ok and robust else "FAIL"
+    evidence_ok=selected.get("resolved_binary",0)>=5 and (analysis.get("win_retention") or 0)>=0.50 and reliability.get("severity")!="HIGH"
+    status="PASS" if evidence_ok and relative_ok else "FAIL"
     negative=selected.get("expectancy_r") is not None and selected.get("expectancy_r")<0
-    paper_policy="PAPER_EXPERIMENT_ONLY" if status=="PASS" and negative else ("STANDARD_PAPER_CANDIDATE" if status=="PASS" else None)
+    pre_confidence=str(frozen.get("confidence_class") or "STANDARD").upper()
+    holdout_confidence="STANDARD" if status=="PASS" and pre_confidence=="STANDARD" and robust else ("EXPERIMENTAL" if status=="PASS" else "REJECTED")
+    paper_class=STANDARD_PAPER_CANDIDATE if holdout_confidence=="STANDARD" else (EXPERIMENTAL_PAPER_CANDIDATE if holdout_confidence=="EXPERIMENTAL" else REJECTED_CHALLENGER)
+    paper_policy="PAPER_EXPERIMENT_ONLY" if status=="PASS" and (holdout_confidence=="EXPERIMENTAL" or negative) else ("STANDARD_PAPER_CANDIDATE" if status=="PASS" else None)
     result={
         "status":status,"stage":"holdout","instrument":source.get("instrument"),"variant":source.get("variant"),"lookahead_protection":True,"retuning_after_holdout":False,"holdout_opened_once":True,
         "input_sha256":target_sha,"phase2_sha256":phase2_sha,"freeze_sha256":sha256_file(freeze_path),"candidate_definition_sha256":frozen["candidate_definition_sha256"],
@@ -971,7 +1072,10 @@ def evaluate_holdout(target_population_path: str, phase2_path: str, discovery_pa
         "analysis":analysis,"sensitivity":sensitivity_result,"directional_stability":directional,"temporal_stability":temporal,"walk_forward_stability":walk_forward,"overlap_remove_one":overlap_result,"overfitting_risk":reliability,
         "decision":"RESEARCH_CANDIDATE_SURVIVED_HOLDOUT" if status=="PASS" else "RESEARCH_CANDIDATE_REJECTED",
         "decision_state":"CHALLENGER_DEPLOYABLE" if status=="PASS" else ("CHALLENGER_BETTER_BUT_NOT_ROBUST" if relative_ok and not robust else "NO_MEANINGFUL_IMPROVEMENT"),
-        "paper_release_policy":paper_policy,"relative_improvement":bool(status=="PASS" and relative_ok),"profit_certified":bool(status=="PASS" and not negative),"production_authority":False,
+        "paper_release_policy":paper_policy,"paper_candidate_classification":paper_class,"confidence_class":holdout_confidence,
+        "experimental":holdout_confidence=="EXPERIMENTAL","reason_for_experimental":list(frozen.get("reason_for_experimental") or []) if holdout_confidence=="EXPERIMENTAL" else [],
+        "paper_only":True,"not_profit_certified":bool(holdout_confidence=="EXPERIMENTAL" or negative),
+        "relative_improvement":bool(status=="PASS" and relative_ok),"profit_certified":bool(status=="PASS" and not negative and holdout_confidence=="STANDARD"),"production_authority":False,
     }
     result["candidate_ranking"]=[candidate_record(definition,frozen,result,reliability)]
     return result

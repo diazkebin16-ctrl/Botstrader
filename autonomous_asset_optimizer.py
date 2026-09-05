@@ -215,10 +215,10 @@ class AutonomousAssetOptimizer:
       if diag["recommended_action"]=="EXPAND_LOOKBACK":
        if months==MAX_RESEARCH_LOOKBACK_MONTHS:return self._terminal(ledger,i,"INSUFFICIENT_EVIDENCE","maximum 3-month lookback exhausted",lookback_months=months,diagnostic=diag,pre_gate_diagnostic=pre_gate)
        continue
-      if diag["recommended_action"]=="NO_VALID_CANDIDATE":return self._terminal(ledger,i,"NO_VALID_CANDIDATE",diag["dominant_failure"],diagnostic=diag,pre_gate_diagnostic=pre_gate)
+      if diag["recommended_action"]=="NO_VALID_CANDIDATE":return self._terminal(ledger,i,"NO_VALID_CANDIDATE",diag["dominant_failure"],diagnostic=diag,pre_gate_diagnostic=pre_gate,operational_decision="INCUMBENT_RETAINS_CONTROL")
      return self._terminal(ledger,i,"METHODOLOGY_BLOCKED",str(err),lookback_months=months)
    h=load_json(ad/"10_holdout.json");pre=load_json(ad/"13_pre_audit.json");ranking=h.get("candidate_ranking") or []
-   if h.get("status")!="PASS" or (h.get("overfitting_risk") or {}).get("severity")=="HIGH" or pre.get("verdict") not in {"ACCEPT","ACCEPT WITH LIMITATIONS"} or not any(isinstance(x,Mapping) and x.get("status")=="RESEARCH_CANDIDATE" for x in ranking):return self._terminal(ledger,i,"NO_VALID_CANDIDATE","holdout/pre-audit did not establish PAPER candidate",lookback_months=months)
+   if h.get("status")!="PASS" or (h.get("overfitting_risk") or {}).get("severity")=="HIGH" or pre.get("verdict") not in {"ACCEPT","ACCEPT WITH LIMITATIONS"} or not any(isinstance(x,Mapping) and x.get("status")=="RESEARCH_CANDIDATE" for x in ranking):return self._terminal(ledger,i,"NO_VALID_CANDIDATE","holdout/pre-audit did not establish PAPER candidate",lookback_months=months,operational_decision="INCUMBENT_RETAINS_CONTROL")
    cand=next(x for x in ranking if isinstance(x,Mapping) and x.get("status")=="RESEARCH_CANDIDATE");plan=ad/"paper_release_plan.json";write_json(plan,{"instrument":i,"candidate":cand,"source_code_sha":sha,"production_authority":False})
    if isinstance(self.release,GovernedReleaseController):
     try:compiled=compile_and_write_release_plan(repo=self.repo,plan_path=plan,instrument=i,source_code_sha=sha)

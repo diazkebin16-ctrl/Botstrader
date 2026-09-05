@@ -20,7 +20,11 @@ def test_negative_but_better_robust_is_relative_paper_candidate():
 def test_better_discovery_worse_validation_rejected(): assert gate(-.1,-.4,ip=-.3,ipf=.7,vpf=.5)['decision']=='REJECT'
 def test_high_overfit_better_is_not_robust():
     g=gate(-.1,-.1,risk={"severity":"HIGH"},directional={"stable":True},temporal={"stable":True},sensitivity_result={"classification":"STABLE","all_positive":True},walk_forward={"status":"PASS"}); assert g['decision']=='REJECT'; assert g['diagnostic_state']=='CHALLENGER_BETTER_BUT_NOT_ROBUST'
-def test_stability_fail_blocks(): assert gate(-.1,-.1,directional={"stable":False})['decision']=='REJECT'
+def test_stability_fail_becomes_experimental_not_standard():
+    result=gate(-.1,-.1,directional={"stable":False})
+    assert result['decision']=='FREEZE_ELIGIBLE'
+    assert result['confidence_class']=='EXPERIMENTAL'
+    assert result['experimental'] is True
 def test_sensitivity_fail_blocks(): assert gate(-.1,-.1,sensitivity_result={"classification":"FRAGILE","all_positive":False})['decision']=='REJECT'
 def test_walk_forward_fail_blocks(): assert gate(-.1,-.1,walk_forward={"status":"FAIL"})['decision']=='REJECT'
 def test_population_identity_required():
@@ -52,6 +56,7 @@ def test_gbpusd_run_33933709146_relative_audit_fixture():
     assert comparison['challenger_beats_incumbent'] is True
     discovery=compare_metrics(incumbent=m(-0.21996462264162758,0.6932061155193046,.3625,160),challenger=m(-0.13358187735146465,0.803041,.3967007,1273),evaluation_population_sha256='8'*64)
     gate_result=decision_gate({'entry_time_only':True},analysis(-.13358187735146465,.803041),analysis(-.14914944365755894,.7826555083542742),{'severity':'MEDIUM'},min_resolved=10,discovery_comparison=discovery,validation_comparison=comparison,directional={'stable':False},temporal={'stable':True},sensitivity_result={'classification':'STABLE','all_positive':True},walk_forward={'status':'PASS'})
-    assert gate_result['decision']=='REJECT'
-    assert gate_result['diagnostic_state']=='CHALLENGER_BETTER_BUT_NOT_ROBUST'
+    assert gate_result['decision']=='FREEZE_ELIGIBLE'
+    assert gate_result['confidence_class']=='EXPERIMENTAL'
+    assert gate_result['experimental'] is True
     assert gate_result['production_authority'] is False
