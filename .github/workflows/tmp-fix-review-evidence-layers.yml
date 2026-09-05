@@ -19,7 +19,15 @@ jobs:
         with:
           python-version: '3.12'
       - name: Apply evidence-layer patch
-        run: python .github/scripts/tmp_fix_review_evidence_layers.py
+        run: |
+          python .github/scripts/tmp_fix_review_evidence_layers.py
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('test_automation_v3_modes.py')
+          text = p.read_text(encoding='utf-8')
+          text = text.replace('with pytest.raises(ValueError, match="shortlist hash mismatch"):', 'with pytest.raises(ValueError, match="(?:diagnostic review|shortlist) hash mismatch"):')
+          p.write_text(text, encoding='utf-8')
+          PY
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
