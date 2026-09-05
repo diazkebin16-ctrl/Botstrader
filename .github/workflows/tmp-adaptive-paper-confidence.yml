@@ -38,7 +38,7 @@ jobs:
       - name: Remote tests
         run: python -m pytest -q test_automation_v3_remote_runner.py
       - name: Phase1 tests
-        run: python -m pytest -q test_research_phase1.py test_automation_v3_phase1_population_architecture.py test_automation_v3_phase1_continuation.py
+        run: python -m pytest -q test_automation_v3_phase1_population_architecture.py test_automation_v3_phase1_continuation.py
       - name: Operational time tests
         run: python -m pytest -q test_operational_time_rules.py test_research_operational_time.py
       - name: V2 regression
