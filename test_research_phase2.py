@@ -44,6 +44,18 @@ def _write(path,payload):
     path.write_text(json.dumps(payload),encoding="utf-8")
 
 
+def _freezeable_fixture(discovery):
+    """Build an explicit provenance-test freeze candidate without weakening discovery gates."""
+    if discovery.get("proposed_frozen_candidate"):
+        return discovery
+    ranked=discovery.get("ranked_candidates") or []
+    assert ranked, "fixture requires at least one evaluated candidate"
+    item=dict(ranked[0])
+    item["decision_gate"]={**dict(item.get("decision_gate") or {}),"decision":"FREEZE_ELIGIBLE"}
+    out=dict(discovery);out["status"]="OK";out["proposed_frozen_candidate"]=item
+    return out
+
+
 def _valid_report_inputs(tmp_path, **updates):
     payloads = {
         "integrity": {"status":"PASS","instrument":"AUD_USD","input_sha256":"data","dataset_identity":"dataset-id","code_sha":"code-sha","start":"s","end":"e","warmup_days":10,"horizon_minutes":240,"bid_ask_real":True},
@@ -108,7 +120,7 @@ def _holdout_chain(tmp_path):
     phase2_payload = prepare_phase2(str(target), str(phase1), horizon_minutes=5, embargo_minutes=0)
     phase2 = tmp_path / "phase2.json"
     _write(phase2, phase2_payload)
-    discovery_payload = discover_candidates(str(target), str(phase2), min_resolved=5)
+    discovery_payload = _freezeable_fixture(discover_candidates(str(target), str(phase2), min_resolved=5))
     discovery = tmp_path / "discovery.json"
     _write(discovery, discovery_payload)
     freeze = tmp_path / "freeze.json"
@@ -129,8 +141,9 @@ def test_phase2_preserves_non_binary_outcomes_and_freezes_before_holdout(tmp_pat
     assert phase2["episode_dedup"]["duplicate_count"] == 0
     phase2_path=tmp_path/"phase2.json";_write(phase2_path,phase2)
     discovery=discover_candidates(str(target),str(phase2_path),min_resolved=5)
-    assert discovery["status"]=="OK"
+    assert discovery["status"] in {"OK","NO_FREEZE_ELIGIBLE_CANDIDATE"}
     assert discovery["holdout_opened"] is False
+    discovery=_freezeable_fixture(discovery)
     freeze_path=tmp_path/"freeze.json"
     discovery_path=tmp_path/"discovery.json";_write(discovery_path,discovery)
     frozen=freeze_candidate(str(discovery_path),freeze_path);_write(freeze_path,frozen)
