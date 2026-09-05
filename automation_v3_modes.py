@@ -43,9 +43,10 @@ REVIEW_READY = "REVIEW_SHORTLIST_READY"
 STALE_REVIEW_SHORTLIST = "STALE_REVIEW_SHORTLIST"
 INCUMBENT_RETAINS_CONTROL = "INCUMBENT_RETAINS_CONTROL"
 REVIEW_PAUSE_SENTINEL = "REVIEW_PRE_HOLDOUT_PAUSE"
-SHORTLIST_POLICY = "PRE_HOLDOUT_TOP4_INCUMBENT_RELATIVE_V1"
+SHORTLIST_POLICY = "PRE_HOLDOUT_DIAGNOSTIC_TOP3_PLUS_DEPLOYABLE_V2"
 METHODOLOGY_CONTRACT = "REVIEW_BEFORE_HOLDOUT_DEPLOY_V1"
 MAX_SHORTLIST = 4
+DEFAULT_DIAGNOSTIC_TOP = 3
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -84,7 +85,7 @@ def parse_natural_language_intent(text: str) -> dict[str, Any]:
     if optimize:
         review_markers = (
             "antes de desplegar", "no despliegues", "no desplegar", "dame los resultados",
-            "ensename las mejores", "muestrame las mejores", "estrategias primero",
+            "ensename las mejores", "muestrame las mejores", "muestrame primero", "mostrarme primero", "estrategias primero",
         )
         mode = REVIEW_BEFORE_HOLDOUT_DEPLOY if any(marker in plain for marker in review_markers) else FULL_AUTO_TO_PAPER
         return {"instrument": instrument, "mode": mode}
@@ -129,7 +130,7 @@ def _methodology_identity(phase2: Mapping[str, Any], discovery: Mapping[str, Any
         "lookahead_protection": phase2.get("lookahead_protection") is True,
         "incumbent_methodology_identity": definition.get("methodology_identity"),
         "holdout_policy": "ONE_EXACT_SELECTED_CANDIDATE__OPEN_ONCE__NO_FALLBACK",
-        "ranking_policy": "EXPECTANCY_DELTA__PROFIT_FACTOR_DELTA__VALIDATION_EXPECTANCY__RESOLVED__CANDIDATE_ID",
+        "ranking_policy": "EXPECTANCY_DELTA__PROFIT_FACTOR_DELTA__ROBUSTNESS__VALIDATION_EXPECTANCY__RESOLVED__CANDIDATE_ID",
         "production_authority": False,
     }
 
@@ -141,28 +142,45 @@ def _candidate_definition_sha(record: Mapping[str, Any]) -> str:
     return canonical_sha256(candidate)
 
 
-def _candidate_sort_key(record: Mapping[str, Any]) -> tuple[float, float, float, int, str]:
+def _number(value: Any, default: float = -999.0) -> float:
+    try:
+        return float(value) if value is not None else default
+    except (TypeError, ValueError):
+        return default
+
+
+def _robustness_score(record: Mapping[str, Any]) -> int:
+    sensitivity_result = record.get("sensitivity") or {}
+    sensitivity_class = str(sensitivity_result.get("classification") or "").upper()
+    risk = record.get("overfitting_risk") or {}
+    return sum((
+        (record.get("directional_stability") or {}).get("stable") is True,
+        (record.get("temporal_stability") or {}).get("stable") is True,
+        sensitivity_class in {"STABLE", "NOT APPLICABLE", "NOT_APPLICABLE"} and sensitivity_result.get("all_positive") is not False,
+        (record.get("walk_forward_stability") or {}).get("status") == "PASS",
+        str(risk.get("severity") or "").upper() != "HIGH",
+    ))
+
+
+def _candidate_sort_key(record: Mapping[str, Any]) -> tuple[float, float, int, float, int, str]:
     comparison = (record.get("incumbent_comparison") or {}).get("validation") or {}
     selected = (record.get("validation") or {}).get("selected") or {}
     return (
-        float(comparison.get("expectancy_delta_vs_incumbent") or -999.0),
-        float(comparison.get("profit_factor_delta_vs_incumbent") or -999.0),
-        float(selected.get("expectancy_r") or -999.0),
+        _number(comparison.get("expectancy_delta_vs_incumbent")),
+        _number(comparison.get("profit_factor_delta_vs_incumbent")),
+        _robustness_score(record),
+        _number(selected.get("expectancy_r")),
         int(selected.get("resolved_binary") or 0),
         str((record.get("candidate") or {}).get("id") or ""),
     )
 
 
-def _eligible_records(discovery: Mapping[str, Any]) -> list[dict[str, Any]]:
+def _evaluated_records(discovery: Mapping[str, Any]) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     proposed = discovery.get("proposed_frozen_candidate")
-    if isinstance(proposed, Mapping) and (proposed.get("decision_gate") or {}).get("decision") == "FREEZE_ELIGIBLE":
+    if isinstance(proposed, Mapping):
         records.append(dict(proposed))
-    for item in discovery.get("ranked_candidates") or []:
-        if not isinstance(item, Mapping):
-            continue
-        if (item.get("decision_gate") or {}).get("decision") == "FREEZE_ELIGIBLE":
-            records.append(dict(item))
+    records.extend(dict(item) for item in discovery.get("ranked_candidates") or [] if isinstance(item, Mapping))
     unique: dict[str, dict[str, Any]] = {}
     for record in records:
         digest = _candidate_definition_sha(record)
@@ -170,33 +188,72 @@ def _eligible_records(discovery: Mapping[str, Any]) -> list[dict[str, Any]]:
     return sorted(unique.values(), key=_candidate_sort_key, reverse=True)
 
 
+def _eligible_records(discovery: Mapping[str, Any]) -> list[dict[str, Any]]:
+    return [record for record in _evaluated_records(discovery) if (record.get("decision_gate") or {}).get("decision") == "FREEZE_ELIGIBLE"]
+
+
+def _diagnostic_status(record: Mapping[str, Any]) -> str:
+    gate = record.get("decision_gate") or {}
+    if gate.get("decision") == "FREEZE_ELIGIBLE":
+        return "DEPLOYABLE"
+    risk = record.get("overfitting_risk") or {}
+    if str(risk.get("severity") or "").upper() == "HIGH":
+        return "HIGH_OVERFITTING_RISK"
+    comparison = (record.get("incumbent_comparison") or {}).get("validation") or {}
+    if comparison.get("challenger_beats_incumbent") is True:
+        return "BETTER_THAN_INCUMBENT_NOT_ROBUST"
+    exp_delta = _number(comparison.get("expectancy_delta_vs_incumbent"), 0.0)
+    pf_delta = _number(comparison.get("profit_factor_delta_vs_incumbent"), 0.0)
+    if comparison.get("material_improvement") is not True and (exp_delta > 0 or pf_delta > 0):
+        return "NO_MEANINGFUL_IMPROVEMENT"
+    return "WORSE_THAN_INCUMBENT"
+
+
+def _diagnostic_reason(record: Mapping[str, Any], status: str) -> str:
+    gate = record.get("decision_gate") or {}
+    failed = list(gate.get("failed") or [])
+    risk_flags = list((record.get("overfitting_risk") or {}).get("flags") or [])
+    blockers = failed + [flag for flag in risk_flags if flag not in failed]
+    diagnostic = str(gate.get("diagnostic_state") or "")
+    if blockers:
+        return ", ".join(str(value) for value in blockers)
+    if diagnostic:
+        return diagnostic
+    return status
+
 def _short_candidate(record: Mapping[str, Any], rank: int) -> dict[str, Any]:
     candidate = dict(record.get("candidate") or {})
     validation = record.get("validation") or {}
+    challenger = validation.get("selected") or {}
     comparison = (record.get("incumbent_comparison") or {}).get("validation") or {}
+    incumbent = comparison.get("incumbent") or {}
     gate = record.get("decision_gate") or {}
+    status = _diagnostic_status(record)
+    deployment_eligible = gate.get("decision") == "FREEZE_ELIGIBLE"
+    win_rate_delta = comparison.get("win_rate_delta_vs_incumbent")
+    if win_rate_delta is None and challenger.get("win_rate") is not None and incumbent.get("win_rate") is not None:
+        win_rate_delta = float(challenger["win_rate"]) - float(incumbent["win_rate"])
     return {
-        "rank": rank,
-        "candidate_id": candidate.get("id"),
-        "candidate_definition": candidate,
-        "candidate_definition_sha256": canonical_sha256(candidate),
-        "challenger_metrics": validation.get("selected"),
-        "incumbent_metrics": comparison.get("incumbent"),
-        "relative_improvement": comparison,
-        "win_retention": validation.get("win_retention"),
-        "loss_rejection": validation.get("loss_rejection"),
-        "losses_rejected": validation.get("losses_rejected"),
-        "temporal_stability": record.get("temporal_stability"),
-        "directional_stability": record.get("directional_stability"),
-        "sensitivity": record.get("sensitivity"),
-        "walk_forward_stability": record.get("walk_forward_stability"),
-        "overfitting_status": record.get("overfitting_risk"),
+        "rank": rank, "candidate_id": candidate.get("id"),
+        "rule": candidate.get("candidate_rule") or json.dumps(candidate.get("rules") or [], sort_keys=True),
+        "candidate_definition": candidate, "candidate_definition_sha256": canonical_sha256(candidate),
+        "resolved": challenger.get("resolved_binary"), "sample_size": challenger.get("resolved_binary"),
+        "WIN": challenger.get("wins"), "LOSS": challenger.get("losses"), "win_rate": challenger.get("win_rate"),
+        "expectancy_R": challenger.get("expectancy_r"), "profit_factor": challenger.get("profit_factor"),
+        "incumbent_expectancy_R": incumbent.get("expectancy_r"),
+        "expectancy_delta_vs_incumbent": comparison.get("expectancy_delta_vs_incumbent"),
+        "incumbent_profit_factor": incumbent.get("profit_factor"),
+        "profit_factor_delta_vs_incumbent": comparison.get("profit_factor_delta_vs_incumbent"),
+        "win_rate_delta_vs_incumbent": win_rate_delta,
+        "challenger_metrics": challenger, "incumbent_metrics": incumbent, "relative_improvement": comparison,
+        "win_retention": validation.get("win_retention"), "loss_rejection": validation.get("loss_rejection"),
+        "losses_rejected": validation.get("losses_rejected"), "temporal_stability": record.get("temporal_stability"),
+        "directional_stability": record.get("directional_stability"), "sensitivity": record.get("sensitivity"),
+        "walk_forward_stability": record.get("walk_forward_stability"), "overfitting_status": record.get("overfitting_risk"),
         "paper_candidate_classification": gate.get("paper_candidate_classification"),
-        "pre_holdout_eligible": gate.get("decision") == "FREEZE_ELIGIBLE",
-        "reason": gate.get("diagnostic_state") or "CHALLENGER_DEPLOYABLE",
-        "production_authority": False,
+        "deployment_eligible": deployment_eligible, "pre_holdout_eligible": deployment_eligible,
+        "status": status, "reason": _diagnostic_reason(record, status), "production_authority": False,
     }
-
 
 def build_review_shortlist(workspace: str | Path, *, run_id: str) -> tuple[Path, dict[str, Any]]:
     workspace = Path(workspace)
@@ -208,7 +265,6 @@ def build_review_shortlist(workspace: str | Path, *, run_id: str) -> tuple[Path,
     for path in (target_path, phase1_path, phase2_path, discovery_path, determinism_path):
         if not path.is_file():
             raise ValueError(f"review evidence missing: {path.name}")
-    target = load_json(target_path)
     phase2 = load_json(phase2_path)
     discovery = load_json(discovery_path)
     determinism = load_json(determinism_path)
@@ -216,9 +272,10 @@ def build_review_shortlist(workspace: str | Path, *, run_id: str) -> tuple[Path,
         raise ValueError("review requires unopened holdout")
     if str(determinism.get("status") or "").upper() not in {"PASS", "OK"}:
         raise ValueError("determinism did not pass")
-    records = _eligible_records(discovery)[:MAX_SHORTLIST]
-    if not records:
-        raise ValueError("NO_PRE_HOLDOUT_ELIGIBLE_CHALLENGER")
+    evaluated = _evaluated_records(discovery)
+    ranked = [_short_candidate(record, rank) for rank, record in enumerate(evaluated, 1)]
+    diagnostic_top_candidates = ranked[:DEFAULT_DIAGNOSTIC_TOP]
+    deployable_candidates = [item for item in ranked if item.get("deployment_eligible") is True][:MAX_SHORTLIST]
     dataset_identity = phase2.get("dataset_identity")
     incumbent = discovery.get("incumbent") or {}
     if not isinstance(dataset_identity, Mapping) or not incumbent.get("incumbent_definition_sha256"):
@@ -228,7 +285,7 @@ def build_review_shortlist(workspace: str | Path, *, run_id: str) -> tuple[Path,
         raise ValueError("review code identity missing")
     methodology = _methodology_identity(phase2, discovery)
     payload: dict[str, Any] = {
-        "schema_version": 1,
+        "schema_version": 2,
         "run_id": str(run_id),
         "instrument": str(discovery.get("instrument") or "").upper(),
         "mode": REVIEW_BEFORE_HOLDOUT_DEPLOY,
@@ -245,7 +302,10 @@ def build_review_shortlist(workspace: str | Path, *, run_id: str) -> tuple[Path,
         "methodology_identity_sha256": canonical_sha256(methodology),
         "holdout_opened": False,
         "selection_required_before_holdout": True,
-        "candidates": [_short_candidate(record, rank) for rank, record in enumerate(records, 1)],
+        "incumbent_metrics": ((incumbent.get("validation") or {}).get("metrics") or (diagnostic_top_candidates[0].get("incumbent_metrics") if diagnostic_top_candidates else {})),
+        "diagnostic_top_candidates": diagnostic_top_candidates,
+        "deployable_candidates": deployable_candidates,
+        "candidates": diagnostic_top_candidates,
         "production_authority": False,
     }
     payload["shortlist_sha256"] = canonical_sha256(payload)
@@ -336,23 +396,23 @@ def _source_candidate(discovery: Mapping[str, Any], candidate_id: str, definitio
         definition = item.get("candidate") or {}
         if definition.get("id") == candidate_id and canonical_sha256(definition) == definition_sha:
             if (item.get("decision_gate") or {}).get("decision") != "FREEZE_ELIGIBLE":
-                raise ValueError("selected candidate is not pre-holdout eligible")
+                raise CandidateNotDeployable("CANDIDATE_NOT_DEPLOYABLE: selected candidate failed mandatory pre-holdout gates")
             return dict(item)
     raise ValueError("STALE_REVIEW_SHORTLIST: candidate evidence changed")
 
 
 def resolve_review_candidate(shortlist_path: str | Path, *, current_code_sha: str, rank: int) -> tuple[dict[str, Any], dict[str, Any]]:
     shortlist = verify_review_shortlist(shortlist_path, current_code_sha=current_code_sha)
-    choices = [item for item in shortlist.get("candidates") or [] if isinstance(item, Mapping) and item.get("rank") == rank]
+    visible = shortlist.get("diagnostic_top_candidates") or shortlist.get("candidates") or []
+    choices = [item for item in visible if isinstance(item, Mapping) and item.get("rank") == rank]
     if len(choices) != 1:
-        raise ValueError("rank is not present in immutable shortlist")
+        raise ValueError("rank is not present in immutable diagnostic shortlist")
     choice = dict(choices[0])
-    if choice.get("pre_holdout_eligible") is not True:
-        raise ValueError("selected candidate is not pre-holdout eligible")
+    if choice.get("deployment_eligible") is not True:
+        raise CandidateNotDeployable(f"CANDIDATE_NOT_DEPLOYABLE: {choice.get('status')}: {choice.get('reason')}")
     discovery = load_json(Path(shortlist_path).parent / "06_discovery.json")
     source = _source_candidate(discovery, str(choice.get("candidate_id") or ""), str(choice.get("candidate_definition_sha256") or ""))
     return shortlist, source
-
 
 def _selection_state_path(shortlist_path: Path, shortlist_sha: str) -> Path:
     return shortlist_path.parent / f"review_selection_{shortlist_sha}.json"
@@ -444,7 +504,10 @@ class ReviewBeforeHoldoutOptimizer(AutonomousAssetOptimizer):
                 stop_reason="awaiting exact pre-holdout candidate selection",
                 lookback_months=months, review_shortlist=str(path),
                 review_shortlist_sha256=shortlist["shortlist_sha256"],
-                review_candidates=shortlist["candidates"], mode=REVIEW_BEFORE_HOLDOUT_DEPLOY,
+                review_candidates=shortlist["diagnostic_top_candidates"],
+                diagnostic_top_candidates=shortlist["diagnostic_top_candidates"],
+                deployable_candidates=shortlist["deployable_candidates"],
+                incumbent_metrics=shortlist["incumbent_metrics"], mode=REVIEW_BEFORE_HOLDOUT_DEPLOY,
             )
         return super()._terminal(ledger, instrument, status, reason, **extra)
 
@@ -476,8 +539,13 @@ def _ledger_for(root: Path, instrument: str) -> V3Ledger:
 def select_review_candidate(*, repo: Path, root: Path, instrument: str, shortlist_sha256: str, rank: int, release: Any | None = None) -> dict[str, Any]:
     code_sha = _git_sha(repo)
     shortlist_path = _find_shortlist(root, instrument, shortlist_sha256)
-    shortlist, source_record = resolve_review_candidate(shortlist_path, current_code_sha=code_sha, rank=rank)
-    choice = next(item for item in shortlist["candidates"] if item["rank"] == rank)
+    try:
+        shortlist, source_record = resolve_review_candidate(shortlist_path, current_code_sha=code_sha, rank=rank)
+    except CandidateNotDeployable as exc:
+        state = {"instrument": instrument, "shortlist_sha256": shortlist_sha256, "rank": rank, "status": "CANDIDATE_NOT_DEPLOYABLE", "reason": str(exc), "holdout_opened": False, "production_authority": False}
+        return _ledger_for(root, instrument).mutate(instrument, status="CANDIDATE_NOT_DEPLOYABLE", final_outcome="CANDIDATE_NOT_DEPLOYABLE", stop_reason=str(exc), review_selection=state)
+    visible = shortlist.get("diagnostic_top_candidates") or shortlist.get("candidates") or []
+    choice = next(item for item in visible if item["rank"] == rank)
     binding = {
         "instrument": instrument,
         "shortlist_sha256": shortlist["shortlist_sha256"],
@@ -619,6 +687,9 @@ def execute_request(request: Mapping[str, Any], *, repo: Path | None = None, roo
         "terminal_state": result.get("status"),
         "shortlist_sha256": result.get("review_shortlist_sha256") or safe.get("shortlist_sha256"),
         "review_candidates": result.get("review_candidates"),
+        "diagnostic_top_candidates": result.get("diagnostic_top_candidates") or result.get("review_candidates"),
+        "deployable_candidates": result.get("deployable_candidates"),
+        "incumbent_metrics": result.get("incumbent_metrics"),
         "paper_deployment_status": (result.get("deployment") or {}).get("status") if isinstance(result.get("deployment"), Mapping) else None,
         "production_authority": False,
     }
