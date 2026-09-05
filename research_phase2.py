@@ -681,7 +681,6 @@ def decision_gate(
     disc_comp=dict(discovery_comparison or {}); val_comp=dict(validation_comparison or {})
     wf=dict(walk_forward or {}); direction=dict(directional or {}); time_stability=dict(temporal or {}); sens=dict(sensitivity_result or {})
     robust=_robustness_pass(risk=risk,directional=direction,temporal=time_stability,sensitivity_result=sens,walk_forward=wf)
-    same_edge=disc_comp.get("challenger_beats_incumbent") is True and val_comp.get("challenger_beats_incumbent") is True
     checks={
         "entry_time_only":candidate.get("entry_time_only") is True,
         "not_single_trade_rule":validation.get("losses_rejected",0)>=2,
