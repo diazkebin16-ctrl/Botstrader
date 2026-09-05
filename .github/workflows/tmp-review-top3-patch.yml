@@ -1,12 +1,12 @@
 name: Temporary Automation V3 review top3 patch
-on:
+'on':
   push:
-    branches: [fix/automation-v3-incumbent-challenger]
+    branches:
+      - fix/automation-v3-incumbent-challenger
 permissions:
   contents: write
 jobs:
   patch:
-    if: "github.event.head_commit.message == 'Add temporary review top3 patch workflow'"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -16,19 +16,25 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Apply and validate patch
+      - name: Apply patch
+        run: python .github/scripts/tmp_patch_review_top3.py
+      - name: Install test dependencies
         run: |
-          python .github/scripts/tmp_patch_review_top3.py
           python -m pip install -r requirements.txt
           python -m pip install -r requirements-research.txt
           python -m pip install pyflakes
-          python -m pytest -q test_automation_v3_modes.py
+      - name: Focused review tests
+        run: python -m pytest -q test_automation_v3_modes.py
+      - name: Static checks
+        run: |
           python -m compileall -q automation_v3_modes.py
           pyflakes automation_v3_modes.py
           git diff --check
-          git config user.name "Botstrader Automation V3"
-          git config user.email "automation-v3@users.noreply.github.com"
+      - name: Commit governed patch
+        run: |
+          git config user.name 'Botstrader Automation V3'
+          git config user.email 'automation-v3@users.noreply.github.com'
           git rm .github/workflows/tmp-review-top3-patch.yml .github/scripts/tmp_patch_review_top3.py
           git add automation_v3_modes.py
-          git commit -m "Separate review diagnostics from deployability"
+          git commit -m 'Separate review diagnostics from deployability'
           git push origin HEAD:fix/automation-v3-incumbent-challenger
