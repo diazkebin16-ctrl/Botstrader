@@ -807,6 +807,7 @@ def execute_request(request: Mapping[str, Any], *, repo: Path | None = None, roo
         "run_id": os.getenv("GITHUB_RUN_ID", "local-mode-run"),
         "instrument": instrument, "mode": mode,
         "terminal_state": result.get("status"),
+        "diagnostic_review_sha256": result.get("diagnostic_review_sha256"),
         "shortlist_sha256": result.get("review_shortlist_sha256") or safe.get("shortlist_sha256"),
         "review_candidates": result.get("review_candidates"),
         "diagnostic_top_candidates": result.get("diagnostic_top_candidates") or result.get("review_candidates"),
