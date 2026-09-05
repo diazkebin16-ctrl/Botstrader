@@ -224,11 +224,11 @@ def candidate_analysis(candidate: Mapping[str, Any], rows: Sequence[Mapping[str,
 
 
 def _incumbent_methodology(min_resolved: int) -> Dict[str, Any]:
+    # min_resolved is intentionally NOT part of incumbent identity. It governs
+    # challenger evidence sufficiency and may vary by research/test policy, but
+    # it does not change the strategy being challenged.
     return {
         "contract":"INCUMBENT_VS_CHALLENGER_V1",
-        "min_resolved":int(min_resolved),
-        "phase2_win_retention":0.60,
-        "phase2_min_losses_rejected":2,
         "same_partition_required":True,
         "bid_ask_required":True,
         "operational_schedule_fixed":True,
