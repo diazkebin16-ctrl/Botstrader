@@ -1,0 +1,68 @@
+name: Temporary V3 Paper Feedback Integration
+
+on:
+  push:
+    branches:
+      - fix/automation-v3-adaptive-paper-confidence
+
+permissions:
+  contents: write
+
+jobs:
+  integrate-test-commit:
+    if: ${{ !contains(github.event.head_commit.message, 'Integrate V3 PAPER feedback loop') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify baseline ancestry
+        run: |
+          test "$(git rev-parse origin/main)" = "8492aaec228da5e7c5d9066a448939b11b047493"
+          git merge-base --is-ancestor 48a31e5c23584bf80b31936d9d59f1e4dc36ddfb HEAD
+      - name: Apply narrowly scoped integration
+        run: |
+          python _tmp_patch_v3_identity.py
+          python _tmp_patch_v3_deployment.py
+          python _tmp_patch_v3_server.py
+      - name: Install validation dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-research.txt
+          pip install pytest pyflakes
+      - name: Focused feedback integration
+        run: python -m pytest -q test_automation_v3_paper_feedback.py
+      - name: Server deployment and recovery targets
+        run: python -m pytest -q test_deployment_manager.py test_recovery_manager.py test_recovery_orphan_quarantine.py test_post_fill_integration_v3381.py test_trade_management_hardening_v3352.py
+      - name: Adaptive confidence and incumbent
+        run: python -m pytest -q test_automation_v3_adaptive_paper_confidence.py test_automation_v3_incumbent_challenger.py
+      - name: Candidate mapping modes freeze holdout operational time
+        run: python -m pytest -q test_automation_v3_candidate_mapping.py test_automation_v3_modes.py test_forward_paper_release.py test_operational_time_outcome.py test_historical_execution.py
+      - name: V3 and remote tests
+        run: python -m pytest -q test_automation_v3.py test_automation_v3_remote_runner.py test_automation_v3_integrity_recovery.py test_automation_v3_horizon_max3_lookback.py test_automation_v3_discovery_convergence_performance.py test_automation_v3_discovery_expansion.py test_automation_v3_phase1_continuation.py test_automation_v3_discovery_pregate.py test_phase1_population_architecture.py test_automation_v3_sha_horizon.py
+      - name: V2 regression targets
+        run: python -m pytest -q test_cascade_optimizer.py test_research_manager.py test_research_phase2.py test_research_integrity.py test_research_pipeline.py test_replay_validation.py
+      - name: Full regression
+        run: python -m pytest -q
+      - name: Compileall and pyflakes
+        run: |
+          python -m compileall -q .
+          pyflakes server.py deployment_runtime.py managed_strategy_rules.py automation_v3_candidate_mapping.py test_automation_v3_paper_feedback.py
+      - name: Diff protected files and scan
+        run: |
+          git diff --check
+          test "$(git rev-parse origin/main)" = "8492aaec228da5e7c5d9066a448939b11b047493"
+          test "$(git hash-object forward_experiment.py)" = "a87cd26760b7007d5a737853601069d0e0729610"
+          git diff --name-only 48a31e5c23584bf80b31936d9d59f1e4dc36ddfb -- server.py forward_experiment.py
+          test -z "$(git diff --name-only 48a31e5c23584bf80b31936d9d59f1e4dc36ddfb -- forward_experiment.py)"
+          ! git diff 48a31e5c23584bf80b31936d9d59f1e4dc36ddfb -- . ':!*.md' | grep -E '(OANDA_TOKEN|API_KEY|SECRET_KEY|PASSWORD)[[:space:]]*[=:][[:space:]]*[^$<{[:space:]]' || false
+          ! git status --porcelain | grep -E '\.(db|sqlite|sqlite3|zip|tar|gz)$' || false
+      - name: Commit verified implementation
+        run: |
+          git rm _tmp_patch_v3_identity.py _tmp_patch_v3_deployment.py _tmp_patch_v3_server.py .github/workflows/_tmp_v3_paper_feedback.yml
+          git config user.name "automation-v3-feedback-integration"
+          git config user.email "automation-v3-feedback@users.noreply.github.com"
+          git add server.py deployment_runtime.py managed_strategy_rules.py automation_v3_candidate_mapping.py test_automation_v3_paper_feedback.py
+          git commit -m "Integrate V3 PAPER feedback loop"
+          git push origin HEAD:fix/automation-v3-adaptive-paper-confidence
