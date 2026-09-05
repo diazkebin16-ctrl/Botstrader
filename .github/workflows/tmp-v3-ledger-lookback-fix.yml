@@ -5,6 +5,7 @@ on:
       - fix/automation-v3-review-ledger-lookback
     paths:
       - _tmp_v3_ledger_fix.py
+      - _tmp_v3_ledger_trigger.txt
       - .github/workflows/tmp-v3-ledger-lookback-fix.yml
 permissions:
   contents: write
