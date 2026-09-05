@@ -1,0 +1,72 @@
+name: Temporary Automation V3 review evidence layer patch
+
+on:
+  push:
+    branches:
+      - fix/automation-v3-review-evidence-layers
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Apply evidence-layer patch
+        run: python .github/scripts/tmp_fix_review_evidence_layers.py
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-research.txt
+          pip install pytest pyflakes
+      - name: Focused real-path and mode tests
+        run: python -m pytest -q test_automation_v3_modes.py test_automation_v3_remote_runner.py
+      - name: Incumbent challenger tests
+        run: python -m pytest -q test_automation_v3_incumbent_challenger.py
+      - name: V3 governance tests
+        run: python -m pytest -q test_automation_v3.py test_research_governance.py
+      - name: Full regression
+        run: python -m pytest -q
+      - name: Compileall
+        run: python -m compileall -q .
+      - name: Pyflakes changed Python files
+        run: pyflakes automation_v3_modes.py automation_v3_remote_worker.py test_automation_v3_modes.py test_automation_v3_remote_runner.py
+      - name: Git diff check
+        run: git diff --check bf241cb8e214054f838dc4e507d1a63784e38755 HEAD
+      - name: Protected files
+        run: test -z "$(git diff --name-only bf241cb8e214054f838dc4e507d1a63784e38755 HEAD -- server.py forward_experiment.py)"
+      - name: Secret and dataset scan
+        run: |
+          python - <<'PY'
+          import pathlib, re, subprocess
+          changed = [pathlib.Path(x) for x in subprocess.check_output(['git','diff','--name-only','bf241cb8e214054f838dc4e507d1a63784e38755','HEAD'], text=True).splitlines() if x.strip()]
+          secret_assignment = re.compile(r"(?im)^\s*(?:OANDA_TOKEN|RAILWAY_TOKEN|API_KEY|SECRET_KEY|PASSWORD)\s*=\s*['\"]([^'\"]+)['\"]")
+          placeholders = {'railway-secret','supersecret','x','y','g','r','o'}
+          for path in changed:
+              if not path.is_file():
+                  continue
+              if path.suffix.lower() in {'.db','.sqlite','.zip','.pyc'} or '__pycache__' in path.parts:
+                  raise AssertionError(f'dataset/binary/transient committed: {path}')
+              if path.suffix.lower() in {'.py','.yml','.yaml','.md'}:
+                  text = path.read_text(encoding='utf-8')
+                  for match in secret_assignment.finditer(text):
+                      value = match.group(1)
+                      if value not in placeholders and len(value) >= 8:
+                          raise AssertionError(f'credential-like literal in {path}')
+          PY
+      - name: Commit governed patch only
+        run: |
+          git config user.name "Botstrader Automation V3"
+          git config user.email "automation-v3@users.noreply.github.com"
+          rm -f .github/scripts/tmp_fix_review_evidence_layers.py .github/workflows/tmp-fix-review-evidence-layers.yml
+          git add automation_v3_modes.py automation_v3_remote_worker.py test_automation_v3_modes.py test_automation_v3_remote_runner.py .github/scripts/tmp_fix_review_evidence_layers.py .github/workflows/tmp-fix-review-evidence-layers.yml
+          git diff --cached --check
+          git commit -m "Separate diagnostic review from deployment evidence"
+          git push origin HEAD:fix/automation-v3-review-evidence-layers
