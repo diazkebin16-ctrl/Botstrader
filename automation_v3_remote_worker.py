@@ -24,7 +24,7 @@ EXPECTED_TERMINALS = {"PAPER_DEPLOYED", "CANDIDATE_NOT_DEPLOYABLE", "NO_VALID_CA
 RESUMABLE_STATES = {"EXECUTION_BUDGET_CHECKPOINT"}
 FAIL_TERMINALS = {
     "DATA_SOURCE_UNAVAILABLE", "DATA_INTEGRITY_FAILED", "METHODOLOGY_BLOCKED", "TEST_FAILURE",
-    "DEPLOYMENT_FAILURE", "UNSUPPORTED_INSTRUMENT",
+    "DEPLOYMENT_FAILURE", "UNSUPPORTED_INSTRUMENT", "REVIEW_REPORT_BUILD_FAILED",
 }
 
 
@@ -242,6 +242,8 @@ def _snapshot(root: Path, instrument: str, run_id: str, *, terminal: str | None 
         "diagnostic_top_candidates": run.get("diagnostic_top_candidates") if authoritative else None,
         "deployable_candidates": run.get("deployable_candidates") if authoritative else None,
         "shortlist_sha256": run.get("review_shortlist_sha256") if authoritative else None,
+        "diagnostic_review_sha256": run.get("diagnostic_review_sha256") if authoritative else None,
+        "review_report_error": run.get("review_report_error") if authoritative else None,
         "production_authority": False,
     }
 

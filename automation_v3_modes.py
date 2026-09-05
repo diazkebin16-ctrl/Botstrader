@@ -221,7 +221,7 @@ def _diagnostic_reason(record: Mapping[str, Any], status: str) -> str:
         return diagnostic
     return status
 
-def _short_candidate(record: Mapping[str, Any], rank: int) -> dict[str, Any]:
+def _short_candidate(record: Mapping[str, Any], rank: int, *, deployment_evidence_complete: bool = True) -> dict[str, Any]:
     candidate = dict(record.get("candidate") or {})
     validation = record.get("validation") or {}
     challenger = validation.get("selected") or {}
@@ -229,7 +229,8 @@ def _short_candidate(record: Mapping[str, Any], rank: int) -> dict[str, Any]:
     incumbent = comparison.get("incumbent") or {}
     gate = record.get("decision_gate") or {}
     status = _diagnostic_status(record)
-    deployment_eligible = gate.get("decision") == "FREEZE_ELIGIBLE"
+    scientifically_eligible = gate.get("decision") == "FREEZE_ELIGIBLE"
+    deployment_eligible = scientifically_eligible and deployment_evidence_complete
     win_rate_delta = comparison.get("win_rate_delta_vs_incumbent")
     if win_rate_delta is None and challenger.get("win_rate") is not None and incumbent.get("win_rate") is not None:
         win_rate_delta = float(challenger["win_rate"]) - float(incumbent["win_rate"])
@@ -252,7 +253,15 @@ def _short_candidate(record: Mapping[str, Any], rank: int) -> dict[str, Any]:
         "walk_forward_stability": record.get("walk_forward_stability"), "overfitting_status": record.get("overfitting_risk"),
         "paper_candidate_classification": gate.get("paper_candidate_classification"),
         "deployment_eligible": deployment_eligible, "pre_holdout_eligible": deployment_eligible,
-        "status": status, "reason": _diagnostic_reason(record, status), "production_authority": False,
+        "scientific_pre_holdout_eligible": scientifically_eligible,
+        "diagnostic_only": not deployment_eligible,
+        "status": status,
+        "reason": (
+            "DEPLOYMENT_EVIDENCE_INCOMPLETE: determinism evidence unavailable"
+            if scientifically_eligible and not deployment_evidence_complete
+            else _diagnostic_reason(record, status)
+        ),
+        "production_authority": False,
     }
 
 def build_review_shortlist(workspace: str | Path, *, run_id: str) -> tuple[Path, dict[str, Any]]:
@@ -262,20 +271,31 @@ def build_review_shortlist(workspace: str | Path, *, run_id: str) -> tuple[Path,
     phase2_path = workspace / "05_phase_2.json"
     discovery_path = workspace / "06_discovery.json"
     determinism_path = workspace / "08_determinism.json"
-    for path in (target_path, phase1_path, phase2_path, discovery_path, determinism_path):
-        if not path.is_file():
-            raise ValueError(f"review evidence missing: {path.name}")
+
+    # Diagnostic review evidence exists one layer earlier than deployment evidence.
+    # Discovery-terminal reporting requires only the scientific artifacts that
+    # already exist when candidates have been evaluated.
+    for required in (target_path, phase1_path, phase2_path, discovery_path):
+        if not required.is_file():
+            raise ValueError(f"review evidence missing: {required.name}")
+
     phase2 = load_json(phase2_path)
     discovery = load_json(discovery_path)
-    determinism = load_json(determinism_path)
     if discovery.get("holdout_opened") is not False:
         raise ValueError("review requires unopened holdout")
-    if str(determinism.get("status") or "").upper() not in {"PASS", "OK"}:
-        raise ValueError("determinism did not pass")
+
+    determinism = load_json(determinism_path) if determinism_path.is_file() else {}
+    determinism_status = str(determinism.get("status") or "MISSING").upper()
+    deployment_evidence_complete = determinism_path.is_file() and determinism_status in {"PASS", "OK"}
+
     evaluated = _evaluated_records(discovery)
-    ranked = [_short_candidate(record, rank) for rank, record in enumerate(evaluated, 1)]
+    ranked = [
+        _short_candidate(record, rank, deployment_evidence_complete=deployment_evidence_complete)
+        for rank, record in enumerate(evaluated, 1)
+    ]
     diagnostic_top_candidates = ranked[:DEFAULT_DIAGNOSTIC_TOP]
     deployable_candidates = [item for item in ranked if item.get("deployment_eligible") is True][:MAX_SHORTLIST]
+
     dataset_identity = phase2.get("dataset_identity")
     incumbent = discovery.get("incumbent") or {}
     if not isinstance(dataset_identity, Mapping) or not incumbent.get("incumbent_definition_sha256"):
@@ -283,9 +303,10 @@ def build_review_shortlist(workspace: str | Path, *, run_id: str) -> tuple[Path,
     code_sha = str(dataset_identity.get("code_sha") or "")
     if len(code_sha) != 40:
         raise ValueError("review code identity missing")
+
     methodology = _methodology_identity(phase2, discovery)
     payload: dict[str, Any] = {
-        "schema_version": 2,
+        "schema_version": 3,
         "run_id": str(run_id),
         "instrument": str(discovery.get("instrument") or "").upper(),
         "mode": REVIEW_BEFORE_HOLDOUT_DEPLOY,
@@ -297,7 +318,10 @@ def build_review_shortlist(workspace: str | Path, *, run_id: str) -> tuple[Path,
         "phase1_artifact_sha256": sha256_file(phase1_path),
         "phase2_artifact_sha256": sha256_file(phase2_path),
         "discovery_artifact_sha256": sha256_file(discovery_path),
-        "determinism_artifact_sha256": sha256_file(determinism_path),
+        "determinism_artifact_sha256": sha256_file(determinism_path) if determinism_path.is_file() else None,
+        "determinism_status": determinism_status,
+        "deployment_evidence_complete": deployment_evidence_complete,
+        "diagnostic_only": not deployment_evidence_complete,
         "methodology_identity": methodology,
         "methodology_identity_sha256": canonical_sha256(methodology),
         "holdout_opened": False,
@@ -313,16 +337,33 @@ def build_review_shortlist(workspace: str | Path, *, run_id: str) -> tuple[Path,
         "candidates": diagnostic_top_candidates,
         "production_authority": False,
     }
-    payload["shortlist_sha256"] = canonical_sha256(payload)
-    path = workspace / f"review_shortlist_{payload['shortlist_sha256']}.json"
-    if path.exists():
-        existing = load_json(path)
-        if existing != payload:
-            raise ValueError("immutable shortlist collision")
-        return path, existing
-    write_json(path, payload)
-    return path, payload
 
+    # This hash identifies the immutable diagnostic result and exists even before
+    # determinism. It is deliberately not deployment authority.
+    payload["diagnostic_review_sha256"] = canonical_sha256(payload)
+    if deployment_evidence_complete:
+        payload["shortlist_sha256"] = canonical_sha256(payload)
+        artifact_path = workspace / f"review_shortlist_{payload['shortlist_sha256']}.json"
+    else:
+        payload["shortlist_sha256"] = None
+        artifact_path = workspace / f"diagnostic_review_{payload['diagnostic_review_sha256']}.json"
+
+    if artifact_path.exists():
+        existing = load_json(artifact_path)
+        if existing != payload:
+            raise ValueError("immutable review artifact collision")
+        return artifact_path, existing
+    write_json(artifact_path, payload)
+    return artifact_path, payload
+
+
+def _verify_diagnostic_review_hash(review: Mapping[str, Any]) -> None:
+    stored = review.get("diagnostic_review_sha256")
+    material = dict(review)
+    material.pop("diagnostic_review_sha256", None)
+    material.pop("shortlist_sha256", None)
+    if not isinstance(stored, str) or canonical_sha256(material) != stored:
+        raise ValueError("STALE_REVIEW_SHORTLIST: diagnostic review hash mismatch")
 
 def _verify_shortlist_hash(shortlist: Mapping[str, Any]) -> None:
     stored = shortlist.get("shortlist_sha256")
@@ -335,6 +376,11 @@ def _verify_shortlist_hash(shortlist: Mapping[str, Any]) -> None:
 def verify_review_shortlist(shortlist_path: str | Path, *, current_code_sha: str) -> dict[str, Any]:
     path = Path(shortlist_path)
     shortlist = load_json(path)
+    _verify_diagnostic_review_hash(shortlist)
+    if shortlist.get("deployment_evidence_complete") is not True or shortlist.get("diagnostic_only") is True:
+        raise CandidateNotDeployable(
+            "CANDIDATE_NOT_DEPLOYABLE: deployment evidence incomplete; determinism is required before selection"
+        )
     _verify_shortlist_hash(shortlist)
     if shortlist.get("production_authority") is not False or shortlist.get("mode") != REVIEW_BEFORE_HOLDOUT_DEPLOY:
         raise ValueError("STALE_REVIEW_SHORTLIST: invalid shortlist authority/mode")
@@ -524,8 +570,19 @@ class ReviewBeforeHoldoutOptimizer(AutonomousAssetOptimizer):
             path, shortlist = build_review_shortlist(
                 workspace, run_id=os.getenv("GITHUB_RUN_ID", "local-review-run")
             )
-        except ValueError:
-            return None
+        except ValueError as exc:
+            safe_reason = str(exc).replace(str(workspace), "<workspace>")[:300]
+            return ledger.mutate(
+                instrument,
+                status="REVIEW_REPORT_BUILD_FAILED",
+                final_outcome=final_outcome,
+                scientific_terminal=status,
+                stop_reason=f"REVIEW_REPORT_BUILD_FAILED: {safe_reason}",
+                review_report_error={"code": "REVIEW_REPORT_BUILD_FAILED", "reason": safe_reason},
+                mode=REVIEW_BEFORE_HOLDOUT_DEPLOY,
+                production_authority=False,
+                **extra,
+            )
         return ledger.mutate(
             instrument,
             status=status,
@@ -533,7 +590,8 @@ class ReviewBeforeHoldoutOptimizer(AutonomousAssetOptimizer):
             stop_reason=reason,
             lookback_months=months,
             review_shortlist=str(path),
-            review_shortlist_sha256=shortlist["shortlist_sha256"],
+            review_shortlist_sha256=shortlist.get("shortlist_sha256"),
+            diagnostic_review_sha256=shortlist["diagnostic_review_sha256"],
             review_candidates=shortlist["diagnostic_top_candidates"],
             diagnostic_top_candidates=shortlist["diagnostic_top_candidates"],
             deployable_candidates=shortlist["deployable_candidates"],

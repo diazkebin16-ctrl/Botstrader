@@ -322,7 +322,7 @@ def test_shortlist_hash_binds_diagnostic_ranking(tmp_path):
     tampered = dict(shortlist)
     tampered["diagnostic_top_candidates"] = list(reversed(shortlist["diagnostic_top_candidates"]))
     write_json(path, tampered)
-    with pytest.raises(ValueError, match="shortlist hash mismatch"):
+    with pytest.raises(ValueError, match="(?:diagnostic review|shortlist) hash mismatch"):
         verify_review_shortlist(path, current_code_sha=sha)
 
 
@@ -369,7 +369,7 @@ def test_full_auto_constant_and_deployment_policy_not_redefined_here():
 
 
 
-def _terminal_workspace(tmp_path: Path, *, status_kind="HIGH_OVERFITTING_RISK", count=30):
+def _terminal_workspace(tmp_path: Path, *, status_kind="HIGH_OVERFITTING_RISK", count=30, include_determinism=True):
     sha = "b" * 40
     root = tmp_path / "GBP_USD" / "autonomous_v3"
     workspace = root / f"lookback_01m_{sha[:12]}"
@@ -406,7 +406,8 @@ def _terminal_workspace(tmp_path: Path, *, status_kind="HIGH_OVERFITTING_RISK", 
         "ranked_candidates": records, "proposed_frozen_candidate": None, "production_authority": False,
     }
     write_json(workspace / "06_discovery.json", discovery)
-    write_json(workspace / "08_determinism.json", {"status": "PASS"})
+    if include_determinism:
+        write_json(workspace / "08_determinism.json", {"status": "PASS"})
     ledger = V3Ledger(root / "automation_v3_state.json")
     ledger.mutate("GBP_USD", status="RUNNING", code_sha=sha, workspace=str(root), lookback_attempts=[{"months": 1, "code_sha": sha}])
     optimizer = ReviewBeforeHoldoutOptimizer(Path.cwd(), code_sha_provider=lambda: sha)
@@ -452,4 +453,71 @@ def test_review_zero_evaluated_candidates_may_return_empty_diagnostic(tmp_path):
     assert result["diagnostic_top_candidates"] == []
     assert result["deployable_candidates"] == []
     assert result["review_shortlist_sha256"]
+    assert result["production_authority"] is False
+
+
+
+def test_real_33940485772_path_builds_diagnostic_top3_without_determinism(tmp_path):
+    optimizer, ledger, root, workspace, sha = _terminal_workspace(
+        tmp_path, status_kind="HIGH_OVERFITTING_RISK", count=30, include_determinism=False
+    )
+    result = optimizer._terminal(
+        ledger, "GBP_USD", "NO_VALID_CANDIDATE", "HIGH_OVERFITTING_RISK",
+        diagnostic={"generated_candidates": 120, "evaluated_after_discovery_gate": 30, "freeze_eligible": 0},
+    )
+    assert result["status"] == "NO_VALID_CANDIDATE"
+    assert result["incumbent_metrics"]
+    assert len(result["diagnostic_top_candidates"]) == 3
+    assert result["deployable_candidates"] == []
+    assert result["review_shortlist_sha256"] is None
+    assert len(result["diagnostic_review_sha256"]) == 64
+    review = load_json(Path(result["review_shortlist"]))
+    assert review["diagnostic_only"] is True
+    assert review["deployment_evidence_complete"] is False
+    assert review["determinism_artifact_sha256"] is None
+    assert review["shortlist_sha256"] is None
+    assert review["diagnostic_review_sha256"] == result["diagnostic_review_sha256"]
+    assert all(c["deployment_eligible"] is False for c in review["diagnostic_top_candidates"])
+    assert all(c["diagnostic_only"] is True for c in review["diagnostic_top_candidates"])
+    assert not (workspace / "09_freeze.json").exists()
+    assert not (workspace / "10_holdout.json").exists()
+    assert result.get("paper_deployment") is None
+    assert result["production_authority"] is False
+
+
+def test_missing_determinism_blocks_selection_even_if_scientifically_freeze_eligible(tmp_path):
+    good = _candidate("good", 0.30, 0.20, eligible=True)
+    sha = _workspace(tmp_path, [good], proposed=good)
+    (tmp_path / "08_determinism.json").unlink()
+    path, review = build_review_shortlist(tmp_path, run_id="33940485772")
+    assert review["diagnostic_top_candidates"][0]["scientific_pre_holdout_eligible"] is True
+    assert review["diagnostic_top_candidates"][0]["deployment_eligible"] is False
+    assert review["deployable_candidates"] == []
+    assert review["shortlist_sha256"] is None
+    with pytest.raises(CandidateNotDeployable, match="determinism is required before selection"):
+        resolve_review_candidate(path, current_code_sha=sha, rank=1)
+    assert not (tmp_path / "09_freeze.json").exists()
+    assert not (tmp_path / "10_holdout.json").exists()
+
+
+def test_diagnostic_review_hash_binds_pre_determinism_top3(tmp_path):
+    _workspace(tmp_path, [_candidate("a", 0.2, 0.1, eligible=False), _candidate("b", 0.1, 0.05, eligible=False)])
+    (tmp_path / "08_determinism.json").unlink()
+    _, review = build_review_shortlist(tmp_path, run_id="33940485772")
+    material = dict(review)
+    material.pop("diagnostic_review_sha256")
+    material.pop("shortlist_sha256")
+    assert review["diagnostic_review_sha256"] == canonical_sha256(material)
+    assert review["shortlist_sha256"] is None
+
+
+def test_unexpected_review_report_build_failure_is_explicit(tmp_path, monkeypatch):
+    optimizer, ledger, *_ = _terminal_workspace(tmp_path, include_determinism=False)
+    import automation_v3_modes as modes
+    monkeypatch.setattr(modes, "build_review_shortlist", lambda *a, **k: (_ for _ in ()).throw(ValueError("synthetic review failure")))
+    result = optimizer._terminal(ledger, "GBP_USD", "NO_VALID_CANDIDATE", "HIGH_OVERFITTING_RISK")
+    assert result["status"] == "REVIEW_REPORT_BUILD_FAILED"
+    assert result["final_outcome"] == "NO_VALID_CANDIDATE"
+    assert result["review_report_error"]["code"] == "REVIEW_REPORT_BUILD_FAILED"
+    assert "synthetic review failure" in result["review_report_error"]["reason"]
     assert result["production_authority"] is False

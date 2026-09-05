@@ -245,3 +245,29 @@ def test_snapshot_surfaces_review_diagnostics_on_scientific_terminal(tmp_path, m
     assert snap["shortlist_sha256"] == "a" * 64
     assert snap["paper_deployment_status"] is None
     assert snap["production_authority"] is False
+
+
+
+def test_snapshot_surfaces_diagnostic_review_identity_without_shortlist(tmp_path, monkeypatch):
+    import automation_v3_remote_worker as worker
+    root = tmp_path
+    base = root / "GBP_USD" / "autonomous_v3"
+    base.mkdir(parents=True)
+    sha = "d" * 40
+    worker._write_json(base / "automation_v3_state.json", {
+        "runs": {"GBP_USD": {
+            "instrument": "GBP_USD", "status": "NO_VALID_CANDIDATE", "final_outcome": "NO_VALID_CANDIDATE",
+            "code_sha": sha, "lookback_attempts": [{"months": 1, "code_sha": sha}],
+            "mode": "REVIEW_BEFORE_HOLDOUT_DEPLOY", "incumbent_metrics": {"resolved_binary": 46},
+            "diagnostic_top_candidates": [{"rank": 1, "deployment_eligible": False}],
+            "deployable_candidates": [], "review_shortlist_sha256": None,
+            "diagnostic_review_sha256": "a" * 64, "production_authority": False,
+        }}
+    })
+    monkeypatch.setattr(worker, "_current_checkout_sha", lambda: sha)
+    snap = worker._snapshot(root, "GBP_USD", "33940485772")
+    assert snap["terminal_state"] == "NO_VALID_CANDIDATE"
+    assert snap["shortlist_sha256"] is None
+    assert snap["diagnostic_review_sha256"] == "a" * 64
+    assert snap["deployable_candidates"] == []
+    assert snap["production_authority"] is False
