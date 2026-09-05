@@ -83,5 +83,10 @@ def run():
     assert Path("forward_experiment.py").is_file()
     os.remove(db)
 
+
+def test_v3_paper_feedback_loop():
+    run()
+
+
 if __name__=="__main__":
     run();print("automation v3 paper feedback integration tests: OK")
