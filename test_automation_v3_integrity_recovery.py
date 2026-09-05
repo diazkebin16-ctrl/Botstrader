@@ -180,17 +180,10 @@ def test_successful_retry_continues_cascade(tmp_path, monkeypatch):
     assert out["status"] == "PAPER_DEPLOYED" and release.deploys == 1
 
 
-def test_repeated_recoverable_failure_expands_lookback(tmp_path, monkeypatch):
-    out, data, _, calls = _run(tmp_path, monkeypatch, {1: ["coverage", "coverage"], 3: [None]})
-    assert out["status"] == "PAPER_DEPLOYED" and calls[1] == 2 and calls[3] == 1 and len(data.calls) == 3
-
-
-def test_twelve_month_repeated_coverage_has_safe_terminal(tmp_path, monkeypatch):
-    out, data, _, calls = _run(tmp_path, monkeypatch, {
-        1: ["coverage", "coverage"], 3: ["coverage", "coverage"],
-        6: ["coverage", "coverage"], 12: ["coverage", "coverage"],
-    })
-    assert out["status"] == "DATA_COVERAGE_INSUFFICIENT" and calls[12] == 2 and len(data.calls) == 8
+def test_repeated_recoverable_failure_stops_same_lookback(tmp_path, monkeypatch):
+    out, data, _, calls = _run(tmp_path, monkeypatch, {1: ["coverage", "coverage"]})
+    assert out["status"] == "DATA_COVERAGE_INSUFFICIENT" and calls[1] == 2 and len(data.calls) == 2
+    assert set(calls) == {1}
     assert out["production_authority"] is False
 
 
@@ -220,11 +213,11 @@ def test_remote_status_includes_exact_failed_checks(tmp_path):
     root = tmp_path / "root"
     state = root / "AUD_USD" / "autonomous_v3" / "automation_v3_state.json"
     state.parent.mkdir(parents=True)
-    diagnostic = {"failed_checks": ["M1_HORIZON_COVERAGE_INCOMPLETE"], "recommended_action": "EXPAND_LOOKBACK", "production_authority": False}
-    state.write_text(json.dumps({"runs": {"AUD_USD": {"status": "DATA_COVERAGE_INSUFFICIENT", "code_sha": SHA, "lookback_attempts": [{"months": 12}], "integrity_diagnostic": diagnostic, "production_authority": False}}}), encoding="utf-8")
+    diagnostic = {"failed_checks": ["M1_HORIZON_COVERAGE_INCOMPLETE"], "recommended_action": "DATA_COVERAGE_INSUFFICIENT", "production_authority": False}
+    state.write_text(json.dumps({"runs": {"AUD_USD": {"status": "DATA_COVERAGE_INSUFFICIENT", "code_sha": SHA, "lookback_attempts": [{"months": 3}], "integrity_diagnostic": diagnostic, "production_authority": False}}}), encoding="utf-8")
     snap = _snapshot(root, "AUD_USD", "run-1")
     assert snap["integrity_diagnostic"]["failed_checks"] == ["M1_HORIZON_COVERAGE_INCOMPLETE"]
-    assert snap["integrity_diagnostic"]["recommended_action"] == "EXPAND_LOOKBACK"
+    assert snap["integrity_diagnostic"]["recommended_action"] == "DATA_COVERAGE_INSUFFICIENT"
 
 
 def test_integrity_diagnostic_redacts_secret_like_values(tmp_path):

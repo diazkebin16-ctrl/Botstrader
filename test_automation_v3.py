@@ -146,21 +146,17 @@ def test_one_command_happy_path_to_paper(tmp_path,monkeypatch):
     monkeypatch.setenv("BOTS_RESEARCH_ROOT",str(tmp_path/"research"));opt,data,rel=_optimizer(tmp_path,{1:"ok"})
     out=opt.optimize("AUD_USD"); assert out["status"]=="PAPER_DEPLOYED" and len(data.calls)==1 and rel.deploys==1
 
-def test_auto_expands_one_to_three_months(tmp_path,monkeypatch):
-    monkeypatch.setenv("BOTS_RESEARCH_ROOT",str(tmp_path/"research"));opt,data,_=_optimizer(tmp_path,{1:"insufficient",3:"ok"})
+def test_auto_expands_one_to_two_months(tmp_path,monkeypatch):
+    monkeypatch.setenv("BOTS_RESEARCH_ROOT",str(tmp_path/"research"));opt,data,_=_optimizer(tmp_path,{1:"insufficient",2:"ok"})
     assert opt.optimize("AUD_USD")["status"]=="PAPER_DEPLOYED"; assert len(data.calls)==2
 
-def test_auto_expands_three_to_six_months(tmp_path,monkeypatch):
-    monkeypatch.setenv("BOTS_RESEARCH_ROOT",str(tmp_path/"research"));opt,data,_=_optimizer(tmp_path,{1:"insufficient",3:"insufficient",6:"ok"})
+def test_auto_expands_two_to_three_months(tmp_path,monkeypatch):
+    monkeypatch.setenv("BOTS_RESEARCH_ROOT",str(tmp_path/"research"));opt,data,_=_optimizer(tmp_path,{1:"insufficient",2:"insufficient",3:"ok"})
     assert opt.optimize("AUD_USD")["status"]=="PAPER_DEPLOYED"; assert len(data.calls)==3
 
-def test_auto_expands_six_to_twelve_months(tmp_path,monkeypatch):
-    monkeypatch.setenv("BOTS_RESEARCH_ROOT",str(tmp_path/"research"));opt,data,_=_optimizer(tmp_path,{1:"insufficient",3:"insufficient",6:"insufficient",12:"ok"})
-    assert opt.optimize("AUD_USD")["status"]=="PAPER_DEPLOYED"; assert len(data.calls)==4
-
-def test_twelve_months_insufficient_terminal(tmp_path,monkeypatch):
-    monkeypatch.setenv("BOTS_RESEARCH_ROOT",str(tmp_path/"research"));opt,data,_=_optimizer(tmp_path,{1:"insufficient",3:"insufficient",6:"insufficient",12:"insufficient"})
-    assert opt.optimize("AUD_USD")["status"]=="INSUFFICIENT_EVIDENCE" and len(data.calls)==4
+def test_three_months_insufficient_terminal(tmp_path,monkeypatch):
+    monkeypatch.setenv("BOTS_RESEARCH_ROOT",str(tmp_path/"research"));opt,data,_=_optimizer(tmp_path,{1:"insufficient",2:"insufficient",3:"insufficient"})
+    assert opt.optimize("AUD_USD")["status"]=="INSUFFICIENT_EVIDENCE" and len(data.calls)==3
 
 def test_sufficient_support_bad_candidate_does_not_expand_forever(tmp_path,monkeypatch):
     monkeypatch.setenv("BOTS_RESEARCH_ROOT",str(tmp_path/"research"));opt,data,_=_optimizer(tmp_path,{1:"bad"})

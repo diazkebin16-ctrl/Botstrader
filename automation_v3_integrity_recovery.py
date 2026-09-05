@@ -102,7 +102,7 @@ def build_integrity_diagnostic(
     missing = sorted(name for name in ("H1", "M15", "M5", "M1") if name not in present)
     non_weekend = sum(int((frame or {}).get("non_weekend_gaps") or 0) for frame in timeframes.values() if isinstance(frame, Mapping))
     coverage_starts = [str(frame.get("first")) for frame in timeframes.values() if isinstance(frame, Mapping) and frame.get("first")]
-    coverage_ends = [str(frame.get("last")) for frame in timeframes.values() if isinstance(frame, Mapping) and frame.get("last")]
+    coverage_ends = [str(frame.get("coverage_end")) for frame in timeframes.values() if isinstance(frame, Mapping) and frame.get("coverage_end")]
     warnings = []
     if report.get("gaps_present"):
         warnings.append("GAPS_PRESENT")
@@ -111,7 +111,7 @@ def build_integrity_diagnostic(
     if retry_count:
         warnings.append(f"RETRY_COUNT:{retry_count}")
     if recoverable:
-        recommended = "REACQUIRE_SAME_LOOKBACK" if retry_count == 0 else "EXPAND_LOOKBACK"
+        recommended = "REACQUIRE_SAME_LOOKBACK" if retry_count == 0 else "DATA_COVERAGE_INSUFFICIENT"
     else:
         recommended = "HARD_BLOCK"
     diagnostic = {
@@ -121,9 +121,10 @@ def build_integrity_diagnostic(
         "recoverable": recoverable,
         "warnings": warnings,
         "coverage_start": min(coverage_starts) if coverage_starts else None,
-        "coverage_end": max(coverage_ends) if coverage_ends else None,
+        "coverage_end": min(coverage_ends) if coverage_ends else None,
         "requested_start": requested_start,
         "requested_end": requested_end,
+        "required_horizon_end": report.get("required_horizon_end"),
         "warmup_days": report.get("warmup_days"),
         "horizon_minutes": report.get("horizon_minutes"),
         "timeframes_present": present,

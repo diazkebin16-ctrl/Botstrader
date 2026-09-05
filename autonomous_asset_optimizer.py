@@ -3,6 +3,7 @@
 from __future__ import annotations
 import argparse,asyncio,hashlib,json,os,subprocess,sys,tempfile
 from datetime import datetime,timedelta,timezone
+from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import Any,Mapping
 from automation_v3_release import ReleaseController as GovernedReleaseController
@@ -11,7 +12,7 @@ from automation_v3_integrity_recovery import build_integrity_diagnostic,terminal
 from automation_v3_phase1_continuation import run_with_phase1_autonomous_continuation
 from automation_v3_discovery_pregate import build_pre_gate_diagnostic,classify_discovery_outcome
 
-LOOKBACK_SEQUENCE=(1,3,6,12);MAX_RESEARCH_LOOKBACK_MONTHS=12
+LOOKBACK_SEQUENCE=(1,2,3);MAX_RESEARCH_LOOKBACK_MONTHS=3
 SUPPORTED_INSTRUMENTS=("AUD_USD","EUR_USD","GBP_USD","USD_JPY","USD_CAD")
 TERMINAL_STATES={"PAPER_DEPLOYED","PAPER_DEPLOYABLE_CANDIDATE","CANDIDATE_NOT_DEPLOYABLE","NO_VALID_CANDIDATE","INSUFFICIENT_EVIDENCE","DATA_SOURCE_UNAVAILABLE","DATA_COVERAGE_INSUFFICIENT","DATA_INTEGRITY_FAILED","METHODOLOGY_BLOCKED","TEST_FAILURE","DEPLOYMENT_FAILURE","UNSUPPORTED_INSTRUMENT"}
 PRACTICE_OANDA_URL="https://api-fxpractice.oanda.com"
@@ -19,8 +20,31 @@ AUTOMATION_APPROVAL_TYPE="AUTONOMOUS_RESEARCH_POLICY_APPROVAL";AUTOMATION_AUTHOR
 PROTECTED_LIVE_FILES={"server.py","forward_experiment.py"}
 
 def utc_now():return datetime.now(timezone.utc).isoformat().replace("+00:00","Z")
+NY_TZ=ZoneInfo("America/New_York")
+def _fx_market_open(moment):
+ et=moment.astimezone(NY_TZ);weekday=et.weekday()
+ if weekday==5:return False
+ if weekday==6:return et.hour>=17
+ if weekday==4:return et.hour<17
+ return True
+def _previous_friday_close(moment):
+ et=moment.astimezone(NY_TZ);days=(et.weekday()-4)%7;candidate=et-timedelta(days=days)
+ candidate=candidate.replace(hour=17,minute=0,second=0,microsecond=0)
+ if candidate>et:candidate-=timedelta(days=7)
+ return candidate.astimezone(timezone.utc)
+def _interval_is_fx_open(start,end):
+ if start>=end:return False
+ cursor=start
+ while cursor<end:
+  if not _fx_market_open(cursor):return False
+  cursor+=timedelta(minutes=30)
+ return _fx_market_open(end-timedelta(microseconds=1))
 def aligned_research_end(now,horizon_minutes=240):
- d=now.astimezone(timezone.utc)-timedelta(minutes=int(horizon_minutes));return d.replace(minute=0,second=0,microsecond=0)
+ boundary=now.astimezone(timezone.utc).replace(minute=0,second=0,microsecond=0);horizon=timedelta(minutes=int(horizon_minutes));candidate=boundary-horizon
+ if not _interval_is_fx_open(candidate,boundary):
+  boundary=_previous_friday_close(boundary);candidate=boundary-horizon
+ if not _interval_is_fx_open(candidate,boundary):raise ValueError("unable to place research horizon inside tradable FX session")
+ return candidate
 def canonical_sha256(v):return hashlib.sha256(json.dumps(dict(v),sort_keys=True,separators=(",",":"),default=str).encode()).hexdigest()
 def sha256_file(p):
  d=hashlib.sha256()
@@ -141,7 +165,7 @@ class AutonomousAssetOptimizer:
    for a in r.setdefault("approvals",[]):
     if a.get("active") is True:a["active"]=False;a["invalidated_reason"]="CODE_SHA_CHANGED"
    r.update(status="NEW",paper_deployment=None,stop_reason=None,final_outcome=None,integrity_diagnostic=None,diagnostic=None,pre_gate_diagnostic=None,lookback_months=None,phase1_status=None,autonomous_approval=None);ledger.save(s)
-  end=aligned_research_end(self.now(),240);ledger.mutate(i,status="RUNNING",code_sha=sha,workspace=str(root),max_lookback_months=12,stop_reason=None,final_outcome=None,integrity_diagnostic=None,diagnostic=None,pre_gate_diagnostic=None,phase1_status=None,autonomous_approval=None)
+  end=aligned_research_end(self.now(),240);ledger.mutate(i,status="RUNNING",code_sha=sha,workspace=str(root),max_lookback_months=MAX_RESEARCH_LOOKBACK_MONTHS,stop_reason=None,final_outcome=None,integrity_diagnostic=None,diagnostic=None,pre_gate_diagnostic=None,phase1_status=None,autonomous_approval=None)
   for months in LOOKBACK_SEQUENCE:
    ad=root/f"lookback_{months:02d}m_{sha[:12]}";ad.mkdir(parents=True,exist_ok=True);start=self._months_before(end,months);cache=root/"data"/f"{i}_{months:02d}m.json";cache_preexisting=cache.is_file();ledger.append(i,"lookback_attempts",{"months":months,"code_sha":sha,"start":start.isoformat(),"end":end.isoformat(),"status":"RUNNING","at":utc_now()})
    try:
@@ -181,8 +205,7 @@ class AutonomousAssetOptimizer:
        else:
         diag=None;ledger.mutate(i,integrity_diagnostic=None,lookback_months=months)
       if err and isinstance(diag,Mapping) and diag.get("recoverable") is True:
-       if months==12:return self._terminal(ledger,i,"DATA_COVERAGE_INSUFFICIENT","recoverable data coverage exhausted maximum lookback",lookback_months=months,integrity_diagnostic=diag)
-       ledger.append(i,"decision_history",{"decision":"EXPAND_LOOKBACK","months":months,"recommended_action":"EXPAND_LOOKBACK","at":utc_now()});continue
+       return self._terminal(ledger,i,"DATA_COVERAGE_INSUFFICIENT","recoverable data coverage remains incomplete after same-lookback reacquire",lookback_months=months,integrity_diagnostic=diag)
      if err and isinstance(diag,Mapping) and diag.get("recoverable") is not True:
       return self._terminal(ledger,i,terminal_for_nonrecoverable(diag),str(err),lookback_months=months,integrity_diagnostic=diag)
     if err:
@@ -190,7 +213,7 @@ class AutonomousAssetOptimizer:
      if dp.is_file():
       discovery=load_json(dp);pre_gate=build_pre_gate_diagnostic(ad/"03_target_population.json",ad/"05_phase_2.json",min_resolved=10);write_json(ad/"pre_gate_diagnostic.json",pre_gate);diag=classify_discovery_outcome(discovery,pre_gate,diagnose_discovery(discovery));write_json(ad/"support_diagnostic.json",diag);ledger.mutate(i,pre_gate_diagnostic=pre_gate,diagnostic=diag,lookback_months=months);ledger.append(i,"decision_history",{"decision":"DISCOVERY_DIAGNOSTIC","months":months,**diag,"at":utc_now()})
       if diag["recommended_action"]=="EXPAND_LOOKBACK":
-       if months==12:return self._terminal(ledger,i,"INSUFFICIENT_EVIDENCE","maximum lookback exhausted",diagnostic=diag,pre_gate_diagnostic=pre_gate)
+       if months==MAX_RESEARCH_LOOKBACK_MONTHS:return self._terminal(ledger,i,"INSUFFICIENT_EVIDENCE","maximum 3-month lookback exhausted",lookback_months=months,diagnostic=diag,pre_gate_diagnostic=pre_gate)
        continue
       if diag["recommended_action"]=="NO_VALID_CANDIDATE":return self._terminal(ledger,i,"NO_VALID_CANDIDATE",diag["dominant_failure"],diagnostic=diag,pre_gate_diagnostic=pre_gate)
      return self._terminal(ledger,i,"METHODOLOGY_BLOCKED",str(err),lookback_months=months)

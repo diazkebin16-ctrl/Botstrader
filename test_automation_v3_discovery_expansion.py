@@ -29,32 +29,25 @@ def test_integrity_pass_discovery_failure_never_data_integrity_failed(tmp_path, 
     assert out["status"] != "DATA_INTEGRITY_FAILED"
 
 
-def test_discovery_insufficient_support_one_to_three(tmp_path, monkeypatch):
+def test_discovery_insufficient_support_one_to_two(tmp_path, monkeypatch):
     monkeypatch.setenv("BOTS_RESEARCH_ROOT", str(tmp_path / "research"))
-    opt, data, _ = _pass_integrity_optimizer(tmp_path, {1: "insufficient", 3: "bad"})
+    opt, data, _ = _pass_integrity_optimizer(tmp_path, {1: "insufficient", 2: "bad"})
     assert opt.optimize("AUD_USD")["status"] == "NO_VALID_CANDIDATE"
     assert len(data.calls) == 2
 
 
-def test_discovery_insufficient_support_three_to_six(tmp_path, monkeypatch):
+def test_discovery_insufficient_support_two_to_three(tmp_path, monkeypatch):
     monkeypatch.setenv("BOTS_RESEARCH_ROOT", str(tmp_path / "research"))
-    opt, data, _ = _pass_integrity_optimizer(tmp_path, {1: "insufficient", 3: "insufficient", 6: "bad"})
+    opt, data, _ = _pass_integrity_optimizer(tmp_path, {1: "insufficient", 2: "insufficient", 3: "bad"})
     assert opt.optimize("AUD_USD")["status"] == "NO_VALID_CANDIDATE"
     assert len(data.calls) == 3
 
 
-def test_discovery_insufficient_support_six_to_twelve(tmp_path, monkeypatch):
+def test_discovery_three_month_insufficient_is_insufficient_evidence(tmp_path, monkeypatch):
     monkeypatch.setenv("BOTS_RESEARCH_ROOT", str(tmp_path / "research"))
-    opt, data, _ = _pass_integrity_optimizer(tmp_path, {1: "insufficient", 3: "insufficient", 6: "insufficient", 12: "bad"})
-    assert opt.optimize("AUD_USD")["status"] == "NO_VALID_CANDIDATE"
-    assert len(data.calls) == 4
-
-
-def test_discovery_twelve_month_insufficient_is_insufficient_evidence(tmp_path, monkeypatch):
-    monkeypatch.setenv("BOTS_RESEARCH_ROOT", str(tmp_path / "research"))
-    opt, data, _ = _pass_integrity_optimizer(tmp_path, {1: "insufficient", 3: "insufficient", 6: "insufficient", 12: "insufficient"})
+    opt, data, _ = _pass_integrity_optimizer(tmp_path, {1: "insufficient", 2: "insufficient", 3: "insufficient"})
     assert opt.optimize("AUD_USD")["status"] == "INSUFFICIENT_EVIDENCE"
-    assert len(data.calls) == 4
+    assert len(data.calls) == 3
 
 
 def test_adequate_support_without_candidate_is_no_valid_candidate(tmp_path, monkeypatch):

@@ -63,6 +63,7 @@ def _timeframe_report(name: str, rows: Sequence[Mapping[str, Any]]) -> Dict[str,
         "count": len(rows),
         "first": timestamps[0].isoformat() if timestamps else None,
         "last": timestamps[-1].isoformat() if timestamps else None,
+        "coverage_end": (timestamps[-1] + timedelta(seconds=expected)).isoformat() if timestamps else None,
         "strictly_ordered": ordered,
         "duplicates": duplicates,
         "invalid_mid_ohlc": invalid_mid,
@@ -148,11 +149,11 @@ def validate_dataset(
     coverage = {}
     for timeframe, frame in frames.items():
         first = _dt(frame["first"]) if frame.get("first") else None
-        last = _dt(frame["last"]) if frame.get("last") else None
+        complete_end = _dt(frame["coverage_end"]) if frame.get("coverage_end") else None
         tolerance = timedelta(seconds=TIMEFRAME_SECONDS[timeframe])
         starts_early = first is not None and first <= required_start + tolerance
-        ends_late = last is not None and last + tolerance >= required_end
-        coverage[timeframe] = {"warmup_covered": starts_early, "horizon_covered": ends_late}
+        ends_late = complete_end is not None and complete_end >= required_end
+        coverage[timeframe] = {"warmup_covered": starts_early, "horizon_covered": ends_late, "actual_complete_end": complete_end.isoformat() if complete_end else None, "required_horizon_end": required_end.isoformat()}
         if not starts_early:
             failures.append(f"{timeframe}_WARMUP_COVERAGE_INCOMPLETE")
         if not ends_late:
@@ -165,6 +166,8 @@ def validate_dataset(
         "end": end_dt.isoformat(),
         "warmup_days": int(warmup_days),
         "horizon_minutes": int(horizon_minutes),
+        "research_end": end_dt.isoformat(),
+        "required_horizon_end": required_end.isoformat(),
         "input_sha256": data_sha,
         "dataset_identity": hashlib.sha256(
             json.dumps({
