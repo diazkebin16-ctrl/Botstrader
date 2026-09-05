@@ -99,7 +99,7 @@ def _holdout_chain(tmp_path):
     _write(target, {
         "instrument": "AUD_USD", "variant": "V331_BASELINE",
         "lookahead_protection": True, "future_bars_used_only_for_outcome": True,
-        "dataset_identity": {"status": "PASS", "code_sha": "abc", "data_sha256": "data-a"},
+        "dataset_identity": {"status": "PASS", "code_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "data_sha256": "data-a"},
         "episodes": _rows(),
     })
     phase1_payload = analyze_phase1(str(target), discovery_only=True, horizon_minutes=5, embargo_minutes=0)
@@ -120,7 +120,7 @@ def _holdout_chain(tmp_path):
 def test_phase2_preserves_non_binary_outcomes_and_freezes_before_holdout(tmp_path):
     target=tmp_path/"target.json"
     _write(target,{"instrument":"AUD_USD","variant":"V331_BASELINE","lookahead_protection":True,
-                   "dataset_identity":{"status":"PASS","code_sha":"abc"},"episodes":_rows()})
+                   "dataset_identity":{"status":"PASS","code_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"episodes":_rows()})
     phase1=analyze_phase1(str(target),discovery_only=True,horizon_minutes=5,embargo_minutes=0)
     assert phase1["all_target_wins_recovered"] is True
     phase1_path=tmp_path/"phase1.json";_write(phase1_path,phase1)
@@ -150,7 +150,7 @@ def test_holdout_allows_exact_bound_artifact_identities(tmp_path):
     assert frozen["target_population_sha256"] == sha256_file(target)
     assert frozen["phase2_sha256"] == sha256_file(phase2)
     assert frozen["discovery_sha256"] == sha256_file(discovery)
-    assert frozen["dataset_identity"]["code_sha"] == frozen["code_sha"] == "abc"
+    assert frozen["dataset_identity"]["code_sha"] == frozen["code_sha"] == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     result = evaluate_holdout(str(target), str(phase2), str(discovery), str(freeze))
     assert result["candidate_definition_sha256"]
 
@@ -165,7 +165,7 @@ def test_holdout_rejects_same_instrument_with_different_target_sha(tmp_path):
 def test_holdout_rejects_same_instrument_with_different_dataset_identity(tmp_path):
     target, phase2, discovery, freeze = _holdout_chain(tmp_path)
     frozen = json.loads(freeze.read_text(encoding="utf-8"))
-    frozen["dataset_identity"] = {"status": "PASS", "code_sha": "abc", "data_sha256": "data-b"}
+    frozen["dataset_identity"] = {"status": "PASS", "code_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "data_sha256": "data-b"}
     _write(freeze, frozen)
     with pytest.raises(ValueError, match="Dataset identity mismatch"):
         evaluate_holdout(str(target), str(phase2), str(discovery), str(freeze))
