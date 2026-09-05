@@ -18,12 +18,18 @@ replace_once('research_phase2.py',
         "relative_improvement_classification":relative_label,
 ''')
 
-# Static cleanup after the policy transformation.
-replace_once(
-    'research_phase2.py',
-    '    robust=confidence.get("confidence_class")=="STANDARD"\n',
-    '',
-)
+# Static cleanup after the policy transformation. The decision-gate `robust`
+# value remains because it drives diagnostic_state. Only the post-holdout copy
+# becomes redundant after candidate_record no longer re-vetoes MEDIUM warnings.
+replace_once('research_phase2.py',
+'''    robust = (
+        (holdout.get("directional_stability") or {}).get("stable") is True
+        and (holdout.get("temporal_stability") or {}).get("stable") is True
+        and (holdout.get("sensitivity") or {}).get("classification") != "FRAGILE"
+        and (holdout.get("walk_forward_stability") or {}).get("status") == "PASS"
+    )
+''',
+'''')
 replace_once(
     'test_automation_v3_adaptive_paper_confidence.py',
     'import copy\n',
