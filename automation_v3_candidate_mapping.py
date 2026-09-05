@@ -89,10 +89,12 @@ def _canonical_rules(definition: Mapping[str, Any]) -> list[dict[str, Any]]:
     return result
 
 
-def _managed_payload(candidate_id: str, definition_sha: str, rules: list[dict[str, Any]], *, confidence_class: str, experimental: bool) -> list[dict[str, Any]]:
+def _managed_payload(candidate_id: str, definition_sha: str, rules: list[dict[str, Any]], *, confidence_class: str, experimental: bool, managed_release_identity: str, source_code_sha: str) -> list[dict[str, Any]]:
     return [
         {"candidate_definition_sha256": definition_sha, "candidate_id": candidate_id,
-         "confidence_class": confidence_class, "experimental": bool(experimental), "paper_only": True, **rule}
+         "confidence_class": confidence_class, "experimental": bool(experimental), "paper_only": True,
+         "production_authority": False, "managed_release_identity": managed_release_identity,
+         "source_code_sha": source_code_sha, **rule}
         for rule in rules
     ]
 
@@ -201,7 +203,9 @@ def compile_release_plan(
     old_text = _exact_assignment(managed_path, symbol)
     confidence_class=str(holdout.get("confidence_class") or freeze.get("confidence_class") or "STANDARD").upper()
     experimental=confidence_class=="EXPERIMENTAL" or holdout.get("experimental") is True
-    payload = _managed_payload(candidate_id, definition_sha, rules, confidence_class=confidence_class, experimental=experimental)
+    managed_release_identity="v3paper_"+canonical_sha256({"instrument":symbol,"candidate_id":candidate_id,"candidate_definition_sha256":definition_sha,"source_code_sha":source_code_sha})
+    payload = _managed_payload(candidate_id, definition_sha, rules, confidence_class=confidence_class, experimental=experimental,
+                               managed_release_identity=managed_release_identity, source_code_sha=source_code_sha)
     new_text = _assignment(symbol, payload)
     if any(marker in new_text.upper() for marker in ("OANDA_TOKEN", "API_KEY", "SECRET_KEY", "PASSWORD", "API-FXTRADE.OANDA.COM")):
         raise CandidateNotDeployable("generated managed text contains prohibited marker")
@@ -213,6 +217,7 @@ def compile_release_plan(
         "dataset_identity_sha256": canonical_sha256(dataset_identity),
         "candidate_id": candidate_id,
         "candidate_definition_sha256": definition_sha,
+        "managed_release_identity": managed_release_identity,
         "target_population_sha256": target_sha,
         "phase2_sha256": phase2_sha,
         "discovery_sha256": discovery_sha,
@@ -246,6 +251,7 @@ def compile_release_plan(
         "instrument": symbol,
         "candidate_id": candidate_id,
         "candidate_definition_sha256": definition_sha,
+        "managed_release_identity": managed_release_identity,
         "source_code_sha": source_code_sha,
         "dataset_identity": dataset_identity,
         "production_authority": False,

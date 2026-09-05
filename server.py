@@ -32,7 +32,7 @@ from research_evidence import (resolve_outcome as research_resolve_outcome, coll
 from session_regime import session_regime as detect_session_regime
 from instrument_registry import InstrumentRegistry
 from instrument_profiles import instrument_profile
-from managed_strategy_rules import evaluate_managed_strategy_rules
+from managed_strategy_rules import evaluate_managed_strategy_rules, managed_strategy_identity, non_v3_managed_strategy_identity
 from slot_allocator import slot_policy
 from opportunity_ranker import rank_opportunities
 from broker_risk import OandaBrokerRiskAdapter
@@ -4704,6 +4704,8 @@ def record_trade_memory_entry(
         "score":r.get("score"),
         "features":r.get("features") or {},
         "filters":r.get("filters") or {},
+        # Immutable V3 identity captured by the pre-order lifecycle gate; never re-read current strategy here.
+        "v3_managed_strategy":dict(r.get("v3_managed_strategy") or non_v3_managed_strategy_identity(r.get("instrument"))),
         # Persist the pre-entry experimental identity/gate result with the trade
         # so later broker-confirmed outcomes can be attributed without inference.
         "forward_experiment":forward_experiment_gate(r),
@@ -4994,7 +4996,11 @@ async def reconcile_trade_memory(client: httpx.AsyncClient, instrument: Optional
 
     if closed:
         refresh_trade_memory_degradation()
-    return {"enabled":True,"checked":len(rows),"closed":closed,"errors":errors}
+    v3_feedback={"checked":0,"processed":0,"attributed":0,"non_v3":0,"errors":[]}
+    if DEPLOYMENT_MANAGER_ENABLED:
+        try:v3_feedback=deployment_manager.reconcile_managed_paper_trade_memory(limit=max(200,TRADE_MEMORY_RECONCILE_LIMIT*4))
+        except Exception as exc:errors.append({"component":"v3_managed_paper_feedback","error":str(exc)})
+    return {"enabled":True,"checked":len(rows),"closed":closed,"errors":errors,"v3_paper_feedback":v3_feedback}
 
 
 def _tm_value(row: Dict[str, Any]) -> Optional[float]:
@@ -6299,6 +6305,18 @@ def execution_decision(r: Dict[str, Any], conf: Dict[str, Any]) -> Dict[str, Any
     if not experimental_gate["ok"]:
         return {"execute":False,"reason":"Experimental forward veto: "+str(experimental_gate.get("reason")),
                 "forward_experiment":experimental_gate}
+
+    try:
+        v3_identity=managed_strategy_identity(r.get("instrument"))
+        r["v3_managed_strategy"]=v3_identity
+        if v3_identity.get("active"):
+            v3_lifecycle_gate=deployment_manager.managed_paper_entry_gate(v3_identity)
+            r["v3_managed_paper_gate"]=v3_lifecycle_gate
+            if not v3_lifecycle_gate.get("allow"):
+                return {"execute":False,"reason":"V3 managed PAPER lifecycle veto: "+"; ".join(v3_lifecycle_gate.get("reasons") or []),
+                        "v3_managed_paper_gate":v3_lifecycle_gate}
+    except Exception as exc:
+        return {"execute":False,"reason":"V3 managed PAPER lifecycle unavailable (fail-closed): "+str(exc)}
 
     research_gate=evaluate_active_research_rules(r)
     if not research_gate["ok"]:
