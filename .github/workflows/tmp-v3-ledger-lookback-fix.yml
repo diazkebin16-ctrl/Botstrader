@@ -5,6 +5,7 @@ on:
       - fix/automation-v3-review-ledger-lookback
     paths:
       - _tmp_v3_ledger_fix.py
+      - _tmp_v3_ledger_fix2.py
       - _tmp_v3_ledger_trigger.txt
       - .github/workflows/tmp-v3-ledger-lookback-fix.yml
 permissions:
@@ -28,11 +29,11 @@ jobs:
           pip install pytest pyflakes
       - name: Apply focused fix and validate
         id: validate
-        continue-on-error: true
         env:
           BASE_SHA: a922ce867eae361b6e326d0539f8dce5cb71e85c
         run: |
           set -o pipefail
+          python _tmp_v3_ledger_fix2.py
           python _tmp_v3_ledger_fix.py 2>&1 | tee _tmp_v3_ledger_validation.log
       - name: Upload validation log
         if: always()
@@ -41,6 +42,3 @@ jobs:
           name: v3-ledger-validation-log
           path: _tmp_v3_ledger_validation.log
           if-no-files-found: ignore
-      - name: Enforce validation success
-        if: steps.validate.outcome != 'success'
-        run: exit 1
