@@ -567,6 +567,15 @@ class ReviewBeforeHoldoutOptimizer(AutonomousAssetOptimizer):
         if resolved is None:
             return None
         workspace, months = resolved
+        # REVIEW owns lookback identity from the persisted attempt/workspace.  A
+        # base terminal may also pass lookback_months as context; consume and
+        # validate it here so V3Ledger.mutate receives exactly one authoritative
+        # value.
+        inherited_lookback = extra.pop("lookback_months", None)
+        if inherited_lookback is not None and int(inherited_lookback) != months:
+            raise ValueError(
+                f"review lookback identity mismatch: workspace={months}, terminal={inherited_lookback}"
+            )
         discovery_path = workspace / "06_discovery.json"
         if not discovery_path.is_file():
             return None
@@ -582,6 +591,7 @@ class ReviewBeforeHoldoutOptimizer(AutonomousAssetOptimizer):
                 final_outcome=final_outcome,
                 scientific_terminal=status,
                 stop_reason=f"REVIEW_REPORT_BUILD_FAILED: {safe_reason}",
+                lookback_months=months,
                 review_report_error={"code": "REVIEW_REPORT_BUILD_FAILED", "reason": safe_reason},
                 mode=REVIEW_BEFORE_HOLDOUT_DEPLOY,
                 production_authority=False,
@@ -790,6 +800,65 @@ def _assert_remote_paper_boundary(mode: str) -> None:
             raise RuntimeError("deployment credentials unavailable")
 
 
+def _write_mode_failure_status(
+    request: Mapping[str, Any],
+    exc: Exception,
+    *,
+    repo: Path | None = None,
+    root: Path | None = None,
+) -> dict[str, Any]:
+    """Overwrite remote status with current-request failure authority.
+
+    Historical review artifacts remain immutable on disk, but a failed request
+    must never inherit shortlist or selection authority from a prior run.
+    """
+    repo = (repo or Path(__file__).resolve().parent).resolve()
+    root = (root or Path(os.getenv("BOTS_RESEARCH_ROOT", str(repo.parent / "Botstrader_Research")))).resolve()
+    instrument = normalize_instrument(request.get("instrument"))
+    raw_instrument = str(request.get("instrument") or "").strip().upper().replace("/", "_")
+    instrument = instrument or raw_instrument or "UNKNOWN"
+    mode = str(request.get("mode") or "UNKNOWN").upper()
+    run_id = os.getenv("GITHUB_RUN_ID", "local-mode-run")
+    try:
+        code_sha = _git_sha(repo)
+    except Exception:
+        code_sha = None
+    safe_reason = str(exc).replace(str(root), "<research-root>")[:500]
+    request_identity = {
+        "run_id": run_id,
+        "instrument": instrument,
+        "mode": mode,
+        "code_sha": code_sha,
+    }
+    status = {
+        **request_identity,
+        "request_identity_sha256": canonical_sha256(request_identity),
+        "terminal_state": "MODE_REQUEST_FAILED",
+        "reason": safe_reason,
+        "status_source": "CURRENT_REQUEST_FAILURE",
+        "current_request_failed": True,
+        "current_request_selection_authority": False,
+        "diagnostic_review_sha256": None,
+        "shortlist_sha256": None,
+        "review_candidates": [],
+        "diagnostic_top_candidates": [],
+        "deployable_candidates": [],
+        "incumbent_metrics": None,
+        "holdout_opened": False,
+        "paper_deployment_status": None,
+        "production_authority": False,
+    }
+    status_path = Path(
+        os.getenv(
+            "BOTS_V3_REMOTE_STATUS_PATH",
+            str(root / instrument / "autonomous_v3" / "remote_status.json"),
+        )
+    )
+    write_json(status_path, status)
+    print("REMOTE_STATUS " + json.dumps(status, sort_keys=True), flush=True)
+    return status
+
+
 def execute_request(request: Mapping[str, Any], *, repo: Path | None = None, root: Path | None = None) -> dict[str, Any]:
     safe = validate_structured_request(request)
     repo = (repo or Path(__file__).resolve().parent).resolve()
@@ -840,7 +909,13 @@ def main() -> None:
     try:
         result = execute_request(payload)
     except Exception as exc:
-        result = {"status": "MODE_REQUEST_FAILED", "reason": str(exc), "production_authority": False}
+        failed_status = _write_mode_failure_status(payload, exc)
+        result = {
+            "status": "MODE_REQUEST_FAILED",
+            "reason": str(exc),
+            "remote_status": failed_status,
+            "production_authority": False,
+        }
         print(json.dumps(result, indent=2, sort_keys=True))
         raise SystemExit(2)
     print(json.dumps(result, indent=2, sort_keys=True))
