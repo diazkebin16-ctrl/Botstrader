@@ -1,0 +1,31 @@
+name: Temporary incumbent pyflakes cleanup
+on:
+  push:
+    branches: [fix/automation-v3-incumbent-challenger]
+permissions:
+  contents: write
+jobs:
+  patch:
+    if: "github.event.head_commit.message != 'Remove unused incumbent comparison local'"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/automation-v3-incumbent-challenger
+          fetch-depth: 0
+      - name: Remove unused local
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('research_phase2.py'); text=p.read_text(encoding='utf-8')
+          old='    same_edge=disc_comp.get("challenger_beats_incumbent") is True and val_comp.get("challenger_beats_incumbent") is True\n'
+          if text.count(old)!=1: raise SystemExit('unused local anchor missing')
+          p.write_text(text.replace(old,'',1),encoding='utf-8')
+          PY
+          git config user.name "Botstrader Automation V3"
+          git config user.email "automation-v3@users.noreply.github.com"
+          git add research_phase2.py
+          git diff --cached --check
+          git commit -m "Remove unused incumbent comparison local"
+          git push origin HEAD:fix/automation-v3-incumbent-challenger
