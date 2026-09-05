@@ -24,6 +24,7 @@ def _bundle(first, ends):
 
 
 def _validate(tmp_path, end, ends):
+    tmp_path.mkdir(parents=True, exist_ok=True)
     first=end-timedelta(days=11)
     cache=tmp_path/"cache.json";cache.write_text(json.dumps(_bundle(first,ends)),encoding="utf-8")
     return validate_dataset(str(cache),instrument="AUD_USD",start=(end-timedelta(days=1)).isoformat(),end=end.isoformat(),warmup_days=10,horizon_minutes=240,repo=tmp_path)
@@ -55,7 +56,7 @@ def test_one_candle_short_fails_each_timeframe(tmp_path, monkeypatch):
     for tf,seconds in TIMEFRAME_SECONDS.items():
         exact={"H1":datetime(2026,9,4,20,0,tzinfo=timezone.utc),"M15":datetime(2026,9,4,20,45,tzinfo=timezone.utc),"M5":datetime(2026,9,4,20,55,tzinfo=timezone.utc),"M1":datetime(2026,9,4,20,59,tzinfo=timezone.utc)}
         exact[tf]-=timedelta(seconds=seconds)
-        out=_validate(tmp_path/ tf,end,exact)
+        out=_validate(tmp_path/tf,end,exact)
         assert f"{tf}_HORIZON_COVERAGE_INCOMPLETE" in out["failures"]
         assert out["coverage"][tf]["actual_complete_end"] < required.isoformat()
 
