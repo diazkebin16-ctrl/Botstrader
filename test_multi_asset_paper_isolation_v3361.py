@@ -86,24 +86,18 @@ def test_forward_eur_veto_is_not_authoritative_for_gbp_or_jpy(monkeypatch):
     assert server.forward_entry_pattern_flags(_signal("GBP_USD",room=.3,rr=.9)["features"])["low_room_low_rr"] is True
 
 
-def test_phase1_m1_open_is_forward_scoped_to_eur_gbp_and_usdjpy(monkeypatch):
+def test_m1_open_is_forward_scoped_to_all_configured_paper_assets(monkeypatch):
     monkeypatch.setattr(server,"ENTRY_TIMING_ENABLED",False)
     conf={"probability":.5}
-    eur=server.quality_entry_gate(_signal("EUR_USD",m1=False),conf)
-    gbp=server.quality_entry_gate(_signal("GBP_USD",m1=False),conf)
-    jpy=server.quality_entry_gate(_signal("USD_JPY",m1=False),conf)
-    assert eur["ok"] is True
-    assert gbp["ok"] is True
-    assert jpy["ok"] is True
-    for symbol in ("AUD_USD","USD_CAD"):
-        other=server.quality_entry_gate(_signal(symbol,m1=False),conf)
-        assert other["ok"] is False and "excepción específica no autorizada" in other["reason"]
+    for symbol in ("EUR_USD","GBP_USD","USD_JPY","AUD_USD","USD_CAD"):
+        out=server.quality_entry_gate(_signal(symbol,m1=False),conf)
+        assert out["ok"] is True
 
 
 def test_minimum_rr_and_barrier_room_remain_global_strategy_base(monkeypatch):
     monkeypatch.setattr(server,"ENTRY_TIMING_ENABLED",False)
     conf={"probability":.5}
-    for symbol in ("EUR_USD","GBP_USD","USD_JPY"):
+    for symbol in ("EUR_USD","GBP_USD","USD_JPY","AUD_USD","USD_CAD"):
         r=_signal(symbol)
         r["barrier_class"]="STRONG"; r["rr_raw"]=server.MIN_ENTRY_RR-0.01
         out=server.quality_entry_gate(r,conf)
@@ -113,7 +107,7 @@ def test_minimum_rr_and_barrier_room_remain_global_strategy_base(monkeypatch):
 def test_global_time_blackouts_apply_independent_of_symbol():
     morning=datetime(2026,8,31,12,30,tzinfo=timezone.utc)  # 08:30 ET
     afternoon=datetime(2026,8,31,19,30,tzinfo=timezone.utc) # 15:30 ET
-    for _symbol in ("EUR_USD","GBP_USD","USD_JPY"):
+    for _symbol in ("EUR_USD","GBP_USD","USD_JPY","AUD_USD","USD_CAD"):
         assert server.new_entry_time_gate(morning)["allowed"] is False
         assert server.new_entry_time_gate(afternoon)["allowed"] is False
 

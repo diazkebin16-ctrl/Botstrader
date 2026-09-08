@@ -49,8 +49,8 @@ def test_usdjpy_policy_isolated_to_usdjpy():
         "bypass_low_room_vetoes":False,
         "bypass_quality_extension":True,
     }
-    assert forward_experiment.forward_policy("AUD_USD")["experiment_id"] is None
-    assert forward_experiment.forward_policy("USD_CAD")["experiment_id"] is None
+    assert forward_experiment.forward_policy("AUD_USD")["experiment_id"] == "AUD_PAPER_COLLECTION_V1"
+    assert forward_experiment.forward_policy("USD_CAD")["experiment_id"] == "CAD_PAPER_COLLECTION_V1"
 
 
 def test_usdjpy_chosen_score_uses_buy_for_buy():
@@ -142,12 +142,19 @@ def test_gbp_policy_is_explicitly_collection_only():
     assert out["ok"] is True
 
 
-def test_aud_cad_behavior_remains_no_forward_experiment(monkeypatch):
+def test_aud_cad_collection_is_paper_practice_only(monkeypatch):
     _paper_practice(monkeypatch)
-    for symbol in ("AUD_USD","USD_CAD"):
-        assert server._forward_experiment_active(symbol) is False
+    for symbol, experiment_id in (
+        ("AUD_USD", "AUD_PAPER_COLLECTION_V1"),
+        ("USD_CAD", "CAD_PAPER_COLLECTION_V1"),
+    ):
+        assert server._forward_experiment_active(symbol) is True
         r=_row("BUY",extension=0.2,m1=False); r["instrument"]=symbol
-        assert server.quality_entry_gate(r,{})["ok"] is False
+        assert server.quality_entry_gate(r,{})["ok"] is True
+        assert server.forward_experiment_gate(r)["experiment_id"] == experiment_id
+    monkeypatch.setattr(server,"TRADING_ENVIRONMENT","PRODUCTION")
+    assert server._forward_experiment_active("AUD_USD") is False
+    assert server._forward_experiment_active("USD_CAD") is False
 
 
 def test_no_authority_expansion_outside_paper_practice(monkeypatch):

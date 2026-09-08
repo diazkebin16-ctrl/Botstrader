@@ -102,7 +102,7 @@ def test_eur_threshold_boundary():
     assert passed["ok"] is True
 
 
-def _gbp_collection_features(direction="BUY", extension=0.2, buy=0.0, sell=0.0):
+def _collection_features(direction="BUY", extension=0.2, buy=0.0, sell=0.0):
     return {
         "chosen_direction": direction,
         "extension_atr": extension,
@@ -112,7 +112,7 @@ def _gbp_collection_features(direction="BUY", extension=0.2, buy=0.0, sell=0.0):
 
 
 def test_gbp_collection_admits_canonical_direction_without_profitability_claim():
-    out = evaluate_forward_experiment("GBP_USD", _gbp_collection_features("SELL", 9.0, -999.0, -999.0))
+    out = evaluate_forward_experiment("GBP_USD", _collection_features("SELL", 9.0, -999.0, -999.0))
     assert out["ok"] is True
     assert out["collection_only"] is True
     assert out["profitability_certified"] is False
@@ -120,10 +120,10 @@ def test_gbp_collection_admits_canonical_direction_without_profitability_claim()
 
 
 def test_gbp_collection_rejects_missing_or_invalid_direction():
-    missing = _gbp_collection_features()
+    missing = _collection_features()
     missing.pop("chosen_direction")
     assert evaluate_forward_experiment("GBP_USD", missing)["ok"] is False
-    assert evaluate_forward_experiment("GBP_USD", _gbp_collection_features("WAIT"))["ok"] is False
+    assert evaluate_forward_experiment("GBP_USD", _collection_features("WAIT"))["ok"] is False
 
 
 def test_instrument_isolation_policy():
@@ -137,13 +137,18 @@ def test_instrument_isolation_policy():
     assert usd["bypass_m1_confirmation"] is True
     assert usd["bypass_low_room_vetoes"] is False
     assert usd["bypass_quality_extension"] is True
-    for symbol in ("AUD_USD", "USD_CAD"):
+    for symbol, experiment_id in (
+        ("AUD_USD", "AUD_PAPER_COLLECTION_V1"),
+        ("USD_CAD", "CAD_PAPER_COLLECTION_V1"),
+    ):
         p = forward_policy(symbol)
-        assert p["experiment_id"] is None
-        assert p["bypass_m1_confirmation"] is False
+        assert p["experiment_id"] == experiment_id
+        assert p["bypass_m1_confirmation"] is True
         assert p["bypass_low_room_vetoes"] is False
-        assert p["bypass_quality_extension"] is False
-        assert evaluate_forward_experiment(symbol, {})["ok"] is True
+        assert p["bypass_quality_extension"] is True
+        assert p["collection_only"] is True
+        assert p["profitability_certified"] is False
+        assert evaluate_forward_experiment(symbol, _collection_features())["ok"] is True
 
 
 def test_eur_phase1_opened_strategic_gates_are_paper_scoped(monkeypatch):
@@ -170,48 +175,55 @@ def test_gbp_collection_opens_m1_and_extension_only_in_paper_practice(monkeypatc
     assert server.quality_entry_gate(r, {})["ok"] is False
 
 
-def test_gbp_collection_never_bypasses_hard_safety(monkeypatch):
+def test_collection_assets_never_bypass_hard_safety(monkeypatch):
     _paper_practice(monkeypatch)
-    r = {
-        "instrument": "GBP_USD", "signal": "BUY", "blocked": True,
-        "rr_raw": server.MIN_ENTRY_RR - 0.01,
-        "safety_checks": {"minimum_rr": False},
-        "filters": {"m1_confirmation": False},
-        "features": _gbp_collection_features("BUY", 9.0),
-    }
-    out = server.execution_decision(r, {"samples": 0})
-    assert out["execute"] is False
-    assert out["reason"] == "Safety veto: minimum_rr"
+    for symbol in ("GBP_USD", "AUD_USD", "USD_CAD"):
+        r = {
+            "instrument": symbol, "signal": "BUY", "blocked": True,
+            "rr_raw": server.MIN_ENTRY_RR - 0.01,
+            "safety_checks": {"minimum_rr": False},
+            "filters": {"m1_confirmation": False},
+            "features": _collection_features("BUY", 9.0),
+        }
+        out = server.execution_decision(r, {"samples": 0})
+        assert out["execute"] is False
+        assert out["reason"] == "Safety veto: minimum_rr"
 
 
-def test_gbp_safe_canonical_signal_is_admitted_for_paper_collection(monkeypatch):
+def test_safe_canonical_signal_is_admitted_for_paper_collection(monkeypatch):
     _paper_practice(monkeypatch)
     monkeypatch.setattr(server, "evaluate_active_research_rules", lambda r: {"ok": True})
     monkeypatch.setattr(server, "strategy_execution_gate", lambda r: {"ok": True})
     monkeypatch.setattr(server, "reentry_guard", lambda r: {"ok": True})
-    r = {
-        "instrument": "GBP_USD", "signal": "SELL", "blocked": False,
-        "rr": server.MIN_RR, "rr_raw": server.MIN_ENTRY_RR,
-        "barrier_class": "WEAK",
-        "safety_checks": {
-            "minimum_rr": True, "minimum_stop_pips": True,
-            "barrier_room_ok": True, "volatility_sane": True,
-        },
-        "filters": {"m1_confirmation": False},
-        "features": _gbp_collection_features("SELL", 9.0, -999.0, -999.0),
+    expected = {
+        "GBP_USD": "GBP_PAPER_COLLECTION_V1",
+        "AUD_USD": "AUD_PAPER_COLLECTION_V1",
+        "USD_CAD": "CAD_PAPER_COLLECTION_V1",
     }
-    out = server.execution_decision(
-        r, {"probability": 0.0, "required_confidence": 0.65, "samples": 0}
-    )
-    assert out["execute"] is True
-    assert "Adaptive OBSERVE_ONLY" in out["reason"]
-    assert server.forward_experiment_gate(r)["experiment_id"] == "GBP_PAPER_COLLECTION_V1"
+    for symbol, experiment_id in expected.items():
+        r = {
+            "instrument": symbol, "signal": "SELL", "blocked": False,
+            "rr": server.MIN_RR, "rr_raw": server.MIN_ENTRY_RR,
+            "barrier_class": "WEAK",
+            "safety_checks": {
+                "minimum_rr": True, "minimum_stop_pips": True,
+                "barrier_room_ok": True, "volatility_sane": True,
+            },
+            "filters": {"m1_confirmation": False},
+            "features": _collection_features("SELL", 9.0, -999.0, -999.0),
+        }
+        out = server.execution_decision(
+            r, {"probability": 0.0, "required_confidence": 0.65, "samples": 0}
+        )
+        assert out["execute"] is True
+        assert "Adaptive OBSERVE_ONLY" in out["reason"]
+        assert server.forward_experiment_gate(r)["experiment_id"] == experiment_id
 
 
-def test_non_target_instrument_keeps_canonical_m1(monkeypatch):
+def test_unknown_instrument_keeps_canonical_m1(monkeypatch):
     _paper_practice(monkeypatch)
     r = {
-        "instrument": "AUD_USD", "rr_raw": 1.5, "barrier_class": "WEAK",
+        "instrument": "NZD_USD", "rr_raw": 1.5, "barrier_class": "WEAK",
         "filters": {"m1_confirmation": False}, "features": {"extension_atr": 0.2},
     }
     out = server.quality_entry_gate(r, {})

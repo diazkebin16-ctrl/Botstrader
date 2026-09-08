@@ -1,4 +1,4 @@
-"""Instrument-scoped PAPER forward experiment policy for EUR/USD, GBP/USD, and USD/JPY.
+"""Instrument-scoped PAPER forward experiment and collection policies.
 
 This module is deliberately pure: it has no broker, database, network, outcome,
 or future-data dependency. Runtime authority is granted only by server.py after
@@ -11,10 +11,16 @@ from typing import Any, Dict, Mapping
 EUR_FORWARD_EXPERIMENT_ID = "EUR_PHASE2_FORWARD_V1"
 GBP_FORWARD_EXPERIMENT_ID = "GBP_PAPER_COLLECTION_V1"
 USDJPY_FORWARD_EXPERIMENT_ID = "USDJPY_PHASE2_FORWARD_V1"
+AUD_FORWARD_EXPERIMENT_ID = "AUD_PAPER_COLLECTION_V1"
+CAD_FORWARD_EXPERIMENT_ID = "CAD_PAPER_COLLECTION_V1"
+
+PAPER_COLLECTION_IDS = {
+    "GBP_USD": GBP_FORWARD_EXPERIMENT_ID,
+    "AUD_USD": AUD_FORWARD_EXPERIMENT_ID,
+    "USD_CAD": CAD_FORWARD_EXPERIMENT_ID,
+}
 
 EUR_LEGACY_DIRECTIONAL_SCORE_MIN = 31.0
-GBP_EXTENSION_ATR_MAX = 1.4985678822167452
-GBP_LEGACY_BUY_SCORE_MIN = 16.400000000000002
 USDJPY_CHOSEN_LEGACY_SCORE_MIN = 33.0
 
 
@@ -34,13 +40,13 @@ def forward_policy(symbol: Any) -> Dict[str, Any]:
             "bypass_low_room_vetoes": True,
             "bypass_quality_extension": True,
         }
-    if instrument == "GBP_USD":
+    if instrument in PAPER_COLLECTION_IDS:
         return {
             "instrument": instrument,
-            "experiment_id": GBP_FORWARD_EXPERIMENT_ID,
-            # PAPER-only collection admits the canonical directional signal once
-            # server.py has already enforced hard safety.  These exceptions do
-            # not exist in PRODUCTION/live and do not change signal generation.
+            "experiment_id": PAPER_COLLECTION_IDS[instrument],
+            # Collection admits the canonical directional signal only after
+            # server.py has enforced hard safety. These exceptions are active
+            # solely in PAPER/OANDA Practice and never change signal generation.
             "bypass_m1_confirmation": True,
             "bypass_low_room_vetoes": False,
             "bypass_quality_extension": True,
@@ -150,7 +156,8 @@ def evaluate_forward_experiment(symbol: Any, features: Mapping[str, Any]) -> Dic
             "pass": passed,
         }
 
-    if instrument == "GBP_USD":
+    if instrument in PAPER_COLLECTION_IDS:
+        experiment_id = PAPER_COLLECTION_IDS[instrument]
         required = (
             "chosen_direction",
             "extension_atr",
@@ -162,8 +169,8 @@ def evaluate_forward_experiment(symbol: Any, features: Mapping[str, Any]) -> Dic
             return {
                 "ok": False,
                 "instrument": instrument,
-                "experiment_id": GBP_FORWARD_EXPERIMENT_ID,
-                "reason": "GBP_PAPER_COLLECTION_FEATURES_MISSING",
+                "experiment_id": experiment_id,
+                "reason": f"{instrument}_PAPER_COLLECTION_FEATURES_MISSING",
                 "missing": missing,
             }
         direction = str(f["chosen_direction"]).upper()
@@ -174,8 +181,11 @@ def evaluate_forward_experiment(symbol: Any, features: Mapping[str, Any]) -> Dic
         return {
             "ok": direction_valid,
             "instrument": instrument,
-            "experiment_id": GBP_FORWARD_EXPERIMENT_ID,
-            "reason": "GBP_PAPER_COLLECTION_ADMIT" if direction_valid else "GBP_PAPER_COLLECTION_DIRECTION_INVALID",
+            "experiment_id": experiment_id,
+            "reason": (
+                f"{instrument}_PAPER_COLLECTION_ADMIT"
+                if direction_valid else f"{instrument}_PAPER_COLLECTION_DIRECTION_INVALID"
+            ),
             "chosen_direction": direction,
             "extension_atr": extension,
             "legacy_v331_buy_score": buy_score,
