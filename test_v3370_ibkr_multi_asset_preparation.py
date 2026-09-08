@@ -169,7 +169,7 @@ def test_u_runtime_integrity_includes_new_critical_modules():
     names={p.split("/")[-1] for p in server.production_release_files()}
     assert {"opportunity_ranker.py","slot_allocator.py","broker_risk.py"} <= names
     hashes=server.security_manager._file_hashes()
-    assert {"opportunity_ranker.py","slot_allocator.py","broker_risk.py"} <= set(hashes)
+    assert {"opportunity_ranker.py","slot_allocator.py","broker_risk.py","managed_strategy_rules.py"} <= set(hashes)
 
 
 def test_v_recovery_idempotency_still_namespaces_instrument():

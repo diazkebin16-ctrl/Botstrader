@@ -40,7 +40,7 @@ def _signal(symbol="EUR_USD", *, m1=True, room=.8, rr=1.2, ext=.5):
 
 
 def test_release_and_primary_instrument_contract():
-    assert server.VERSION_TAG == "3.39.0"
+    assert server.VERSION_TAG == "3.39.1"
     assert server.PRIMARY_INSTRUMENT == "EUR_USD"
     # V3.37 hardening changed only the config default: secondary instruments
     # remain profiled/PAPER-capable but now require explicit INSTRUMENTS config.
