@@ -6,8 +6,6 @@ import historical_replay
 import server
 from forward_experiment import (
     EUR_LEGACY_DIRECTIONAL_SCORE_MIN,
-    GBP_EXTENSION_ATR_MAX,
-    GBP_LEGACY_BUY_SCORE_MIN,
     evaluate_forward_experiment,
     forward_policy,
 )
@@ -104,26 +102,36 @@ def test_eur_threshold_boundary():
     assert passed["ok"] is True
 
 
-def test_gbp_extension_boundary_exact():
-    base = {"legacy_v331_buy_score": GBP_LEGACY_BUY_SCORE_MIN, "extension_atr": GBP_EXTENSION_ATR_MAX}
-    assert evaluate_forward_experiment("GBP_USD", base)["ok"] is True
-    above = dict(base, extension_atr=GBP_EXTENSION_ATR_MAX + 1e-12)
-    assert evaluate_forward_experiment("GBP_USD", above)["ok"] is False
+def _gbp_collection_features(direction="BUY", extension=0.2, buy=0.0, sell=0.0):
+    return {
+        "chosen_direction": direction,
+        "extension_atr": extension,
+        "legacy_v331_buy_score": buy,
+        "legacy_v331_sell_score": sell,
+    }
 
 
-def test_gbp_score_boundary_exact_and_buy_side_semantics():
-    base = {"legacy_v331_buy_score": GBP_LEGACY_BUY_SCORE_MIN, "extension_atr": GBP_EXTENSION_ATR_MAX}
-    assert evaluate_forward_experiment("GBP_USD", base)["score_pass"] is True
-    below = dict(base, legacy_v331_buy_score=GBP_LEGACY_BUY_SCORE_MIN - 1e-12)
-    assert evaluate_forward_experiment("GBP_USD", below)["score_pass"] is False
-    # No sell score is consulted: this preserves frozen DISC003 semantics for SELL episodes.
-    with_sell = dict(base, legacy_v331_sell_score=-999.0)
-    assert evaluate_forward_experiment("GBP_USD", with_sell)["ok"] is True
+def test_gbp_collection_admits_canonical_direction_without_profitability_claim():
+    out = evaluate_forward_experiment("GBP_USD", _gbp_collection_features("SELL", 9.0, -999.0, -999.0))
+    assert out["ok"] is True
+    assert out["collection_only"] is True
+    assert out["profitability_certified"] is False
+    assert out["chosen_direction"] == "SELL"
+
+
+def test_gbp_collection_rejects_missing_or_invalid_direction():
+    missing = _gbp_collection_features()
+    missing.pop("chosen_direction")
+    assert evaluate_forward_experiment("GBP_USD", missing)["ok"] is False
+    assert evaluate_forward_experiment("GBP_USD", _gbp_collection_features("WAIT"))["ok"] is False
 
 
 def test_instrument_isolation_policy():
     assert forward_policy("EUR_USD")["experiment_id"] == "EUR_PHASE2_FORWARD_V1"
-    assert forward_policy("GBP_USD")["experiment_id"] == "GBP_PHASE2_FORWARD_V1"
+    gbp = forward_policy("GBP_USD")
+    assert gbp["experiment_id"] == "GBP_PAPER_COLLECTION_V1"
+    assert gbp["bypass_quality_extension"] is True
+    assert gbp["collection_only"] is True
     usd = forward_policy("USD_JPY")
     assert usd["experiment_id"] == "USDJPY_PHASE2_FORWARD_V1"
     assert usd["bypass_m1_confirmation"] is True
@@ -150,16 +158,54 @@ def test_eur_phase1_opened_strategic_gates_are_paper_scoped(monkeypatch):
     assert server.quality_entry_gate(r, {})["ok"] is False
 
 
-def test_gbp_m1_open_is_paper_scoped_but_extension_protection_remains(monkeypatch):
+def test_gbp_collection_opens_m1_and_extension_only_in_paper_practice(monkeypatch):
     _paper_practice(monkeypatch)
     r = {
         "instrument": "GBP_USD", "rr_raw": 1.5, "barrier_class": "WEAK",
         "filters": {"m1_confirmation": False},
-        "features": {"extension_atr": 1.49},
+        "features": {"extension_atr": 9.0},
     }
     assert server.quality_entry_gate(r, {})["ok"] is True
-    r["features"]["extension_atr"] = 1.6
+    monkeypatch.setattr(server, "TRADING_ENVIRONMENT", "PRODUCTION")
     assert server.quality_entry_gate(r, {})["ok"] is False
+
+
+def test_gbp_collection_never_bypasses_hard_safety(monkeypatch):
+    _paper_practice(monkeypatch)
+    r = {
+        "instrument": "GBP_USD", "signal": "BUY", "blocked": True,
+        "rr_raw": server.MIN_ENTRY_RR - 0.01,
+        "safety_checks": {"minimum_rr": False},
+        "filters": {"m1_confirmation": False},
+        "features": _gbp_collection_features("BUY", 9.0),
+    }
+    out = server.execution_decision(r, {"samples": 0})
+    assert out["execute"] is False
+    assert out["reason"] == "Safety veto: minimum_rr"
+
+
+def test_gbp_safe_canonical_signal_is_admitted_for_paper_collection(monkeypatch):
+    _paper_practice(monkeypatch)
+    monkeypatch.setattr(server, "evaluate_active_research_rules", lambda r: {"ok": True})
+    monkeypatch.setattr(server, "strategy_execution_gate", lambda r: {"ok": True})
+    monkeypatch.setattr(server, "reentry_guard", lambda r: {"ok": True})
+    r = {
+        "instrument": "GBP_USD", "signal": "SELL", "blocked": False,
+        "rr": server.MIN_RR, "rr_raw": server.MIN_ENTRY_RR,
+        "barrier_class": "WEAK",
+        "safety_checks": {
+            "minimum_rr": True, "minimum_stop_pips": True,
+            "barrier_room_ok": True, "volatility_sane": True,
+        },
+        "filters": {"m1_confirmation": False},
+        "features": _gbp_collection_features("SELL", 9.0, -999.0, -999.0),
+    }
+    out = server.execution_decision(
+        r, {"probability": 0.0, "required_confidence": 0.65, "samples": 0}
+    )
+    assert out["execute"] is True
+    assert "Adaptive OBSERVE_ONLY" in out["reason"]
+    assert server.forward_experiment_gate(r)["experiment_id"] == "GBP_PAPER_COLLECTION_V1"
 
 
 def test_non_target_instrument_keeps_canonical_m1(monkeypatch):

@@ -96,11 +96,14 @@ def test_reanchor_write_is_single_atomic_protection_update():
 
 def test_v338_forward_identity_preserved_after_postfill_merge():
     assert server.forward_policy("EUR_USD")["experiment_id"] == "EUR_PHASE2_FORWARD_V1"
-    assert server.forward_policy("GBP_USD")["experiment_id"] == "GBP_PHASE2_FORWARD_V1"
+    assert server.forward_policy("GBP_USD")["experiment_id"] == "GBP_PAPER_COLLECTION_V1"
     eur=server.evaluate_forward_experiment("EUR_USD",{
         "legacy_v331_buy_score":31.0,"legacy_v331_sell_score":20.0,
         "legacy_v331_directional_score":31.0,"legacy_v331_chosen_direction":"BUY"})
     assert eur["ok"] is True
     gbp=server.evaluate_forward_experiment("GBP_USD",{
-        "extension_atr":1.4985678822167452,"legacy_v331_buy_score":16.400000000000002})
+        "chosen_direction":"BUY","extension_atr":9.0,
+        "legacy_v331_buy_score":-999.0,"legacy_v331_sell_score":-999.0})
     assert gbp["ok"] is True
+    assert gbp["collection_only"] is True
+    assert gbp["profitability_certified"] is False

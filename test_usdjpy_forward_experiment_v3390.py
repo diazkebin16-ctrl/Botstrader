@@ -128,12 +128,16 @@ def test_existing_eur_policy_unchanged():
     assert out["ok"] is True and out["threshold"]==31.0
 
 
-def test_existing_gbp_policy_and_buy_side_semantics_unchanged():
+def test_gbp_policy_is_explicitly_collection_only():
     p=forward_experiment.forward_policy("GBP_USD")
-    assert p["experiment_id"]=="GBP_PHASE2_FORWARD_V1"
+    assert p["experiment_id"]=="GBP_PAPER_COLLECTION_V1"
+    assert p["collection_only"] is True
+    assert p["profitability_certified"] is False
+    assert p["bypass_quality_extension"] is True
     out=forward_experiment.evaluate_forward_experiment("GBP_USD",{
-        "extension_atr":forward_experiment.GBP_EXTENSION_ATR_MAX,
-        "legacy_v331_buy_score":forward_experiment.GBP_LEGACY_BUY_SCORE_MIN,
+        "chosen_direction":"SELL",
+        "extension_atr":9.0,
+        "legacy_v331_buy_score":-999.0,
         "legacy_v331_sell_score":-999.0})
     assert out["ok"] is True
 
