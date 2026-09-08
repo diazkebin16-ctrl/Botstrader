@@ -11,6 +11,7 @@ import urllib.request
 import zipfile
 from pathlib import Path, PurePosixPath
 from typing import Any
+from urllib.parse import urlparse
 
 from autonomous_asset_optimizer import canonical_sha256
 from automation_v3_governance import (
@@ -110,6 +111,39 @@ def _request_json(url: str, token: str) -> dict[str, Any]:
     return value
 
 
+class _ArtifactRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Do not forward GitHub credentials to the signed artifact storage host."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        redirected = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if redirected is not None and urlparse(req.full_url).netloc != urlparse(newurl).netloc:
+            redirected.remove_header("Authorization")
+        return redirected
+
+
+def _download_artifact(artifact: dict[str, Any], token: str) -> bytes:
+    request = urllib.request.Request(
+        str(artifact["archive_download_url"]),
+        headers={"Authorization": f"Bearer {token}", "User-Agent": "Botstrader-Automation-V3"},
+    )
+    opener = urllib.request.build_opener(_ArtifactRedirectHandler())
+    with opener.open(request, timeout=120) as response:
+        return response.read()
+
+
+def _recover_download(content: bytes, *, root: Path, instrument: str, artifact_id: str) -> int:
+    with zipfile.ZipFile(io.BytesIO(content)) as source:
+        root.mkdir(parents=True, exist_ok=True)
+        temporary = root / f".recovery-{os.getpid()}.zip"
+        with zipfile.ZipFile(temporary, "w") as target:
+            for member in source.infolist():
+                target.writestr(member, source.read(member.filename))
+        try:
+            return recover_archive(temporary, root=root, instrument=instrument, artifact_id=artifact_id)
+        finally:
+            temporary.unlink(missing_ok=True)
+
+
 def recover_latest(*, root: Path, instrument: str, repository: str, token: str) -> int:
     listing = _request_json(
         f"https://api.github.com/repos/{repository}/actions/artifacts?per_page=100",
@@ -122,25 +156,18 @@ def recover_latest(*, root: Path, instrument: str, repository: str, token: str) 
         and str(item.get("name") or "").startswith(prefix)
         and not item.get("expired")
     ]
-    if not artifacts:
-        return 0
-    latest = max(artifacts, key=lambda item: (str(item.get("created_at") or ""), int(item.get("id") or 0)))
-    request = urllib.request.Request(
-        str(latest["archive_download_url"]),
-        headers={"Authorization": f"Bearer {token}", "User-Agent": "Botstrader-Automation-V3"},
-    )
-    with urllib.request.urlopen(request, timeout=120) as response:
-        content = response.read()
-    with zipfile.ZipFile(io.BytesIO(content)) as source:
-        root.mkdir(parents=True, exist_ok=True)
-        temporary = root / f".recovery-{os.getpid()}.zip"
-        with zipfile.ZipFile(temporary, "w") as target:
-            for member in source.infolist():
-                target.writestr(member, source.read(member.filename))
-        try:
-            return recover_archive(temporary, root=root, instrument=instrument, artifact_id=str(latest["id"]))
-        finally:
-            temporary.unlink(missing_ok=True)
+    artifacts.sort(key=lambda item: (str(item.get("created_at") or ""), int(item.get("id") or 0)), reverse=True)
+    scan_limit = min(10, max(1, int(os.getenv("BOTS_V3_RECOVERY_ARTIFACT_SCAN_LIMIT", "5"))))
+    for artifact in artifacts[:scan_limit]:
+        recovered = _recover_download(
+            _download_artifact(artifact, token),
+            root=root,
+            instrument=instrument,
+            artifact_id=str(artifact["id"]),
+        )
+        if recovered:
+            return recovered
+    return 0
 
 
 def main() -> int:

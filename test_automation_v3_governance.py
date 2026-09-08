@@ -1,5 +1,6 @@
 import hashlib
 import json
+import urllib.request
 import zipfile
 
 import pytest
@@ -12,6 +13,7 @@ from automation_v3_governance import (
     merge_recovered_holdout,
     record_holdout_opening,
 )
+import automation_v3_state_recovery as recovery
 from automation_v3_state_recovery import recover_archive
 
 
@@ -177,3 +179,52 @@ def test_workflow_uses_retry_unique_cache_and_recovery():
     key = "automation-v3-state-${{ env.INSTRUMENT }}-${{ github.run_id }}-${{ github.run_attempt }}"
     assert workflow.count(key) == 2
     assert "python automation_v3_state_recovery.py" in workflow
+
+
+def test_artifact_redirect_drops_authorization_on_cross_host():
+    handler = recovery._ArtifactRedirectHandler()
+    request = urllib.request.Request(
+        "https://api.github.com/repos/o/r/actions/artifacts/1/zip",
+        headers={"Authorization": "Bearer secret", "User-Agent": "test"},
+    )
+    redirected = handler.redirect_request(
+        request, None, 302, "Found", {}, "https://signed.example.invalid/artifact.zip"
+    )
+    assert redirected.get_header("Authorization") is None
+    assert redirected.get_header("User-agent") == "test"
+
+
+def test_recover_latest_skips_newer_artifact_without_governed_evidence(tmp_path, monkeypatch):
+    empty = tmp_path / "empty.zip"
+    with zipfile.ZipFile(empty, "w") as archive:
+        archive.writestr("GBP_USD/autonomous_v3/automation_v3_state.json", "{}")
+    governed = tmp_path / "governed.zip"
+    target, phase2 = _evidence()
+    candidate_sha = "1" * 64
+    prefix = "GBP_USD/autonomous_v3/lookback/review_release_x"
+    with zipfile.ZipFile(governed, "w") as archive:
+        archive.writestr(f"{prefix}/03_target_population.json", json.dumps(target))
+        archive.writestr(f"{prefix}/05_phase_2.json", json.dumps(phase2))
+        archive.writestr(
+            f"{prefix}/09_freeze.json", json.dumps({"candidate_definition_sha256": candidate_sha})
+        )
+        archive.writestr(f"{prefix}/10_holdout.json", json.dumps({
+            "instrument": "GBP_USD", "status": "FAIL", "holdout_opened_once": True,
+            "candidate_definition_sha256": candidate_sha, "freeze_sha256": "2" * 64,
+        }))
+    listing = {
+        "artifacts": [
+            {"id": 2, "name": "automation-v3-GBP_USD-new", "created_at": "2026-09-08", "expired": False, "archive_download_url": "new"},
+            {"id": 1, "name": "automation-v3-GBP_USD-old", "created_at": "2026-09-07", "expired": False, "archive_download_url": "old"},
+        ]
+    }
+    monkeypatch.setattr(recovery, "_request_json", lambda *_args: listing)
+    payloads = {2: empty.read_bytes(), 1: governed.read_bytes()}
+    monkeypatch.setattr(recovery, "_download_artifact", lambda artifact, _token: payloads[artifact["id"]])
+    assert recovery.recover_latest(
+        root=tmp_path / "state", instrument="GBP_USD", repository="o/r", token="token"
+    ) == 1
+    records = load_consumption_ledger(
+        ledger_path(tmp_path / "state", "GBP_USD"), "GBP_USD"
+    )["records"]
+    assert records[0]["source_artifact_id"] == "1"
