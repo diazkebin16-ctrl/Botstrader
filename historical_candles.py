@@ -6,6 +6,7 @@ import asyncio, json, os
 import httpx
 
 DUR={"M1":60,"M5":300,"M15":900,"H1":3600}
+RETRYABLE_STATUS={429,500,502,503,504}
 
 def _dt(v):
     d=v if isinstance(v,datetime) else datetime.fromisoformat(str(v).replace("Z","+00:00"))
@@ -13,6 +14,24 @@ def _dt(v):
     return d.astimezone(timezone.utc)
 
 def _iso(d):return _dt(d).isoformat().replace("+00:00","Z")
+
+async def _get_page(client,url,*,params,headers):
+    attempts=min(6,max(1,int(os.getenv("BOTS_V3_OANDA_READ_ATTEMPTS","4"))))
+    last_status=None
+    for attempt in range(1,attempts+1):
+        try:
+            response=await client.get(url,params=params,headers=headers)
+            last_status=response.status_code
+            if response.status_code not in RETRYABLE_STATUS:return response
+        except (httpx.TimeoutException,httpx.TransportError):
+            response=None
+        if attempt<attempts:
+            retry_after=response.headers.get("Retry-After") if response is not None else None
+            try:delay=float(retry_after) if retry_after else float(2**(attempt-1))
+            except ValueError:delay=float(2**(attempt-1))
+            await asyncio.sleep(min(10.0,max(0.0,delay)))
+    detail=f"HTTP {last_status}" if last_status is not None else "transport timeout"
+    raise RuntimeError(f"OANDA historical read failed after {attempts} attempts: {detail}")
 
 async def fetch_oanda_candles(instrument:str,granularity:str,start:datetime,end:datetime,*,token:str=None,base_url:str=None)->List[Dict[str,Any]]:
     token=(token or os.getenv("OANDA_TOKEN","")).strip()
@@ -24,7 +43,7 @@ async def fetch_oanda_candles(instrument:str,granularity:str,start:datetime,end:
     async with httpx.AsyncClient(timeout=30) as client:
         while cursor<=end:
             params={"price":"MBA","granularity":granularity,"from":_iso(cursor),"count":5000}
-            r=await client.get(f"{base_url}/v3/instruments/{instrument}/candles",params=params,headers=headers)
+            r=await _get_page(client,f"{base_url}/v3/instruments/{instrument}/candles",params=params,headers=headers)
             if r.status_code>=400:raise RuntimeError(f"OANDA {r.status_code}: {r.text[:300]}")
             candles=r.json().get("candles",[])
             if not candles:break
