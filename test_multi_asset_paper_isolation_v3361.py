@@ -30,6 +30,7 @@ def _signal(symbol="EUR_USD", *, m1=True, room=.8, rr=1.2, ext=.5):
         "safety_checks":{"minimum_rr":True,"barrier_room_ok":True},
         "features":{
             "room_to_barrier_r":room,"rr_raw":rr,"extension_atr":ext,"m1_momentum":0.001,
+            "m15_gap_atr":0.0,"m15_slope_atr":0.0,
             "m1_ema9_side_ok":1,"m1_candle_color_ok":1,"m1_exception_shadow":1,
             "legacy_v331_buy_score":40.0,"legacy_v331_sell_score":20.0,
             "legacy_v331_directional_score":40.0,"legacy_v331_chosen_direction":"BUY",
@@ -201,12 +202,13 @@ def test_sizing_never_increases_requested_units_for_all_three(monkeypatch):
         assert out["effective_units"] <= 123
 
 
-def test_research_veto_authority_is_eur_only(monkeypatch):
+def test_legacy_research_veto_authority_is_eur_only_and_jpy_managed_veto_is_isolated(monkeypatch):
     monkeypatch.setattr(server,"get_active_research_rules",lambda:[{"source":"INTERNAL","rule_key":"ext_le_0_8","status":"ACTIVE"}])
-    for symbol in ("GBP_USD","USD_JPY"):
-        r=_signal(symbol);r["features"]["extension_atr"]=2.0
-        out=server.evaluate_active_research_rules(r)
-        assert out["ok"] is True and out["active"] is False
+    gbp=server.evaluate_active_research_rules(_signal("GBP_USD",ext=2.0))
+    assert gbp["ok"] is True and gbp["active"] is False
+    jpy=server.evaluate_active_research_rules(_signal("USD_JPY",ext=2.0))
+    assert jpy["ok"] is True and jpy["active"] is True
+    assert jpy["rules"] and not jpy["vetoes"]
     eur=_signal("EUR_USD");eur["features"]["extension_atr"]=2.0
     assert server.evaluate_active_research_rules(eur)["ok"] is False
 
