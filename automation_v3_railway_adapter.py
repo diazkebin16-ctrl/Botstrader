@@ -24,8 +24,13 @@ TERMINAL_FAILURES = {"FAILED", "CRASHED", "NEEDS_APPROVAL", "SLEEPING", "SKIPPED
 IN_PROGRESS = {"WAITING", "QUEUED", "INITIALIZING", "BUILDING", "DEPLOYING"}
 
 
-def _run(cmd: list[str], *, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(cmd, cwd=str(cwd) if cwd else None, text=True, capture_output=True, check=False)
+def _run(
+    cmd: list[str], *, cwd: Path | None = None, timeout: float | None = None
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        cmd, cwd=str(cwd) if cwd else None, text=True, capture_output=True,
+        check=False, timeout=timeout,
+    )
 
 
 def _load_json_text(text: str) -> Any:
@@ -34,10 +39,20 @@ def _load_json_text(text: str) -> Any:
 
 
 def _railway_json(args: list[str], *, cwd: Path | None = None) -> Any:
-    result = _run(["railway", *args], cwd=cwd)
-    if result.returncode:
-        raise RuntimeError(f"Railway command failed: {' '.join(args[:2])}")
-    return _load_json_text(result.stdout)
+    attempts = min(5, max(1, int(os.getenv("BOTS_V3_RAILWAY_READ_ATTEMPTS", "3"))))
+    timeout = max(10, int(os.getenv("BOTS_V3_RAILWAY_READ_TIMEOUT_SECONDS", "60")))
+    for attempt in range(1, attempts + 1):
+        try:
+            result = _run(["railway", *args], cwd=cwd, timeout=timeout)
+            if not result.returncode:
+                return _load_json_text(result.stdout)
+        except (subprocess.TimeoutExpired, json.JSONDecodeError):
+            pass
+        if attempt < attempts:
+            time.sleep(min(2 ** attempt, 8))
+    raise RuntimeError(
+        f"Railway read command failed after {attempts} attempts: {' '.join(args[:2])}"
+    )
 
 
 def _required(name: str) -> str:

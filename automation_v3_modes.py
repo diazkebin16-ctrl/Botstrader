@@ -32,6 +32,13 @@ from autonomous_asset_optimizer import (
     write_json,
 )
 from automation_v3_candidate_mapping import CandidateNotDeployable, compile_and_write_release_plan
+from automation_v3_governance import (
+    complete_holdout_record,
+    holdout_population_identity,
+    ledger_path as holdout_ledger_path,
+    merge_recovered_holdout,
+    record_holdout_opening,
+)
 from research_phase2 import evaluate_holdout, freeze_candidate
 
 FULL_AUTO_TO_PAPER = "FULL_AUTO_TO_PAPER"
@@ -476,7 +483,10 @@ def _selection_state_path(shortlist_path: Path, shortlist_sha: str) -> Path:
 def _bind_selection(state_path: Path, binding: Mapping[str, Any]) -> dict[str, Any]:
     if state_path.exists():
         existing = load_json(state_path)
-        identity_keys = ("instrument", "shortlist_sha256", "rank", "candidate_id", "candidate_definition_sha256")
+        identity_keys = (
+            "instrument", "shortlist_sha256", "rank", "candidate_id",
+            "candidate_definition_sha256", "holdout_population_identity_sha256",
+        )
         if any(existing.get(key) != binding.get(key) for key in identity_keys):
             raise ValueError("HOLDOUT_ALREADY_BOUND_TO_DIFFERENT_CANDIDATE")
         return existing
@@ -682,16 +692,21 @@ def select_review_candidate(*, repo: Path, root: Path, instrument: str, shortlis
         return _ledger_for(root, instrument).mutate(instrument, status="CANDIDATE_NOT_DEPLOYABLE", final_outcome="CANDIDATE_NOT_DEPLOYABLE", stop_reason=str(exc), review_selection=state)
     visible = shortlist.get("diagnostic_top_candidates") or shortlist.get("candidates") or []
     choice = next(item for item in visible if item["rank"] == rank)
+    workspace = shortlist_path.parent
+    population_sha, population_material = holdout_population_identity(
+        load_json(workspace / "03_target_population.json"),
+        load_json(workspace / "05_phase_2.json"),
+    )
     binding = {
         "instrument": instrument,
         "shortlist_sha256": shortlist["shortlist_sha256"],
         "rank": rank,
         "candidate_id": choice["candidate_id"],
         "candidate_definition_sha256": choice["candidate_definition_sha256"],
+        "holdout_population_identity_sha256": population_sha,
     }
     state_path = _selection_state_path(shortlist_path, shortlist["shortlist_sha256"])
     state = _bind_selection(state_path, binding)
-    workspace = shortlist_path.parent
     release_dir = workspace / f"review_release_{shortlist['shortlist_sha256'][:12]}"
     _copy_required_review_evidence(workspace, release_dir)
     selected_discovery_path = release_dir / "06_discovery.json"
@@ -711,17 +726,50 @@ def select_review_candidate(*, repo: Path, root: Path, instrument: str, shortlis
     if frozen.get("candidate_definition_sha256") != choice["candidate_definition_sha256"]:
         raise ValueError("frozen candidate differs from selection")
     holdout_path = release_dir / "10_holdout.json"
+    consumption_path = holdout_ledger_path(root, instrument)
     if state.get("holdout_opened") is True:
         if not holdout_path.is_file():
             raise ValueError("HOLDOUT_STATE_UNCERTAIN: refusing to reopen holdout")
         holdout = load_json(holdout_path)
         if holdout.get("candidate_definition_sha256") != choice["candidate_definition_sha256"]:
             raise ValueError("holdout candidate identity mismatch")
+        merge_recovered_holdout(consumption_path, {
+            "instrument": instrument,
+            "holdout_population_identity_sha256": population_sha,
+            "holdout_population_identity": population_material,
+            "dataset_identity_sha256": shortlist["dataset_identity_sha256"],
+            "candidate_definition_sha256": choice["candidate_definition_sha256"],
+            "freeze_sha256": sha256_file(freeze_path),
+            "holdout_sha256": sha256_file(holdout_path),
+            "holdout_status": holdout.get("status"),
+            "opened_at": state.get("holdout_opened_at"),
+        })
     else:
-        state = {**state, "status": "HOLDOUT_OPENING", "holdout_opened": True, "holdout_opened_at": utc_now(), "freeze_sha256": sha256_file(freeze_path)}
+        opened_at = utc_now()
+        freeze_sha = sha256_file(freeze_path)
+        record_holdout_opening(consumption_path, {
+            "instrument": instrument,
+            "holdout_population_identity_sha256": population_sha,
+            "holdout_population_identity": population_material,
+            "dataset_identity_sha256": shortlist["dataset_identity_sha256"],
+            "candidate_definition_sha256": choice["candidate_definition_sha256"],
+            "freeze_sha256": freeze_sha,
+            "target_population_sha256": shortlist["target_population_sha256"],
+            "phase2_artifact_sha256": shortlist["phase2_artifact_sha256"],
+            "shortlist_sha256": shortlist["shortlist_sha256"],
+            "opened_at": opened_at,
+        })
+        state = {**state, "status": "HOLDOUT_OPENING", "holdout_opened": True, "holdout_opened_at": opened_at, "freeze_sha256": freeze_sha}
         write_json(state_path, state)
         holdout = evaluate_holdout(str(release_dir / "03_target_population.json"), str(release_dir / "05_phase_2.json"), str(selected_discovery_path), str(freeze_path))
         write_json(holdout_path, holdout)
+        complete_holdout_record(
+            consumption_path,
+            instrument=instrument,
+            population_identity=population_sha,
+            holdout_sha256=sha256_file(holdout_path),
+            holdout_status=str(holdout.get("status") or "UNKNOWN"),
+        )
         state = {**state, "status": "HOLDOUT_COMPLETE", "holdout_sha256": sha256_file(holdout_path), "holdout_status": holdout.get("status")}
         write_json(state_path, state)
     ledger = _ledger_for(root, instrument)

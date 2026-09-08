@@ -120,9 +120,13 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ${{ runner.temp }}/Botstrader_Research
-          key: automation-v3-state-${{ env.INSTRUMENT }}-${{ github.run_id }}
+          key: automation-v3-state-${{ env.INSTRUMENT }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
             automation-v3-state-${{ env.INSTRUMENT }}-
+
+      - name: Reconcile governed holdout evidence
+        shell: bash
+        run: python automation_v3_state_recovery.py --instrument "$INSTRUMENT" --root "$BOTS_RESEARCH_ROOT"
 
       - name: Import PAPER credentials from Railway securely
         shell: bash
@@ -149,7 +153,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: ${{ runner.temp }}/Botstrader_Research
-          key: automation-v3-state-${{ env.INSTRUMENT }}-${{ github.run_id }}
+          key: automation-v3-state-${{ env.INSTRUMENT }}-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Upload status and governed evidence
         if: always()

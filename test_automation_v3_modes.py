@@ -17,6 +17,7 @@ from automation_v3_modes import (
     canonical_sha256,
     parse_natural_language_intent,
     resolve_review_candidate,
+    select_review_candidate,
     validate_structured_request,
     verify_review_shortlist,
     write_json,
@@ -112,10 +113,19 @@ def _candidate(
     }
 
 
-def _workspace(tmp_path: Path, candidates, *, instrument="GBP_USD", proposed=None):
-    sha = "a" * 40
-    dataset = {"code_sha": sha, "data_sha256": "d" * 64}
-    write_json(tmp_path / "03_target_population.json", {"instrument": instrument, "dataset_identity": dataset})
+def _workspace(tmp_path: Path, candidates, *, instrument="GBP_USD", proposed=None, sha="a" * 40):
+    dataset = {
+        "instrument": instrument, "code_sha": sha, "data_sha256": "d" * 64,
+        "start": "2026-08-01T00:00:00+00:00", "research_end": "2026-09-01T00:00:00+00:00",
+        "required_horizon_end": "2026-09-01T04:00:00+00:00", "horizon_minutes": 240,
+    }
+    write_json(tmp_path / "01_data_integrity.json", {
+        "instrument": instrument, "status": "PASS", "dataset_identity": dataset,
+    })
+    write_json(tmp_path / "03_target_population.json", {
+        "instrument": instrument, "start": dataset["start"], "end": dataset["research_end"],
+        "dataset_identity": dataset,
+    })
     write_json(tmp_path / "04_phase_1.json", {"stage": "phase_1"})
     write_json(
         tmp_path / "05_phase_2.json",
@@ -362,6 +372,63 @@ def test_holdout_binding_cannot_switch_candidate(tmp_path):
     assert state["holdout_opened"] is False
     with pytest.raises(ValueError, match="HOLDOUT_ALREADY_BOUND"):
         _bind_selection(state_path, second)
+
+
+def test_selection_persists_consumption_and_code_change_cannot_reopen_same_population(tmp_path, monkeypatch):
+    import automation_v3_modes as modes
+
+    root = tmp_path / "research"
+    first_workspace = root / "GBP_USD" / "autonomous_v3" / "lookback_01m_aaaaaaaaaaaa"
+    first_workspace.mkdir(parents=True)
+    eligible = _candidate("selected", 0.20, 0.15, eligible=True)
+    first_sha = _workspace(first_workspace, [eligible], proposed=eligible, sha="a" * 40)
+    _, first_shortlist = build_review_shortlist(first_workspace, run_id="1")
+    monkeypatch.setattr(modes, "_git_sha", lambda _repo: first_sha)
+    monkeypatch.setattr(
+        modes,
+        "freeze_candidate",
+        lambda _discovery, _output: {
+            "candidate_definition_sha256": first_shortlist["diagnostic_top_candidates"][0]["candidate_definition_sha256"],
+            "production_authority": False,
+        },
+    )
+    calls = []
+
+    def fake_holdout(*_args):
+        calls.append(True)
+        return {
+            "instrument": "GBP_USD", "status": "FAIL", "holdout_opened_once": True,
+            "candidate_definition_sha256": first_shortlist["diagnostic_top_candidates"][0]["candidate_definition_sha256"],
+            "production_authority": False,
+        }
+
+    monkeypatch.setattr(modes, "evaluate_holdout", fake_holdout)
+    result = select_review_candidate(
+        repo=tmp_path, root=root, instrument="GBP_USD",
+        shortlist_sha256=first_shortlist["shortlist_sha256"], rank=1,
+    )
+    assert result["status"] == "SELECTED_CHALLENGER_FAILED_HOLDOUT"
+    assert len(calls) == 1
+
+    # An exact retry reads the immutable result and never evaluates again.
+    select_review_candidate(
+        repo=tmp_path, root=root, instrument="GBP_USD",
+        shortlist_sha256=first_shortlist["shortlist_sha256"], rank=1,
+    )
+    assert len(calls) == 1
+
+    # A code-only rebuild over the same observations cannot create a fresh holdout.
+    second_workspace = root / "GBP_USD" / "autonomous_v3" / "lookback_01m_bbbbbbbbbbbb"
+    second_workspace.mkdir(parents=True)
+    second_sha = _workspace(second_workspace, [eligible], proposed=eligible, sha="b" * 40)
+    _, second_shortlist = build_review_shortlist(second_workspace, run_id="2")
+    monkeypatch.setattr(modes, "_git_sha", lambda _repo: second_sha)
+    with pytest.raises(ValueError, match="HOLDOUT_ALREADY_CONSUMED"):
+        select_review_candidate(
+            repo=tmp_path, root=root, instrument="GBP_USD",
+            shortlist_sha256=second_shortlist["shortlist_sha256"], rank=1,
+        )
+    assert len(calls) == 1
 
 
 def test_full_auto_constant_and_deployment_policy_not_redefined_here():
