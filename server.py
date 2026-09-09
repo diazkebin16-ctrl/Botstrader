@@ -303,7 +303,7 @@ TREND_RUNNER_MIN_SCORE = max(0.0, float(os.getenv("TREND_RUNNER_MIN_SCORE", "0.6
 TREND_RUNNER_TP_R = max(2.0, float(os.getenv("TREND_RUNNER_TP_R", "3.0")))
 TREND_RUNNER_TRAIL_START_R = max(1.5, float(os.getenv("TREND_RUNNER_TRAIL_START_R", "1.75")))
 TREND_RUNNER_TRAIL_DISTANCE_R = max(0.40, float(os.getenv("TREND_RUNNER_TRAIL_DISTANCE_R", "0.90")))
-VERSION_TAG = "3.39.2"
+VERSION_TAG = "3.39.3"
 ENTRY_TIMING_ENABLED = os.getenv("ENTRY_TIMING_ENABLED", "true").lower() == "true"
 MAX_ENTRY_EXTENSION_ATR = max(0.5, float(os.getenv("MAX_ENTRY_EXTENSION_ATR", "1.50")))
 MIN_ROOM_TO_BARRIER_R = max(1.0, float(os.getenv("MIN_ROOM_TO_BARRIER_R", "1.50")))
@@ -9479,6 +9479,14 @@ def _worker_heartbeat() -> None:
     state["worker_last_heartbeat"] = now_iso()
 
 
+async def worker_heartbeat_pulse(interval_seconds: float=30.0) -> None:
+    """Keep liveness current while one scanner cycle awaits blocking worker threads."""
+    interval=max(0.01,float(interval_seconds))
+    while True:
+        _worker_heartbeat()
+        await asyncio.sleep(interval)
+
+
 async def scan(client: httpx.AsyncClient, inst: str, *, batch_collect: bool=False) -> Dict[str, Any]:
     _worker_heartbeat()
     obs_scan_started=time.perf_counter()
@@ -10544,10 +10552,18 @@ async def worker():
             state["last_scan"] = now_iso()
             state["worker_last_heartbeat"] = state["last_scan"]
             cycle_ok = True
-            async with httpx.AsyncClient() as client:
-                cycle_ok = await scan_instruments_once(client)
-                if OBSERVABILITY_ENABLED:
-                    obs_broker=await observability_broker_snapshot(client)
+            heartbeat_task=asyncio.create_task(worker_heartbeat_pulse(),name="scanner-heartbeat")
+            try:
+                async with httpx.AsyncClient() as client:
+                    cycle_ok = await scan_instruments_once(client)
+                    if OBSERVABILITY_ENABLED:
+                        obs_broker=await observability_broker_snapshot(client)
+            finally:
+                heartbeat_task.cancel()
+                try:
+                    await heartbeat_task
+                except asyncio.CancelledError:
+                    pass
             if OBSERVABILITY_ENABLED:
                 try:
                     observability_refresh_noncritical_modules()

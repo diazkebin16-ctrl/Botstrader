@@ -162,7 +162,7 @@ def test_timeseries_pipeline_can_fit_small_binary_dataset():
 
 
 def test_runtime_version_and_dashboard_are_v327():
-    assert server.VERSION_TAG == "3.39.2"
+    assert server.VERSION_TAG == "3.39.3"
     src=open(server.__file__,encoding="utf-8").read()
     assert "BotsTrader V3.37.0 · IBKR Multi-Asset Preparation" in src
 
@@ -245,5 +245,24 @@ def test_status_learning_uses_unambiguous_sample_names(monkeypatch):
         assert "training_labeled_samples" in learn
         assert "research_samples_total" in learn
         assert "pending_samples" in learn
-        assert out["version"]=="3.39.2"
+        assert out["version"]=="3.39.3"
+    asyncio.run(run())
+
+
+def test_scanner_heartbeat_pulses_while_blocking_work_is_awaited():
+    async def run():
+        server.state["worker_last_heartbeat"] = None
+        task=asyncio.create_task(server.worker_heartbeat_pulse(0.01))
+        try:
+            await asyncio.sleep(0.025)
+            first=server.state["worker_last_heartbeat"]
+            assert first is not None
+            await asyncio.sleep(0.025)
+            assert server.state["worker_last_heartbeat"] >= first
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
     asyncio.run(run())
