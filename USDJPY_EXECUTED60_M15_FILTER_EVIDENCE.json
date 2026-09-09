@@ -1,14 +1,14 @@
 {
-  "candidate_definition_sha256": "edec0a4b285bb5fd0a5835707b70819bfef309bf00627aa01f29735d87fd1e5c",
-  "candidate_id": "USDJPY_EXECUTED60_DUAL_VETO_V1",
+  "candidate_definition_sha256": "69077fda3300c984bf0558eeab7a424f3996c204a0bd5d7f3153bafbf6082f30",
+  "candidate_id": "USDJPY_EXECUTED60_M15_LATE_BUY_V2",
   "combined_observed": {
-    "activity_kept": 43,
-    "activity_retention": 0.7166666666666667,
-    "loss_blocked": 16,
-    "losses_kept": 18,
-    "win_blocked": 1,
-    "win_rate": 0.5813953488372093,
-    "wins_kept": 25
+    "activity_kept": 52,
+    "activity_retention": 0.8666666666666667,
+    "loss_blocked": 8,
+    "losses_kept": 26,
+    "win_blocked": 0,
+    "win_rate": 0.5,
+    "wins_kept": 26
   },
   "evidence_sha256": "3cfad5cdbd0218591d3b7589c09056ac8d77bd5f012769b61f2d93b8c72fefc8",
   "instrument": "USD_JPY",
@@ -17,7 +17,7 @@
     "population_scope": "executed resolved trades only",
     "production_authority": false,
     "status": "EXPERIMENTAL_IN_SAMPLE",
-    "warning": "The same 60 trades were used to discover and measure these filters; this is not out-of-sample certification."
+    "warning": "The same 60 trades were used to discover and measure this filter; this is not out-of-sample certification."
   },
   "paper_only": true,
   "population": {
@@ -27,8 +27,8 @@
     "start": "2026-08-31T00:12:00+00:00",
     "wins": 26
   },
-  "release_identity": "v3paper_e38479ab3a92bb791350d01632e6c7a6590d3197fdb1809b178e2c657eecbe4c",
-  "source_code_sha": "d050de7f528194c2c4385402bc40fbb4d004c5cc",
+  "release_identity": "v3paper_cb3f46d5222193f7ef352e53b9a016bc3ac05bb396d236debae7fc250c7c79b0",
+  "source_code_sha": "c40f2ff1f57b0d1103c3e0afbe4bee02813a8584",
   "veto_groups": [
     {
       "conditions": [
@@ -47,18 +47,6 @@
       "group_id": "M15_LATE_BUY",
       "loss_blocked": 8,
       "win_blocked": 0
-    },
-    {
-      "conditions": [
-        {
-          "feature": "extension_atr",
-          "operator": "<=",
-          "threshold": 0.43
-        }
-      ],
-      "group_id": "LOW_M1_EXTENSION",
-      "loss_blocked": 10,
-      "win_blocked": 1
     }
   ]
 }

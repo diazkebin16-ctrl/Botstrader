@@ -303,7 +303,7 @@ TREND_RUNNER_MIN_SCORE = max(0.0, float(os.getenv("TREND_RUNNER_MIN_SCORE", "0.6
 TREND_RUNNER_TP_R = max(2.0, float(os.getenv("TREND_RUNNER_TP_R", "3.0")))
 TREND_RUNNER_TRAIL_START_R = max(1.5, float(os.getenv("TREND_RUNNER_TRAIL_START_R", "1.75")))
 TREND_RUNNER_TRAIL_DISTANCE_R = max(0.40, float(os.getenv("TREND_RUNNER_TRAIL_DISTANCE_R", "0.90")))
-VERSION_TAG = "3.39.1"
+VERSION_TAG = "3.39.2"
 ENTRY_TIMING_ENABLED = os.getenv("ENTRY_TIMING_ENABLED", "true").lower() == "true"
 MAX_ENTRY_EXTENSION_ATR = max(0.5, float(os.getenv("MAX_ENTRY_EXTENSION_ATR", "1.50")))
 MIN_ROOM_TO_BARRIER_R = max(1.0, float(os.getenv("MIN_ROOM_TO_BARRIER_R", "1.50")))
@@ -6288,6 +6288,63 @@ def forward_observation_snapshot(r: Dict[str, Any], conf: Dict[str, Any], *,
         "legacy_v331_chosen_direction":f.get("legacy_v331_chosen_direction"),
         "confidence":conf.get("probability"),"required_confidence":conf.get("required_confidence"),
         "confidence_samples":conf.get("samples"),
+        "paper_collection_confidence_gate":r.get("paper_collection_confidence_gate"),
+    }
+
+
+USDJPY_PAPER_COLLECTION_CANDIDATE_ID = "USDJPY_EXECUTED60_M15_LATE_BUY_V2"
+USDJPY_PAPER_COLLECTION_MIN_CONFIDENCE = 0.40
+USDJPY_PAPER_COLLECTION_BREAKEVEN_MARGIN = 0.05
+
+
+def usdjpy_paper_collection_confidence_gate(
+    r: Dict[str, Any], conf: Dict[str, Any], managed_identity: Optional[Dict[str, Any]]=None
+) -> Dict[str, Any]:
+    """Return a PAPER-only expectancy-aware confidence gate for USD/JPY.
+
+    This does not bypass strategic or operational vetoes. It is evaluated only after
+    every preceding safety, quality, forward, managed-rule, health and re-entry gate.
+    """
+    symbol=InstrumentRegistry.normalize_symbol(r.get("instrument") or PRIMARY_INSTRUMENT)
+    identity=managed_identity if isinstance(managed_identity,dict) else managed_strategy_identity(symbol)
+    global_required=float(conf.get("required_confidence") or EXECUTION_MIN_CONFIDENCE)
+    active=bool(
+        symbol=="USD_JPY"
+        and TRADING_ENVIRONMENT=="PAPER"
+        and PRIMARY_OANDA_ENV=="practice"
+        and OANDA.endswith("fxpractice.oanda.com")
+        and identity.get("active") is True
+        and identity.get("v3_candidate_id")==USDJPY_PAPER_COLLECTION_CANDIDATE_ID
+        and identity.get("v3_experimental") is True
+        and identity.get("v3_paper_only") is True
+        and identity.get("production_authority") is False
+    )
+    if not active:
+        return {"active":False,"instrument":symbol,"required_confidence":global_required,
+                "global_required_confidence":global_required,"reason":"PAPER_COLLECTION_GATE_INACTIVE"}
+    features=r.get("features") or {}
+    try:
+        rr_raw=float(features.get("rr_raw",r.get("rr_raw",0)) or 0)
+    except (TypeError,ValueError):
+        rr_raw=0.0
+    if not math.isfinite(rr_raw) or rr_raw<=0:
+        required=global_required
+        breakeven=None
+    else:
+        breakeven=1.0/(1.0+rr_raw)
+        required=max(
+            USDJPY_PAPER_COLLECTION_MIN_CONFIDENCE,
+            min(global_required,breakeven+USDJPY_PAPER_COLLECTION_BREAKEVEN_MARGIN),
+        )
+    probability=float(conf.get("probability") or 0)
+    return {
+        "active":True,"instrument":symbol,"paper_only":True,"production_authority":False,
+        "candidate_id":identity.get("v3_candidate_id"),"rr_raw":rr_raw,
+        "breakeven_confidence":breakeven,"breakeven_margin":USDJPY_PAPER_COLLECTION_BREAKEVEN_MARGIN,
+        "minimum_confidence":USDJPY_PAPER_COLLECTION_MIN_CONFIDENCE,
+        "required_confidence":required,"global_required_confidence":global_required,
+        "probability":probability,"pass":bool(probability>=required),
+        "reason":"EXPECTANCY_AWARE_PAPER_COLLECTION",
     }
 
 
@@ -6343,6 +6400,18 @@ def execution_decision(r: Dict[str, Any], conf: Dict[str, Any]) -> Dict[str, Any
             ),
         }
     phase = "learned" if conf.get("mature") else "bootstrap"
+    collection_gate=usdjpy_paper_collection_confidence_gate(r,conf,v3_identity)
+    r["paper_collection_confidence_gate"]=collection_gate
+    if collection_gate.get("active"):
+        collection_required=float(collection_gate["required_confidence"])
+        if collection_gate.get("pass"):
+            return {"execute":True,"reason":(
+                f"USDJPY PAPER_COLLECTION ({phase}): confianza {p:.1%} >= {collection_required:.1%}; "
+                f"umbral global {required:.1%}; RR={float(collection_gate.get('rr_raw') or 0):.2f}"
+            ),"paper_collection_confidence_gate":collection_gate}
+        return {"execute":False,"reason":(
+            f"USDJPY PAPER_COLLECTION ({phase}): confianza {p:.1%} < {collection_required:.1%}"
+        ),"paper_collection_confidence_gate":collection_gate}
     if p >= required:
         return {"execute": True, "reason": f"Adaptive gate ({phase}): confianza {p:.1%} >= {required:.1%}; RR={float(r.get('rr_raw',0)):.2f}"}
     return {"execute": False, "reason": f"Adaptive gate ({phase}): confianza {p:.1%} < {required:.1%}"}

@@ -24,7 +24,7 @@ def _veto_groups(result):
 def test_usdjpy_managed_identity_is_experimental_paper_only():
     identity = managed.managed_strategy_identity("USD_JPY")
     assert identity["active"] is True
-    assert identity["v3_candidate_id"] == "USDJPY_EXECUTED60_DUAL_VETO_V1"
+    assert identity["v3_candidate_id"] == "USDJPY_EXECUTED60_M15_LATE_BUY_V2"
     assert identity["v3_confidence_class"] == "EXPERIMENTAL"
     assert identity["v3_experimental"] is True
     assert identity["v3_paper_only"] is True
@@ -49,23 +49,23 @@ def test_m15_late_buy_requires_both_conditions_and_buy_direction():
     )["ok"] is True
 
 
-def test_low_m1_extension_veto_is_independent_and_inclusive():
-    blocked = managed.evaluate_managed_strategy_rules(
+def test_removed_low_m1_extension_no_longer_vetoes():
+    allowed = managed.evaluate_managed_strategy_rules(
         _row(direction="SELL", gap=-0.2, slope=-0.1, extension=0.43)
     )
-    assert blocked["ok"] is False
-    assert _veto_groups(blocked) == {"LOW_M1_EXTENSION"}
+    assert allowed["ok"] is True
+    assert _veto_groups(allowed) == set()
     assert managed.evaluate_managed_strategy_rules(
-        _row(direction="SELL", gap=-0.2, slope=-0.1, extension=0.4300001)
+        _row(direction="BUY", gap=0.69, slope=0.24, extension=0.10)
     )["ok"] is True
 
 
-def test_both_vetoes_can_trigger_without_becoming_admission_rules():
+def test_low_extension_does_not_change_the_remaining_m15_veto():
     blocked = managed.evaluate_managed_strategy_rules(
         _row(direction="BUY", gap=1.0, slope=0.5, extension=0.3)
     )
     assert blocked["ok"] is False
-    assert _veto_groups(blocked) == {"M15_LATE_BUY", "LOW_M1_EXTENSION"}
+    assert _veto_groups(blocked) == {"M15_LATE_BUY"}
 
 
 def test_required_pre_entry_evidence_fails_closed_for_usdjpy_only():
@@ -74,6 +74,9 @@ def test_required_pre_entry_evidence_fails_closed_for_usdjpy_only():
     )
     assert missing["ok"] is False
     assert all(item["reason"] == "REQUIRED_PRE_ENTRY_EVIDENCE_MISSING" for item in missing["vetoes"])
+    assert managed.evaluate_managed_strategy_rules(
+        {"instrument": "USD_JPY", "signal": "SELL", "features": {}}
+    )["ok"] is True
     assert managed.evaluate_managed_strategy_rules(
         {"instrument": "GBP_USD", "signal": "BUY", "features": {}}
     )["ok"] is True
@@ -94,7 +97,7 @@ def test_existing_eur_admission_rules_keep_their_original_semantics():
 
 
 def test_evidence_artifact_matches_the_active_release():
-    evidence = json.loads(Path("USDJPY_EXECUTED60_DUAL_FILTER_EVIDENCE.json").read_text())
+    evidence = json.loads(Path("USDJPY_EXECUTED60_M15_FILTER_EVIDENCE.json").read_text())
     identity = managed.managed_strategy_identity("USD_JPY")
     assert evidence["population"] == {
         "end": "2026-09-04T14:15:00+00:00",
@@ -103,10 +106,10 @@ def test_evidence_artifact_matches_the_active_release():
         "start": "2026-08-31T00:12:00+00:00",
         "wins": 26,
     }
-    assert evidence["combined_observed"]["loss_blocked"] == 16
-    assert evidence["combined_observed"]["win_blocked"] == 1
-    assert evidence["combined_observed"]["wins_kept"] == 25
-    assert evidence["combined_observed"]["losses_kept"] == 18
+    assert evidence["combined_observed"]["loss_blocked"] == 8
+    assert evidence["combined_observed"]["win_blocked"] == 0
+    assert evidence["combined_observed"]["wins_kept"] == 26
+    assert evidence["combined_observed"]["losses_kept"] == 26
     assert evidence["candidate_definition_sha256"] == identity["v3_candidate_definition_sha256"]
     assert evidence["release_identity"] == identity["v3_managed_release_identity"]
     assert evidence["methodology"]["production_authority"] is False
