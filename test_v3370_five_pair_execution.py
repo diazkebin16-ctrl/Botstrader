@@ -1,5 +1,4 @@
 import asyncio
-from pathlib import Path
 
 import pytest
 
@@ -146,6 +145,77 @@ def test_preexecution_rejection_falls_back_to_next_candidate(monkeypatch):
     ])
     assert asyncio.run(server.scan_instruments_once(object())) is True
     assert [x[0] for x in calls]==['EUR_USD','GBP_USD']
+
+
+def test_instrument_local_preflight_rejection_does_not_enter_global_safe_mode(monkeypatch):
+    entered=[]
+    journal=[]
+    class Recovery:
+        def enter_safe_mode(self,*args,**kwargs): entered.append((args,kwargs))
+        def journal(self,*args,**kwargs): journal.append((args,kwargs))
+    async def local_rejection(*args,**kwargs):
+        return {
+            'ok':False,'reason':'PRICE_PREFLIGHT_SPREAD_TOO_WIDE',
+            'violations':['SPREAD_TOO_WIDE'],
+            'failure_scope':'INSTRUMENT_LOCAL_MARKET_CONDITION',
+            'requires_safe_mode':False,
+        }
+    monkeypatch.setattr(server,'recovery_manager',Recovery())
+    monkeypatch.setattr(server,'market_is_weekend_closed',lambda:False)
+    monkeypatch.setattr(server,'new_entry_time_gate',lambda:{'allowed':True,'reason':'ALLOWED'})
+    monkeypatch.setattr(server,'instrument_mode',lambda instrument:'ENABLED')
+    monkeypatch.setattr(server,'SINGLE',False)
+    monkeypatch.setattr(server,'recovery_price_preflight',local_rejection)
+    row=c('EUR_USD',90)
+    row['portfolio_execution_guard']={'allow':True}
+    out=asyncio.run(server.execute_recoverable(object(),row,'trace',1,1))
+    assert out['skipped']=='PRICE_PREFLIGHT_SPREAD_TOO_WIDE'
+    assert out['price_preflight']['violations']==['SPREAD_TOO_WIDE']
+    assert entered==[]
+    assert len(journal)==1
+
+
+def test_wide_spread_is_classified_as_instrument_local_preflight_rejection(monkeypatch):
+    async def pricing(*args,**kwargs):
+        return {'prices':[{
+            'time':server.now_iso(),'status':'tradeable',
+            'closeoutBid':'1.35550','closeoutAsk':'1.35604',
+            'bids':[{'price':'1.35550','liquidity':'1000000'}],
+            'asks':[{'price':'1.35604','liquidity':'1000000'}],
+            'quoteHomeConversionFactors':{'positiveUnits':'1','negativeUnits':'1'},
+        }]}
+    monkeypatch.setattr(server,'req',pricing)
+    out=asyncio.run(server.recovery_price_preflight(object(),{
+        'instrument':'GBP_USD','signal':'BUY','entry':1.35577,
+    }))
+    assert out['ok'] is False
+    assert out['violations']==['SPREAD_TOO_WIDE']
+    assert out['reason']=='PRICE_PREFLIGHT_SPREAD_TOO_WIDE'
+    assert out['failure_scope']=='INSTRUMENT_LOCAL_MARKET_CONDITION'
+    assert out['requires_safe_mode'] is False
+
+
+def test_uncertain_preflight_failure_still_enters_global_safe_mode(monkeypatch):
+    entered=[]
+    class Recovery:
+        def enter_safe_mode(self,*args,**kwargs): entered.append((args,kwargs))
+        def journal(self,*args,**kwargs): pass
+    async def systemic_failure(*args,**kwargs):
+        return {
+            'ok':False,'reason':'PRICE_PREFLIGHT_ERROR',
+            'failure_scope':'SYSTEMIC_OR_UNCERTAIN','requires_safe_mode':True,
+        }
+    monkeypatch.setattr(server,'recovery_manager',Recovery())
+    monkeypatch.setattr(server,'market_is_weekend_closed',lambda:False)
+    monkeypatch.setattr(server,'new_entry_time_gate',lambda:{'allowed':True,'reason':'ALLOWED'})
+    monkeypatch.setattr(server,'instrument_mode',lambda instrument:'ENABLED')
+    monkeypatch.setattr(server,'SINGLE',False)
+    monkeypatch.setattr(server,'recovery_price_preflight',systemic_failure)
+    row=c('EUR_USD',90)
+    row['portfolio_execution_guard']={'allow':True}
+    out=asyncio.run(server.execute_recoverable(object(),row,'trace',1,1))
+    assert out['skipped']=='PRICE_PREFLIGHT_ERROR'
+    assert len(entered)==1
 
 
 def test_explicit_broker_rejection_falls_back(monkeypatch):

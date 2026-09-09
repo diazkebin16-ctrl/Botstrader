@@ -303,7 +303,7 @@ TREND_RUNNER_MIN_SCORE = max(0.0, float(os.getenv("TREND_RUNNER_MIN_SCORE", "0.6
 TREND_RUNNER_TP_R = max(2.0, float(os.getenv("TREND_RUNNER_TP_R", "3.0")))
 TREND_RUNNER_TRAIL_START_R = max(1.5, float(os.getenv("TREND_RUNNER_TRAIL_START_R", "1.75")))
 TREND_RUNNER_TRAIL_DISTANCE_R = max(0.40, float(os.getenv("TREND_RUNNER_TRAIL_DISTANCE_R", "0.90")))
-VERSION_TAG = "3.39.3"
+VERSION_TAG = "3.39.4"
 ENTRY_TIMING_ENABLED = os.getenv("ENTRY_TIMING_ENABLED", "true").lower() == "true"
 MAX_ENTRY_EXTENSION_ATR = max(0.5, float(os.getenv("MAX_ENTRY_EXTENSION_ATR", "1.50")))
 MIN_ROOM_TO_BARRIER_R = max(1.0, float(os.getenv("MIN_ROOM_TO_BARRIER_R", "1.50")))
@@ -6862,7 +6862,8 @@ async def recovery_price_preflight(client: httpx.AsyncClient, r: Dict[str,Any]) 
         d=await req(client,"GET","/v3/accounts/{account}/pricing",params={"instruments":r["instrument"]})
         prices=d.get("prices") or []
         if not prices:
-            return {"ok":False,"reason":"NO_BROKER_PRICE"}
+            return {"ok":False,"reason":"NO_BROKER_PRICE","failure_scope":"SYSTEMIC_OR_UNCERTAIN",
+                    "requires_safe_mode":True}
         q=prices[0]
         bid=_risk_float(q.get("closeoutBid"))
         ask=_risk_float(q.get("closeoutAsk"))
@@ -6871,7 +6872,8 @@ async def recovery_price_preflight(client: httpx.AsyncClient, r: Dict[str,Any]) 
         if ask is None:
             asks=q.get("asks") or [];ask=_risk_float((asks[0] if asks else {}).get("price"))
         if bid is None or ask is None or ask<=bid:
-            return {"ok":False,"reason":"INVALID_BID_ASK","quote":q}
+            return {"ok":False,"reason":"INVALID_BID_ASK","quote":q,
+                    "failure_scope":"SYSTEMIC_OR_UNCERTAIN","requires_safe_mode":True}
         qt=_parse_iso(q.get("time"))
         age=(datetime.now(timezone.utc)-qt).total_seconds() if qt else 999999
         spread=(ask-bid)/pip_size(r["instrument"])
@@ -6883,9 +6885,12 @@ async def recovery_price_preflight(client: httpx.AsyncClient, r: Dict[str,Any]) 
         ask_liquidity=sum(float(x.get("liquidity") or 0) for x in asks if _risk_float(x.get("liquidity")) is not None)
         available_liquidity=ask_liquidity if r.get("signal")=="BUY" else bid_liquidity
         if available_liquidity<=0: available_liquidity=None
-        ok=(age<=RECOVERY_MAX_QUOTE_AGE_SECONDS and spread<=RECOVERY_MAX_SPREAD_PIPS
-            and deviation<=RECOVERY_MAX_PRICE_DEVIATION_PIPS
-            and market_status not in ("non-tradeable","halted","closed"))
+        violations=[]
+        if age>RECOVERY_MAX_QUOTE_AGE_SECONDS: violations.append("QUOTE_STALE")
+        if spread>RECOVERY_MAX_SPREAD_PIPS: violations.append("SPREAD_TOO_WIDE")
+        if deviation>RECOVERY_MAX_PRICE_DEVIATION_PIPS: violations.append("PRICE_DEVIATION_TOO_LARGE")
+        if market_status in ("non-tradeable","halted","closed"): violations.append("MARKET_NOT_TRADEABLE")
+        ok=not violations
         conversion_factors=q.get("quoteHomeConversionFactors") or {}
         conversion=_risk_float(conversion_factors.get("negativeUnits") if r.get("signal")=="SELL" else conversion_factors.get("positiveUnits"))
         return {"ok":ok,"bid":bid,"ask":ask,"mid":mid,"last_price":mid,"spread_pips":spread,
@@ -6893,9 +6898,13 @@ async def recovery_price_preflight(client: httpx.AsyncClient, r: Dict[str,Any]) 
                 "quote_time":q.get("time"),"available_liquidity":available_liquidity,
                 "bid_liquidity":bid_liquidity or None,"ask_liquidity":ask_liquidity or None,
                 "quote_home_conversion":conversion,"quote_home_conversion_factors":conversion_factors,
-                "reason":"OK" if ok else "REQUIRE_REVALIDATION"}
+                "violations":violations,
+                "failure_scope":None if ok else "INSTRUMENT_LOCAL_MARKET_CONDITION",
+                "requires_safe_mode":False,
+                "reason":"OK" if ok else "PRICE_PREFLIGHT_"+"_AND_".join(violations)}
     except Exception as e:
-        return {"ok":False,"reason":"PRICE_PREFLIGHT_ERROR","error":str(e)}
+        return {"ok":False,"reason":"PRICE_PREFLIGHT_ERROR","error":str(e),
+                "failure_scope":"SYSTEMIC_OR_UNCERTAIN","requires_safe_mode":True}
 
 
 async def execute_recoverable(client: httpx.AsyncClient, r: Dict[str,Any],
@@ -6944,11 +6953,19 @@ async def execute_recoverable(client: httpx.AsyncClient, r: Dict[str,Any],
         return {"skipped":"existing_position"}
     preflight=await recovery_price_preflight(client,r)
     if not preflight.get("ok"):
-        recovery_manager.enter_safe_mode(f"Execution price preflight rejected: {preflight.get('reason')}",
-                                         correlation_id=correlation_id,severity="CRITICAL")
+        # A valid broker quote can reject one instrument because its spread,
+        # deviation, freshness or tradeability is temporarily unacceptable.
+        # The order remains blocked, but that local condition must not poison the
+        # account-wide RecoveryManager and prevent the batch selector from safely
+        # considering another instrument. Missing/invalid/failed broker pricing is
+        # still systemic or uncertain and therefore retains the global fail-safe.
+        if preflight.get("requires_safe_mode",True):
+            recovery_manager.enter_safe_mode(f"Execution price preflight rejected: {preflight.get('reason')}",
+                                             correlation_id=correlation_id,severity="CRITICAL")
         recovery_manager.journal("REJECT_EXECUTION",correlation_id,strategy_id=setup_variant(r),
                                  payload={"reason":"PRICE_PREFLIGHT","preflight":preflight})
-        return {"skipped":"REQUIRE_REVALIDATION","price_preflight":preflight}
+        return {"skipped":str(preflight.get("reason") or "REQUIRE_REVALIDATION"),
+                "price_preflight":preflight}
     sizing=instrument_sizing(
         r["instrument"],min(UNITS,int(managed_value("execution.trade_units",UNITS))),
         r["entry"],r["stop"],risk_context=r.get("broker_risk_context"),
