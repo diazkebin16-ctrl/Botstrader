@@ -963,7 +963,8 @@ class RecoveryManager:
             # BROKER_MISSING is intentionally non-CLOSED: learning/performance code
             # must not treat an unknown outcome as a resolved trade.
             try:
-                row=c.execute("SELECT data_quality_json FROM trade_memory WHERE trade_id=?",(str(trade_id),)).fetchone()
+                row=c.execute("""SELECT data_quality_json,execution_quality_compromised
+                                 FROM trade_memory WHERE trade_id=?""",(str(trade_id),)).fetchone()
                 quality={}
                 if row and row['data_quality_json']:
                     try: quality=json.loads(row['data_quality_json'])
@@ -973,6 +974,10 @@ class RecoveryManager:
                     'broker_exit_unverified':True,
                     'excluded_from_learning':True,
                     'quarantined_ts':ts,
+                    # Preserve the pre-quarantine value so an exact later broker
+                    # close can remove only the compromise introduced here.
+                    'pre_quarantine_execution_quality_compromised':
+                        int(row['execution_quality_compromised'] or 0) if row else 0,
                 })
                 c.execute("""UPDATE trade_memory SET status='BROKER_MISSING',
                     execution_quality_compromised=1,data_quality_json=?,updated_ts=?

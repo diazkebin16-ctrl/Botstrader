@@ -36,6 +36,7 @@ def test_practice_orphan_is_quarantined_not_fabricated_closed():
         assert a['closed']==1 and a['last_action']=='BROKER_MISSING_QUARANTINED'
         assert tm['status']=='BROKER_MISSING'
         assert 'excluded_from_learning' in tm['data_quality_json']
+        assert 'pre_quarantine_execution_quality_compromised' in tm['data_quality_json']
     finally: os.unlink(path)
 
 

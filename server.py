@@ -303,7 +303,7 @@ TREND_RUNNER_MIN_SCORE = max(0.0, float(os.getenv("TREND_RUNNER_MIN_SCORE", "0.6
 TREND_RUNNER_TP_R = max(2.0, float(os.getenv("TREND_RUNNER_TP_R", "3.0")))
 TREND_RUNNER_TRAIL_START_R = max(1.5, float(os.getenv("TREND_RUNNER_TRAIL_START_R", "1.75")))
 TREND_RUNNER_TRAIL_DISTANCE_R = max(0.40, float(os.getenv("TREND_RUNNER_TRAIL_DISTANCE_R", "0.90")))
-VERSION_TAG = "3.39.4"
+VERSION_TAG = "3.39.5"
 ENTRY_TIMING_ENABLED = os.getenv("ENTRY_TIMING_ENABLED", "true").lower() == "true"
 MAX_ENTRY_EXTENSION_ATR = max(0.5, float(os.getenv("MAX_ENTRY_EXTENSION_ATR", "1.50")))
 MIN_ROOM_TO_BARRIER_R = max(1.0, float(os.getenv("MIN_ROOM_TO_BARRIER_R", "1.50")))
@@ -4903,6 +4903,202 @@ async def _trade_memory_exit_reason(client: httpx.AsyncClient, trade: Dict[str, 
     return reasons
 
 
+def _trade_memory_transaction_close(mem: Dict[str, Any],
+                                    transactions: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Reconstruct one broker-confirmed close from OANDA ORDER_FILL history.
+
+    OANDA's Trade endpoint is not a durable archive for every closed Practice
+    trade.  ORDER_FILL transactions are the immutable account ledger and expose
+    the exact per-trade ``tradesClosed``/``tradeReduced`` prices and P/L.  A
+    partial reduction is never promoted to a full close unless the accumulated
+    reduced units cover the original position.
+    """
+    trade_id=str(mem.get("trade_id") or "")
+    expected_units=abs(float(mem.get("position_size") or 0.0))
+    matches=[]
+    fully_closed=False
+    for tx in transactions:
+        reductions=[]
+        for item in tx.get("tradesClosed") or []:
+            reductions.append((item,True))
+        reduced=tx.get("tradeReduced")
+        if isinstance(reduced,dict):
+            reductions.append((reduced,False))
+        for item,is_full in reductions:
+            if str(item.get("tradeID") or "")!=trade_id:
+                continue
+            units=abs(float(item.get("units") or 0.0))
+            if units<=0:
+                continue
+            matches.append({"transaction":tx,"reduction":item,"units":units,
+                            "full_close":is_full,"transaction_reduction_count":len(reductions)})
+            fully_closed=fully_closed or is_full
+    if not matches:
+        return None
+
+    reduced_units=sum(x["units"] for x in matches)
+    if not fully_closed and (expected_units<=0 or reduced_units+1e-9<expected_units):
+        return None
+
+    def value(item: Dict[str,Any], tx: Dict[str,Any], key: str) -> float:
+        per_trade=_risk_float(item.get(key))
+        if per_trade is not None:
+            return float(per_trade)
+        # Transaction-level amounts may cover several trades.  They are exact for
+        # this trade only when the fill contains one reduction.
+        reduction_count=len(tx.get("tradesClosed") or [])
+        if isinstance(tx.get("tradeReduced"),dict):
+            reduction_count+=1
+        if reduction_count==1:
+            aggregate=_risk_float(tx.get(key))
+            if aggregate is not None:
+                return float(aggregate)
+        return 0.0
+
+    weighted_price=0.0;priced_units=0.0
+    realized=financing=dividend=guaranteed=commission=0.0
+    reasons=[];transaction_ids=[];last_time=None
+    reductions_for_audit=[]
+    for match in matches:
+        tx=match["transaction"];item=match["reduction"];units=match["units"]
+        price=_risk_float(item.get("price"))
+        if price is not None:
+            weighted_price+=float(price)*units;priced_units+=units
+        realized+=value(item,tx,"realizedPL")
+        financing+=value(item,tx,"financing")
+        dividend+=value(item,tx,"dividendAdjustment")
+        guaranteed+=value(item,tx,"guaranteedExecutionFee")
+        if match["transaction_reduction_count"]==1:
+            commission+=float(_risk_float(tx.get("commission"),0.0) or 0.0)
+        tid=str(tx.get("id") or "")
+        if tid and tid not in transaction_ids:transaction_ids.append(tid)
+        for reason in (tx.get("reason"),tx.get("type"),"order_id:"+str(tx.get("orderID") or "")):
+            if reason and reason!="order_id:" and str(reason) not in reasons:reasons.append(str(reason))
+        if tx.get("time"):last_time=tx.get("time")
+        reductions_for_audit.append({
+            "transaction_id":tid,"time":tx.get("time"),"reason":tx.get("reason"),
+            "type":tx.get("type"),"order_id":tx.get("orderID"),"units":units,
+            "price":price,"realized_pl":value(item,tx,"realizedPL"),
+            "financing":value(item,tx,"financing"),"dividend_adjustment":value(item,tx,"dividendAdjustment"),
+            "guaranteed_execution_fee":value(item,tx,"guaranteedExecutionFee"),
+        })
+    exit_price=weighted_price/priced_units if priced_units>0 else None
+    if exit_price is None or last_time is None:
+        return None
+    return {
+        "source":"OANDA_TRANSACTION_HISTORY","exit_price":exit_price,"exit_ts":last_time,
+        "realized_pl":realized,"financing":financing,"dividend_adjustment":dividend,
+        "guaranteed_execution_fee":guaranteed,"commission":commission,
+        "closing_transaction_ids":transaction_ids,"exit_reasons":reasons or ["BROKER_TRADE_CLOSED"],
+        "reduced_units":reduced_units,"expected_units":expected_units,
+        "trade_reductions":reductions_for_audit,
+    }
+
+
+async def _trade_memory_transaction_history(client: httpx.AsyncClient,
+                                            rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    numeric_ids=[]
+    for row in rows:
+        try:numeric_ids.append(int(str(row.get("trade_id") or "")))
+        except (TypeError,ValueError):continue
+    if not numeric_ids:
+        return []
+    account=await req(client,"GET","/v3/accounts/{account}")
+    details=account.get("account") or {}
+    last_raw=account.get("lastTransactionID") or details.get("lastTransactionID")
+    try:last_id=int(str(last_raw))
+    except (TypeError,ValueError):return []
+    first_id=min(numeric_ids)
+    if last_id<first_id:
+        return []
+    transactions=[];seen=set();chunk=500
+    for start in range(first_id,last_id+1,chunk):
+        end=min(last_id,start+chunk-1)
+        payload=await req(client,"GET","/v3/accounts/{account}/transactions/idrange",
+                          params={"from":str(start),"to":str(end),"type":"ORDER_FILL"})
+        for tx in payload.get("transactions") or []:
+            tid=str(tx.get("id") or "")
+            if tid in seen:continue
+            seen.add(tid);transactions.append(tx)
+    transactions.sort(key=lambda tx:int(str(tx.get("id") or "0")))
+    return transactions
+
+
+def _persist_trade_memory_close(mem: Dict[str, Any], close: Dict[str, Any]) -> bool:
+    exit_price=_risk_float(close.get("exit_price"))
+    exit_ts=close.get("exit_ts")
+    if exit_price is None or not exit_ts:
+        return False
+    realized=float(_risk_float(close.get("realized_pl"),0.0) or 0.0)
+    financing=float(_risk_float(close.get("financing"),0.0) or 0.0)
+    dividend=float(_risk_float(close.get("dividend_adjustment"),0.0) or 0.0)
+    guaranteed=float(_risk_float(close.get("guaranteed_execution_fee"),0.0) or 0.0)
+    commission=float(_risk_float(close.get("commission"),0.0) or 0.0)
+    fees_total=financing+dividend+guaranteed+commission
+    net=realized+fees_total
+    entry=float(mem["entry_price"])
+    risk=abs(entry-float(mem["stop_loss"])) if mem.get("stop_loss") is not None else 0.0
+    realized_r=None
+    if risk>0:
+        raw=(float(exit_price)-entry)/risk if mem["direction"]=="LONG" else (entry-float(exit_price))/risk
+        realized_r=float(raw)
+    ent=_parse_iso(mem.get("entry_ts"));ex=_parse_iso(exit_ts)
+    duration=(ex-ent).total_seconds() if ent and ex else None
+    quality=json.loads(mem.get("data_quality_json") or "{}")
+    was_broker_missing=bool(quality.get("broker_trade_missing") or mem.get("status")=="BROKER_MISSING")
+    quality.update({
+        "actual_broker_exit_pending":False,"actual_broker_exit_reconciled":True,
+        "broker_trade_missing":False,"broker_exit_unverified":False,"excluded_from_learning":False,
+        "recovered_from_transaction_history":close.get("source")=="OANDA_TRANSACTION_HISTORY",
+        "broker_exit_evidence_source":close.get("source"),"reconciled_ts":now_iso(),
+    })
+    exit_context={
+        "broker_state":"CLOSED","evidence_source":close.get("source"),
+        "closing_transaction_ids":close.get("closing_transaction_ids") or [],
+        "broker_realized_pl":realized,"financing":financing,"dividend_adjustment":dividend,
+        "guaranteed_execution_fee":guaranteed,"commission":commission,
+        "average_close_price":float(exit_price),"close_time":exit_ts,
+        "reduced_units":close.get("reduced_units"),"expected_units":close.get("expected_units"),
+        "trade_reductions":close.get("trade_reductions") or [],
+    }
+    compromised=int(mem.get("execution_quality_compromised") or 0)
+    if was_broker_missing:
+        # Exact transaction-ledger evidence resolves the uncertainty introduced
+        # by orphan quarantine.  Legacy rows predate the explicit saved value and
+        # therefore default to the uncompromised state; a recovery intent below
+        # still overrides this when it records an independent incident.
+        compromised=int(quality.get("pre_quarantine_execution_quality_compromised",0) or 0)
+    c=conn()
+    try:
+        intent=c.execute("""SELECT execution_quality_compromised FROM recovery_order_intents
+                            WHERE broker_trade_id=? ORDER BY id DESC LIMIT 1""",
+                         (str(mem["trade_id"]),)).fetchone()
+        if intent is not None:
+            compromised=int(intent["execution_quality_compromised"] or 0)
+    except sqlite3.OperationalError:
+        pass
+    c.execute("""UPDATE trade_memory SET
+      status='CLOSED',exit_ts=?,exit_price=?,gross_result=?,net_result=?,
+      realized_pl=?,financing=?,dividend_adjustment=?,guaranteed_execution_fees=?,
+      commission=?,fees_total=?,duration_seconds=?,realized_r=?,
+      exit_reasons_json=?,exit_context_json=?,data_quality_json=?,
+      execution_quality_compromised=?,updated_ts=? WHERE trade_id=?""",
+      (exit_ts,float(exit_price),realized,net,realized,financing,dividend,guaranteed,
+       commission,fees_total,duration,realized_r,_tm_json(close.get("exit_reasons") or [],[]),
+       _tm_json(exit_context,{}),_tm_json(quality,{}),compromised,now_iso(),str(mem["trade_id"])))
+    c.execute("""UPDATE active_trade_management SET closed=1,
+                 last_action='TRANSACTION_HISTORY_RECONCILED',updated_ts=? WHERE trade_id=?""",
+              (now_iso(),str(mem["trade_id"])))
+    c.commit();c.close()
+    if RECOVERY_MANAGER_ENABLED:
+        recovery_manager.journal("POSITION_CLOSED",trade_id=str(mem["trade_id"]),
+                                 order_id=mem.get("order_id"),strategy_id=mem.get("strategy"),
+                                 payload={"net_result":net,"realized_r":realized_r,
+                                          "exit_reasons":close.get("exit_reasons") or [],
+                                          "evidence_source":close.get("source")})
+    return True
+
+
 async def reconcile_trade_memory(client: httpx.AsyncClient, instrument: Optional[str]=None) -> Dict[str, Any]:
     """
     Read-only OANDA reconciliation of executed trades.
@@ -4911,88 +5107,61 @@ async def reconcile_trade_memory(client: httpx.AsyncClient, instrument: Optional
     if not TRADE_MEMORY_ENABLED:
         return {"enabled":False,"checked":0,"closed":0}
 
-    c=conn()
-    if instrument:
-        rows=[dict(x) for x in c.execute("""SELECT * FROM trade_memory
-                                           WHERE status='OPEN' AND symbol=?
-                                           ORDER BY id LIMIT ?""",
-                                        (instrument,TRADE_MEMORY_RECONCILE_LIMIT)).fetchall()]
-    else:
-        rows=[dict(x) for x in c.execute("""SELECT * FROM trade_memory
-                                           WHERE status='OPEN'
-                                           ORDER BY id LIMIT ?""",
-                                        (TRADE_MEMORY_RECONCILE_LIMIT,)).fetchall()]
+    c=conn();params=[];where="status='OPEN'"
+    if instrument:where+=" AND symbol=?";params.append(instrument)
+    params.append(TRADE_MEMORY_RECONCILE_LIMIT)
+    open_rows=[dict(x) for x in c.execute(
+        f"SELECT * FROM trade_memory WHERE {where} ORDER BY id LIMIT ?",tuple(params)).fetchall()]
+    params=[];where="status='BROKER_MISSING'"
+    if instrument:where+=" AND symbol=?";params.append(instrument)
+    params.append(1000)
+    missing_rows=[dict(x) for x in c.execute(
+        f"SELECT * FROM trade_memory WHERE {where} ORDER BY id LIMIT ?",tuple(params)).fetchall()]
     c.close()
 
-    closed=0;errors=[]
-    for mem in rows:
+    rows=open_rows+missing_rows;closed=0;recovered_missing=0;errors=[];fallback=list(missing_rows)
+    for mem in open_rows:
         try:
             payload=await req(client,"GET",f"/v3/accounts/{{account}}/trades/{mem['trade_id']}")
             tr=payload.get("trade") or {}
             if str(tr.get("state"))!="CLOSED":
                 continue
-
-            exit_price=_risk_float(tr.get("averageClosePrice"))
-            exit_ts=tr.get("closeTime") or now_iso()
-            realized=_risk_float(tr.get("realizedPL"),0.0) or 0.0
-            financing=_risk_float(tr.get("financing"),0.0) or 0.0
-            dividend=_risk_float(tr.get("dividendAdjustment"),0.0) or 0.0
-            guaranteed=_risk_float(tr.get("guaranteedExecutionFee"),0.0) or 0.0
-            commission=_risk_float(tr.get("commission"),0.0) or 0.0
-            fees_total=financing+dividend+guaranteed+commission
-            net=realized+fees_total
-
-            entry=float(mem["entry_price"])
-            risk=abs(entry-float(mem["stop_loss"])) if mem.get("stop_loss") is not None else 0.0
-            realized_r=None
-            if exit_price is not None and risk>0:
-                raw=(exit_price-entry)/risk if mem["direction"]=="LONG" else (entry-exit_price)/risk
-                realized_r=float(raw)
-
-            ent=_parse_iso(mem.get("entry_ts")); ex=_parse_iso(exit_ts)
-            duration=(ex-ent).total_seconds() if ent and ex else None
             exit_reasons=await _trade_memory_exit_reason(client,tr)
-
-            exit_context={
-                "broker_state":tr.get("state"),
+            close={
+                "source":"OANDA_TRADE_ENDPOINT","exit_price":_risk_float(tr.get("averageClosePrice")),
+                "exit_ts":tr.get("closeTime") or now_iso(),
+                "realized_pl":_risk_float(tr.get("realizedPL"),0.0) or 0.0,
+                "financing":_risk_float(tr.get("financing"),0.0) or 0.0,
+                "dividend_adjustment":_risk_float(tr.get("dividendAdjustment"),0.0) or 0.0,
+                "guaranteed_execution_fee":_risk_float(tr.get("guaranteedExecutionFee"),0.0) or 0.0,
+                "commission":_risk_float(tr.get("commission"),0.0) or 0.0,
                 "closing_transaction_ids":tr.get("closingTransactionIDs") or [],
-                "broker_realized_pl":realized,
-                "financing":financing,
-                "dividend_adjustment":dividend,
-                "guaranteed_execution_fee":guaranteed,
-                "commission":commission,
-                "average_close_price":exit_price,
-                "close_time":exit_ts
+                "exit_reasons":exit_reasons,
             }
-
-            quality=json.loads(mem.get("data_quality_json") or "{}")
-            quality["actual_broker_exit_pending"]=False
-            quality["actual_broker_exit_reconciled"]=True
-
-            c=conn()
-            c.execute("""UPDATE trade_memory SET
-              status='CLOSED',exit_ts=?,exit_price=?,gross_result=?,net_result=?,
-              realized_pl=?,financing=?,dividend_adjustment=?,guaranteed_execution_fees=?,
-              commission=?,fees_total=?,duration_seconds=?,realized_r=?,
-              exit_reasons_json=?,exit_context_json=?,data_quality_json=?,updated_ts=?
-              WHERE trade_id=?""",
-              (exit_ts,exit_price,realized,net,realized,financing,dividend,guaranteed,
-               commission,fees_total,duration,realized_r,_tm_json(exit_reasons,[]),
-               _tm_json(exit_context,{}),_tm_json(quality,{}),now_iso(),mem["trade_id"]))
-            c.execute("UPDATE active_trade_management SET closed=1,updated_ts=? WHERE trade_id=?",
-                      (now_iso(),mem["trade_id"]))
-            c.commit();c.close()
-            closed+=1
-            log.info("TRADE_MEMORY CLOSED trade=%s net=%s realized_r=%s reason=%s",
-                     mem["trade_id"],net,realized_r,";".join(exit_reasons))
-            if RECOVERY_MANAGER_ENABLED:
-                recovery_manager.journal("POSITION_CLOSED",trade_id=mem["trade_id"],
-                                         order_id=mem.get("order_id"),strategy_id=mem.get("strategy"),
-                                         payload={"net_result":net,"realized_r":realized_r,
-                                                  "exit_reasons":exit_reasons})
+            if _persist_trade_memory_close(mem,close):closed+=1
         except Exception as e:
-            errors.append({"trade_id":mem["trade_id"],"error":str(e)})
-            log.warning("TRADE_MEMORY reconcile failed trade=%s err=%s",mem["trade_id"],e)
+            fallback.append(mem)
+            errors.append({"trade_id":mem["trade_id"],"stage":"trade_endpoint","error":str(e)})
+
+    if fallback:
+        try:
+            transactions=await _trade_memory_transaction_history(client,fallback)
+            unresolved=[]
+            for mem in fallback:
+                close=_trade_memory_transaction_close(mem,transactions)
+                if close and _persist_trade_memory_close(mem,close):
+                    closed+=1
+                    if mem.get("status")=="BROKER_MISSING":recovered_missing+=1
+                    errors=[x for x in errors if x.get("trade_id")!=mem.get("trade_id")]
+                    log.info("TRADE_MEMORY RECOVERED trade=%s source=OANDA_TRANSACTION_HISTORY",
+                             mem.get("trade_id"))
+                elif mem.get("status")=="BROKER_MISSING":
+                    unresolved.append(str(mem.get("trade_id")))
+            if unresolved:
+                errors.append({"stage":"transaction_history","unresolved_trade_ids":unresolved})
+        except Exception as e:
+            errors.append({"stage":"transaction_history","error":str(e)})
+            log.warning("TRADE_MEMORY transaction-history recovery failed: %s",e)
 
     if closed:
         refresh_trade_memory_degradation()
@@ -5000,7 +5169,9 @@ async def reconcile_trade_memory(client: httpx.AsyncClient, instrument: Optional
     if DEPLOYMENT_MANAGER_ENABLED:
         try:v3_feedback=deployment_manager.reconcile_managed_paper_trade_memory(limit=max(200,TRADE_MEMORY_RECONCILE_LIMIT*4))
         except Exception as exc:errors.append({"component":"v3_managed_paper_feedback","error":str(exc)})
-    return {"enabled":True,"checked":len(rows),"closed":closed,"errors":errors,"v3_paper_feedback":v3_feedback}
+    return {"enabled":True,"checked":len(rows),"closed":closed,
+            "recovered_broker_missing":recovered_missing,"errors":errors,
+            "v3_paper_feedback":v3_feedback}
 
 
 def _tm_value(row: Dict[str, Any]) -> Optional[float]:
@@ -6756,7 +6927,19 @@ async def recovery_reconcile_primary(client: httpx.AsyncClient, reason: str="per
     if not RECOVERY_MANAGER_ENABLED:
         return {"enabled":False}
     try:
+        # Finalize every broker-confirmed close before Recovery Manager compares
+        # internal positions with the broker's *currently open* trades.  Without
+        # this global ordering, a close on another instrument can be quarantined
+        # as BROKER_MISSING before its immutable transaction is consumed.
+        try:
+            memory_reconciliation=await reconcile_trade_memory(client,None)
+        except Exception as memory_exc:
+            memory_reconciliation={"enabled":True,"checked":0,"closed":0,
+                                   "errors":[{"stage":"pre_recovery_reconciliation",
+                                              "error":str(memory_exc)}]}
+            log.warning("TRADE_MEMORY pre-recovery reconciliation failed: %s",memory_exc)
         result=await recovery_manager.reconnect_and_reconcile(client,max_attempts=3)
+        result["trade_memory_pre_reconciliation"]=memory_reconciliation
         if OBSERVABILITY_ENABLED:
             rec=result.get("reconciliation") or {}
             status=rec.get("status")
