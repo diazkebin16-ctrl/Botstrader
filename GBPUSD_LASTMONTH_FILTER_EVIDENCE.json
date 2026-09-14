@@ -1,0 +1,79 @@
+{
+  "candidate_definition": {
+    "direction_semantics": "SAME_NUMERIC_PREDICATES_FOR_BUY_AND_SELL",
+    "entry_time_only": true,
+    "id": "GBPUSD_LASTMONTH_ABS_SLOPE_ROOM_V1",
+    "instrument": "GBP_USD",
+    "paper_only": true,
+    "production_authority": false,
+    "rules": [
+      {
+        "feature": "absolute_m15_slope_atr",
+        "operator": ">=",
+        "threshold": 0.08794197841202381
+      },
+      {
+        "feature": "rr_raw",
+        "operator": "<=",
+        "threshold": 1.0666666666667464
+      }
+    ]
+  },
+  "candidate_definition_sha256": "0fde3fa7a4fce8f9857a0b50a595378db96e4bc85082d7be1aa56f7524ca96b9",
+  "candidate_id": "GBPUSD_LASTMONTH_ABS_SLOPE_ROOM_V1",
+  "confidence_class": "EXPERIMENTAL",
+  "data_sha256": "754fbad194d682f14ac04578ac3d21851d02e056fc8c66d93dffafab09deecda",
+  "deployment_scope": "PAPER_OANDA_PRACTICE_ONLY",
+  "discovery": {
+    "baseline": {"episodes": 97, "losses": 57, "timeouts": 28, "wins": 12},
+    "candidate": {"episodes": 51, "losses": 28, "timeouts": 14, "wins": 9},
+    "expectancy_delta_r": 0.1733254994124645,
+    "profit_factor_delta": 0.1663533834586603
+  },
+  "full_available_period": {
+    "baseline": {"episodes": 165, "losses": 86, "timeouts": 48, "win_rate": 0.26495726495726496, "wins": 31},
+    "candidate": {"episodes": 93, "losses": 46, "timeouts": 25, "win_rate": 0.3235294117647059, "wins": 22},
+    "expectancy_delta_r": 0.14643036701860954,
+    "losses_blocked": 40,
+    "wins_blocked": 9
+  },
+  "holdout": {
+    "baseline": {"episodes": 31, "losses": 11, "timeouts": 9, "win_rate": 0.5, "wins": 11},
+    "candidate": {"episodes": 18, "losses": 7, "timeouts": 3, "win_rate": 0.5333333333333333, "wins": 8},
+    "expectancy_delta_r": 0.08333333333333737,
+    "opened_once": true,
+    "profit_factor_delta": 0.21428571428573195
+  },
+  "instrument": "GBP_USD",
+  "limitations": [
+    "Historical replay is not forward proof.",
+    "Available instrument history begins 2026-08-31, not a complete 30-day month.",
+    "The candidate improves relative efficiency but does not certify profitability.",
+    "TIMEOUT and AMBIGUOUS are not counted as LOSS."
+  ],
+  "managed_release_identity": "v3paper_fcd5deb35fec3c16a201ec20d1b01e3dd54e72bddd6a1509109f8a52390dabda",
+  "methodology": {
+    "candidate_conditions_max": 3,
+    "chronological_partitions": "60/20/20",
+    "embargo_minutes": 30,
+    "episode_gap_minutes": 15,
+    "future_data_used_for_features": false,
+    "global_operational_windows_preserved": true,
+    "holdout_retuning": false,
+    "minimum_win_retention": 0.6,
+    "production_authority": false,
+    "selection": "discovery_and_validation_before_single_holdout_open",
+    "target_stop_horizon_minutes": 240
+  },
+  "period": {
+    "end": "2026-09-14T17:02:00+00:00",
+    "start": "2026-08-31T04:03:00+00:00"
+  },
+  "source_code_sha": "7d037828cd41a5d5c113dc95e32822993c7c8455",
+  "validation": {
+    "baseline": {"episodes": 22, "losses": 9, "timeouts": 5, "wins": 8},
+    "candidate": {"episodes": 11, "losses": 3, "timeouts": 3, "wins": 5},
+    "expectancy_delta_r": 0.38602941176472494,
+    "profit_factor_delta": 1.1666666666667624
+  }
+}

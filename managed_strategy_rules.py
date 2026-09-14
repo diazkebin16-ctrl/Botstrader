@@ -15,13 +15,14 @@ APPROVED_FEATURES = (
     "direction_edge", "session_strength", "session_displacement_atr",
     "session_momentum_atr", "h1_gap_atr", "h1_slope_atr",
     "m15_gap_atr", "m15_slope_atr",
+    "absolute_m15_slope_atr",
 )
 APPROVED_OPERATORS = (">=", "<=")
 APPROVED_RULE_MODES = ("ADMISSION", "VETO_WHEN_ALL")
 MANAGED_RULES_JSON = {}
 MANAGED_RULES_JSON["AUD_USD"] = "[]"
 MANAGED_RULES_JSON["EUR_USD"] = "[{\"candidate_definition_sha256\":\"0deb30e90db521d0e53eed1b358d7e3c4991360ecad043c7feced32cb5c802ed\",\"candidate_id\":\"COMPOSITE:0666c65d5412\",\"confidence_class\":\"EXPERIMENTAL\",\"experimental\":true,\"feature\":\"session_displacement_atr\",\"managed_release_identity\":\"v3paper_a68db3ab70d0f383f74b2713b722d1a5996ff067f2cacf44ede496bdd7cf32eb\",\"operator\":\">=\",\"paper_only\":true,\"production_authority\":false,\"source_code_sha\":\"6d85a16776ae9c2b7dfce7c9a3cbbaa72edadaa7\",\"threshold\":-1.2592592592595422},{\"candidate_definition_sha256\":\"0deb30e90db521d0e53eed1b358d7e3c4991360ecad043c7feced32cb5c802ed\",\"candidate_id\":\"COMPOSITE:0666c65d5412\",\"confidence_class\":\"EXPERIMENTAL\",\"experimental\":true,\"feature\":\"m15_slope_atr\",\"managed_release_identity\":\"v3paper_a68db3ab70d0f383f74b2713b722d1a5996ff067f2cacf44ede496bdd7cf32eb\",\"operator\":\">=\",\"paper_only\":true,\"production_authority\":false,\"source_code_sha\":\"6d85a16776ae9c2b7dfce7c9a3cbbaa72edadaa7\",\"threshold\":-0.1589937827394618},{\"candidate_definition_sha256\":\"0deb30e90db521d0e53eed1b358d7e3c4991360ecad043c7feced32cb5c802ed\",\"candidate_id\":\"COMPOSITE:0666c65d5412\",\"confidence_class\":\"EXPERIMENTAL\",\"experimental\":true,\"feature\":\"m15_slope_atr\",\"managed_release_identity\":\"v3paper_a68db3ab70d0f383f74b2713b722d1a5996ff067f2cacf44ede496bdd7cf32eb\",\"operator\":\">=\",\"paper_only\":true,\"production_authority\":false,\"source_code_sha\":\"6d85a16776ae9c2b7dfce7c9a3cbbaa72edadaa7\",\"threshold\":-0.37804495081897455}]"
-MANAGED_RULES_JSON["GBP_USD"] = "[]"
+MANAGED_RULES_JSON["GBP_USD"] = "[{\"candidate_definition_sha256\":\"0fde3fa7a4fce8f9857a0b50a595378db96e4bc85082d7be1aa56f7524ca96b9\",\"candidate_id\":\"GBPUSD_LASTMONTH_ABS_SLOPE_ROOM_V1\",\"confidence_class\":\"EXPERIMENTAL\",\"experimental\":true,\"feature\":\"absolute_m15_slope_atr\",\"managed_release_identity\":\"v3paper_fcd5deb35fec3c16a201ec20d1b01e3dd54e72bddd6a1509109f8a52390dabda\",\"operator\":\">=\",\"paper_only\":true,\"production_authority\":false,\"source_code_sha\":\"7d037828cd41a5d5c113dc95e32822993c7c8455\",\"threshold\":0.08794197841202381},{\"candidate_definition_sha256\":\"0fde3fa7a4fce8f9857a0b50a595378db96e4bc85082d7be1aa56f7524ca96b9\",\"candidate_id\":\"GBPUSD_LASTMONTH_ABS_SLOPE_ROOM_V1\",\"confidence_class\":\"EXPERIMENTAL\",\"experimental\":true,\"feature\":\"rr_raw\",\"managed_release_identity\":\"v3paper_fcd5deb35fec3c16a201ec20d1b01e3dd54e72bddd6a1509109f8a52390dabda\",\"operator\":\"<=\",\"paper_only\":true,\"production_authority\":false,\"source_code_sha\":\"7d037828cd41a5d5c113dc95e32822993c7c8455\",\"threshold\":1.0666666666667464}]"
 MANAGED_RULES_JSON["USD_JPY"] = "[{\"candidate_definition_sha256\":\"69077fda3300c984bf0558eeab7a424f3996c204a0bd5d7f3153bafbf6082f30\",\"candidate_id\":\"USDJPY_EXECUTED60_M15_LATE_BUY_V2\",\"confidence_class\":\"EXPERIMENTAL\",\"direction\":\"BUY\",\"evidence_sha256\":\"3cfad5cdbd0218591d3b7589c09056ac8d77bd5f012769b61f2d93b8c72fefc8\",\"experimental\":true,\"feature\":\"m15_gap_atr\",\"group_id\":\"M15_LATE_BUY\",\"managed_release_identity\":\"v3paper_cb3f46d5222193f7ef352e53b9a016bc3ac05bb396d236debae7fc250c7c79b0\",\"operator\":\">=\",\"paper_only\":true,\"production_authority\":false,\"rule_mode\":\"VETO_WHEN_ALL\",\"source_code_sha\":\"c40f2ff1f57b0d1103c3e0afbe4bee02813a8584\",\"threshold\":0.7},{\"candidate_definition_sha256\":\"69077fda3300c984bf0558eeab7a424f3996c204a0bd5d7f3153bafbf6082f30\",\"candidate_id\":\"USDJPY_EXECUTED60_M15_LATE_BUY_V2\",\"confidence_class\":\"EXPERIMENTAL\",\"direction\":\"BUY\",\"evidence_sha256\":\"3cfad5cdbd0218591d3b7589c09056ac8d77bd5f012769b61f2d93b8c72fefc8\",\"experimental\":true,\"feature\":\"m15_slope_atr\",\"group_id\":\"M15_LATE_BUY\",\"managed_release_identity\":\"v3paper_cb3f46d5222193f7ef352e53b9a016bc3ac05bb396d236debae7fc250c7c79b0\",\"operator\":\">=\",\"paper_only\":true,\"production_authority\":false,\"rule_mode\":\"VETO_WHEN_ALL\",\"source_code_sha\":\"c40f2ff1f57b0d1103c3e0afbe4bee02813a8584\",\"threshold\":0.25}]"
 MANAGED_RULES_JSON["USD_CAD"] = "[]"
 
@@ -88,6 +89,9 @@ def _rule_predicate(rule: Mapping[str,Any], features: Mapping[str,Any], row: Map
     feature=str(rule.get("feature") or "");operator=str(rule.get("operator") or "")
     if feature not in APPROVED_FEATURES or operator not in APPROVED_OPERATORS:raise ValueError("managed rule outside approved surface")
     value=features.get(feature) if isinstance(features,Mapping) else None
+    if value is None and feature=="absolute_m15_slope_atr" and isinstance(features,Mapping):
+        raw=_finite(features.get("m15_slope_atr"))
+        value=abs(raw) if raw is not None else None
     if value is None and feature=="rr_raw":value=(row or {}).get("rr_raw")
     number=_finite(value);threshold=_finite(rule.get("threshold"))
     matched=None if number is None or threshold is None else (number>=threshold if operator==">=" else number<=threshold)
@@ -106,8 +110,9 @@ def evaluate_managed_strategy_rules(row: Mapping[str,Any]) -> dict[str,Any]:
         feature=str(rule.get("feature") or "");operator=str(rule.get("operator") or "")
         if mode=="ADMISSION":
             item={"source":"automation_v3_managed","rule_key":rule.get("candidate_id"),"feature":feature,"operator":operator,"threshold":threshold,"passed":matched}
+            if matched is None:item["reason"]="REQUIRED_PRE_ENTRY_EVIDENCE_MISSING"
             results.append(item)
-            if matched is False:vetoes.append(item)
+            if matched is False or (matched is None and symbol=="GBP_USD"):vetoes.append(item)
             continue
         group_id=str(rule.get("group_id") or "")
         if not group_id:raise ValueError("managed veto rule missing group_id")

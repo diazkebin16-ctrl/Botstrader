@@ -68,7 +68,7 @@ def test_low_extension_does_not_change_the_remaining_m15_veto():
     assert _veto_groups(blocked) == {"M15_LATE_BUY"}
 
 
-def test_required_pre_entry_evidence_fails_closed_for_usdjpy_only():
+def test_required_pre_entry_evidence_fails_closed_for_managed_instruments():
     missing = managed.evaluate_managed_strategy_rules(
         {"instrument": "USD_JPY", "signal": "BUY", "features": {}}
     )
@@ -79,6 +79,12 @@ def test_required_pre_entry_evidence_fails_closed_for_usdjpy_only():
     )["ok"] is True
     assert managed.evaluate_managed_strategy_rules(
         {"instrument": "GBP_USD", "signal": "BUY", "features": {}}
+    )["ok"] is False
+    assert managed.evaluate_managed_strategy_rules(
+        {"instrument": "AUD_USD", "signal": "BUY", "features": {}}
+    )["ok"] is True
+    assert managed.evaluate_managed_strategy_rules(
+        {"instrument": "USD_CAD", "signal": "BUY", "features": {}}
     )["ok"] is True
 
 

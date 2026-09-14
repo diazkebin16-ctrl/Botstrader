@@ -1,5 +1,4 @@
 import asyncio
-import json
 from datetime import datetime, timezone
 
 import pytest
@@ -288,12 +287,12 @@ def test_global_hard_risk_caps_are_not_raised_for_second_instrument(monkeypatch)
 
 def test_secondary_instrument_cannot_inherit_primary_active_research_veto(monkeypatch):
     monkeypatch.setattr(server,"get_active_research_rules",lambda:[{"source":"INTERNAL","rule_key":"ext_le_0_8","status":"ACTIVE"}])
-    gbp=_signal("GBP_USD"); gbp["features"]["extension_atr"]=2.0
+    gbp=_signal("GBP_USD"); gbp["features"].update({"extension_atr":2.0,"rr_raw":1.0,"m15_slope_atr":0.1})
     eur=_signal("EUR_USD"); eur["features"]["extension_atr"]=2.0
     gout=server.evaluate_active_research_rules(gbp)
     eout=server.evaluate_active_research_rules(eur)
-    assert gout["ok"] is True and gout["active"] is False
-    assert gout["reason"] == "instrument_scoped_research_not_validated"
+    assert gout["ok"] is True and gout["active"] is True
+    assert all(rule["source"] == "automation_v3_managed" for rule in gout["rules"])
     assert eout["ok"] is False and eout["active"] is True
 
 

@@ -202,10 +202,13 @@ def test_sizing_never_increases_requested_units_for_all_three(monkeypatch):
         assert out["effective_units"] <= 123
 
 
-def test_legacy_research_veto_authority_is_eur_only_and_jpy_managed_veto_is_isolated(monkeypatch):
+def test_legacy_research_veto_authority_is_eur_only_and_managed_vetoes_are_isolated(monkeypatch):
     monkeypatch.setattr(server,"get_active_research_rules",lambda:[{"source":"INTERNAL","rule_key":"ext_le_0_8","status":"ACTIVE"}])
-    gbp=server.evaluate_active_research_rules(_signal("GBP_USD",ext=2.0))
-    assert gbp["ok"] is True and gbp["active"] is False
+    gbp_signal=_signal("GBP_USD",rr=1.0,ext=2.0)
+    gbp_signal["features"]["m15_slope_atr"]=0.2
+    gbp=server.evaluate_active_research_rules(gbp_signal)
+    assert gbp["ok"] is True and gbp["active"] is True
+    assert gbp["rules"] and not gbp["vetoes"]
     jpy=server.evaluate_active_research_rules(_signal("USD_JPY",ext=2.0))
     assert jpy["ok"] is True and jpy["active"] is True
     assert jpy["rules"] and not jpy["vetoes"]
