@@ -5,6 +5,12 @@ import httpx
 from recovery_manager import RecoveryManager, deterministic_intent_key
 from order_state import transition, can_transition
 
+
+def test_startup_market_data_request_satisfies_candle_loader_minimum():
+    import server
+
+    assert server.RECOVERY_STARTUP_CANDLE_COUNT >= 55
+
 class FakeResponse:
     def __init__(self,status_code=200,payload=None,headers=None,text=""):
         self.status_code=status_code
