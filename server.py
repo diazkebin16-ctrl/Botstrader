@@ -303,7 +303,7 @@ TREND_RUNNER_MIN_SCORE = max(0.0, float(os.getenv("TREND_RUNNER_MIN_SCORE", "0.6
 TREND_RUNNER_TP_R = max(2.0, float(os.getenv("TREND_RUNNER_TP_R", "3.0")))
 TREND_RUNNER_TRAIL_START_R = max(1.5, float(os.getenv("TREND_RUNNER_TRAIL_START_R", "1.75")))
 TREND_RUNNER_TRAIL_DISTANCE_R = max(0.40, float(os.getenv("TREND_RUNNER_TRAIL_DISTANCE_R", "0.90")))
-VERSION_TAG = "3.39.5"
+VERSION_TAG = "3.39.6"
 ENTRY_TIMING_ENABLED = os.getenv("ENTRY_TIMING_ENABLED", "true").lower() == "true"
 MAX_ENTRY_EXTENSION_ATR = max(0.5, float(os.getenv("MAX_ENTRY_EXTENSION_ATR", "1.50")))
 MIN_ROOM_TO_BARRIER_R = max(1.0, float(os.getenv("MIN_ROOM_TO_BARRIER_R", "1.50")))
@@ -7048,14 +7048,26 @@ async def recovery_price_preflight(client: httpx.AsyncClient, r: Dict[str,Any]) 
             return {"ok":False,"reason":"NO_BROKER_PRICE","failure_scope":"SYSTEMIC_OR_UNCERTAIN",
                     "requires_safe_mode":True}
         q=prices[0]
-        bid=_risk_float(q.get("closeoutBid"))
-        ask=_risk_float(q.get("closeoutAsk"))
-        if bid is None:
-            bids=q.get("bids") or [];bid=_risk_float((bids[0] if bids else {}).get("price"))
-        if ask is None:
-            asks=q.get("asks") or [];ask=_risk_float((asks[0] if asks else {}).get("price"))
-        if bid is None or ask is None or ask<=bid:
-            return {"ok":False,"reason":"INVALID_BID_ASK","quote":q,
+        # New orders must be validated against executable liquidity. OANDA states
+        # that closeoutBid/closeoutAsk are fallback prices for closing a position
+        # when liquidity is absent and are never used to open a position.
+        bids=q.get("bids") or [];asks=q.get("asks") or []
+        def executable_bucket(rows: List[Dict[str,Any]]) -> Optional[Dict[str,Any]]:
+            for row in rows:
+                price=_risk_float(row.get("price"));liquidity=_risk_float(row.get("liquidity"))
+                if price is not None and liquidity is not None and liquidity>0:
+                    return {"price":float(price),"liquidity":float(liquidity)}
+            return None
+        executable_bid=executable_bucket(bids);executable_ask=executable_bucket(asks)
+        if executable_bid is None or executable_ask is None:
+            return {"ok":False,"reason":"NO_EXECUTABLE_BID_ASK_LIQUIDITY",
+                    "bid_liquidity_available":executable_bid is not None,
+                    "ask_liquidity_available":executable_ask is not None,
+                    "failure_scope":"INSTRUMENT_LOCAL_MARKET_CONDITION",
+                    "requires_safe_mode":False}
+        bid=float(executable_bid["price"]);ask=float(executable_ask["price"])
+        if ask<=bid:
+            return {"ok":False,"reason":"INVALID_EXECUTABLE_BID_ASK","bid":bid,"ask":ask,
                     "failure_scope":"SYSTEMIC_OR_UNCERTAIN","requires_safe_mode":True}
         qt=_parse_iso(q.get("time"))
         age=(datetime.now(timezone.utc)-qt).total_seconds() if qt else 999999
@@ -7063,7 +7075,7 @@ async def recovery_price_preflight(client: httpx.AsyncClient, r: Dict[str,Any]) 
         mid=(ask+bid)/2.0
         deviation=abs(mid-float(r["entry"]))/pip_size(r["instrument"])
         market_status=str(q.get("status") or "tradeable").lower()
-        bids=q.get("bids") or []; asks=q.get("asks") or []
+        broker_tradeable=q.get("tradeable")
         bid_liquidity=sum(float(x.get("liquidity") or 0) for x in bids if _risk_float(x.get("liquidity")) is not None)
         ask_liquidity=sum(float(x.get("liquidity") or 0) for x in asks if _risk_float(x.get("liquidity")) is not None)
         available_liquidity=ask_liquidity if r.get("signal")=="BUY" else bid_liquidity
@@ -7072,11 +7084,15 @@ async def recovery_price_preflight(client: httpx.AsyncClient, r: Dict[str,Any]) 
         if age>RECOVERY_MAX_QUOTE_AGE_SECONDS: violations.append("QUOTE_STALE")
         if spread>RECOVERY_MAX_SPREAD_PIPS: violations.append("SPREAD_TOO_WIDE")
         if deviation>RECOVERY_MAX_PRICE_DEVIATION_PIPS: violations.append("PRICE_DEVIATION_TOO_LARGE")
-        if market_status in ("non-tradeable","halted","closed"): violations.append("MARKET_NOT_TRADEABLE")
+        if broker_tradeable is False or market_status in ("non-tradeable","halted","closed"):
+            violations.append("MARKET_NOT_TRADEABLE")
         ok=not violations
         conversion_factors=q.get("quoteHomeConversionFactors") or {}
         conversion=_risk_float(conversion_factors.get("negativeUnits") if r.get("signal")=="SELL" else conversion_factors.get("positiveUnits"))
         return {"ok":ok,"bid":bid,"ask":ask,"mid":mid,"last_price":mid,"spread_pips":spread,
+                "quote_source":"TOP_OF_BOOK_BIDS_ASKS",
+                "closeout_bid_ignored":_risk_float(q.get("closeoutBid")),
+                "closeout_ask_ignored":_risk_float(q.get("closeoutAsk")),
                 "quote_age_seconds":age,"deviation_pips":deviation,"market_status":market_status,
                 "quote_time":q.get("time"),"available_liquidity":available_liquidity,
                 "bid_liquidity":bid_liquidity or None,"ask_liquidity":ask_liquidity or None,

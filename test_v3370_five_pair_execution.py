@@ -195,6 +195,45 @@ def test_wide_spread_is_classified_as_instrument_local_preflight_rejection(monke
     assert out['requires_safe_mode'] is False
 
 
+def test_closeout_prices_are_ignored_for_new_order_spread(monkeypatch):
+    async def pricing(*args,**kwargs):
+        return {'prices':[{
+            'time':server.now_iso(),'status':'tradeable','tradeable':True,
+            # Closeout-only fallback is deliberately much wider than executable
+            # top-of-book liquidity and must not block a new 100-unit order.
+            'closeoutBid':'0.71396','closeoutAsk':'0.71490',
+            'bids':[{'price':'0.71438','liquidity':'1000000'}],
+            'asks':[{'price':'0.71444','liquidity':'1000000'}],
+            'quoteHomeConversionFactors':{'positiveUnits':'1','negativeUnits':'1'},
+        }]}
+    monkeypatch.setattr(server,'req',pricing)
+    out=asyncio.run(server.recovery_price_preflight(object(),{
+        'instrument':'AUD_USD','signal':'BUY','entry':0.71441,
+    }))
+    assert out['ok'] is True
+    assert out['spread_pips'] == pytest.approx(0.6)
+    assert out['quote_source'] == 'TOP_OF_BOOK_BIDS_ASKS'
+    assert out['closeout_bid_ignored'] == pytest.approx(0.71396)
+    assert out['closeout_ask_ignored'] == pytest.approx(0.71490)
+
+
+def test_no_executable_liquidity_is_local_rejection(monkeypatch):
+    async def pricing(*args,**kwargs):
+        return {'prices':[{
+            'time':server.now_iso(),'status':'tradeable','tradeable':True,
+            'closeoutBid':'1.38967','closeoutAsk':'1.39045',
+            'bids':[],'asks':[],
+        }]}
+    monkeypatch.setattr(server,'req',pricing)
+    out=asyncio.run(server.recovery_price_preflight(object(),{
+        'instrument':'USD_CAD','signal':'BUY','entry':1.39006,
+    }))
+    assert out['ok'] is False
+    assert out['reason'] == 'NO_EXECUTABLE_BID_ASK_LIQUIDITY'
+    assert out['failure_scope'] == 'INSTRUMENT_LOCAL_MARKET_CONDITION'
+    assert out['requires_safe_mode'] is False
+
+
 def test_uncertain_preflight_failure_still_enters_global_safe_mode(monkeypatch):
     entered=[]
     class Recovery:
