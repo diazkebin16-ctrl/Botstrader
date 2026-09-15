@@ -125,7 +125,7 @@ def test_empirical_confidence_evidence_is_isolated_by_direction(tmp_path, monkey
 
 def test_public_inventory_reports_ten_lanes_and_single_position_limit():
     payload = __import__("asyncio").run(server.directional_strategies_api())
-    assert payload["version"] == "3.40.0"
+    assert payload["version"] == "3.40.1"
     assert payload["strategy_count"] == 10
     assert payload["max_simultaneous_positions_per_instrument"] == 1
     assert payload["production_authority"] is False
