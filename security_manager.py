@@ -1,7 +1,7 @@
 
 from __future__ import annotations
 
-from typing import Dict, Any, Optional, List, Tuple
+from typing import Dict, Any, Optional, List
 from datetime import datetime, timezone
 import hashlib
 import hmac
@@ -640,7 +640,7 @@ class SecurityManager:
         if not self.code_root:return out
         for name in ("server.py","security_manager.py","recovery_manager.py","order_state.py",
                      "observability.py","deployment_runtime.py","deployment_manager.py",
-                     "adaptive_learning.py","validation_pipeline.py","system_evaluation.py","governance_engine.py","production_readiness.py","smart_execution.py","instrument_registry.py","instrument_profiles.py","opportunity_ranker.py","slot_allocator.py","broker_risk.py","counterfactual_tracker.py","managed_strategy_rules.py"):
+                     "adaptive_learning.py","validation_pipeline.py","system_evaluation.py","governance_engine.py","production_readiness.py","smart_execution.py","instrument_registry.py","instrument_profiles.py","opportunity_ranker.py","slot_allocator.py","broker_risk.py","counterfactual_tracker.py","managed_strategy_rules.py","directional_strategies.py"):
             p=os.path.join(self.code_root,name)
             if os.path.exists(p):
                 with open(p,"rb") as fh: out[name]=hashlib.sha256(fh.read()).hexdigest()

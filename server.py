@@ -21,7 +21,7 @@ from typing import Dict, Any, List, Optional
 from recovery_manager import RecoveryManager, deterministic_intent_key
 from security_manager import SecurityManager, RedactingFilter, sanitize as security_sanitize
 from system_evaluation import SystemEvaluationEngine
-from governance_engine import GovernanceEngine, AUTHORITY_MATRIX, AUTHORITY_PRIORITY
+from governance_engine import GovernanceEngine
 from production_readiness import ProductionReadinessGate
 from smart_execution import SmartExecutionEngine
 from ensemble_engine import EnsembleEngine
@@ -33,6 +33,12 @@ from session_regime import session_regime as detect_session_regime
 from instrument_registry import InstrumentRegistry
 from instrument_profiles import instrument_profile
 from managed_strategy_rules import evaluate_managed_strategy_rules, managed_strategy_identity, non_v3_managed_strategy_identity
+from directional_strategies import (
+    STRATEGY_IDS as DIRECTIONAL_STRATEGY_IDS,
+    all_strategy_definitions,
+    directional_strategy_id,
+    evaluate_directional_strategy,
+)
 from slot_allocator import slot_policy
 from opportunity_ranker import rank_opportunities
 from broker_risk import OandaBrokerRiskAdapter
@@ -41,30 +47,27 @@ from legacy_v331_scoring import legacy_v331_score, choose_legacy_v331_direction
 from forward_experiment import forward_policy, evaluate_forward_experiment
 from observability import (
     ObservabilityManager, DEPENDENCY_CRITICAL, DEPENDENCY_IMPORTANT, DEPENDENCY_NON_CRITICAL,
-    stale_status as observability_stale_status, reconciliation_status as observability_reconciliation_status,
+    reconciliation_status as observability_reconciliation_status,
     degradation_state as observability_degradation_state,
 )
 from deployment_runtime import DeploymentManager
 from adaptive_learning import (
     dataset_fingerprint as al_dataset_fingerprint,
     candidate_uses_entry_only as al_candidate_uses_entry_only,
-    candidate_passes as al_candidate_passes,
     metrics as al_metrics,
     validate_candidate as al_validate_candidate,
-    candidate_score as al_candidate_score,
     concept_drift as al_concept_drift,
 )
 from validation_pipeline import (
     run_historical_validation as vp_run_historical_validation,
     strict_temporal_split as vp_strict_temporal_split,
     candidate_passes as vp_candidate_passes,
-    extended_metrics as vp_metrics,
     dataset_fingerprint as vp_dataset_fingerprint,
 )
 
 import httpx
 from fastapi import FastAPI, HTTPException, Header, Body
-from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse
 
 # Primary broker environment remains PRACTICE by default. Live endpoint selection requires
 # THREE independent conditions and is disabled in unit/integration test processes. The
@@ -303,7 +306,7 @@ TREND_RUNNER_MIN_SCORE = max(0.0, float(os.getenv("TREND_RUNNER_MIN_SCORE", "0.6
 TREND_RUNNER_TP_R = max(2.0, float(os.getenv("TREND_RUNNER_TP_R", "3.0")))
 TREND_RUNNER_TRAIL_START_R = max(1.5, float(os.getenv("TREND_RUNNER_TRAIL_START_R", "1.75")))
 TREND_RUNNER_TRAIL_DISTANCE_R = max(0.40, float(os.getenv("TREND_RUNNER_TRAIL_DISTANCE_R", "0.90")))
-VERSION_TAG = "3.39.9"
+VERSION_TAG = "3.40.0"
 ENTRY_TIMING_ENABLED = os.getenv("ENTRY_TIMING_ENABLED", "true").lower() == "true"
 MAX_ENTRY_EXTENSION_ATR = max(0.5, float(os.getenv("MAX_ENTRY_EXTENSION_ATR", "1.50")))
 MIN_ROOM_TO_BARRIER_R = max(1.0, float(os.getenv("MIN_ROOM_TO_BARRIER_R", "1.50")))
@@ -1250,7 +1253,7 @@ def production_certification_context() -> Dict[str,Any]:
 def production_release_files() -> List[str]:
     root=Path(__file__).resolve().parent
     names=[
-        "server.py","production_readiness.py","governance_engine.py","system_evaluation.py",
+        "server.py","directional_strategies.py","production_readiness.py","governance_engine.py","system_evaluation.py",
         "security_manager.py","recovery_manager.py","order_state.py","observability.py","smart_execution.py","ensemble_engine.py","capital_allocation.py",
         "adaptive_learning.py","validation_pipeline.py","deployment_manager.py","deployment_runtime.py",
         "instrument_registry.py","instrument_profiles.py","opportunity_ranker.py","slot_allocator.py","broker_risk.py","counterfactual_tracker.py","requirements.txt","Dockerfile"
@@ -1260,7 +1263,7 @@ def production_release_files() -> List[str]:
 def production_release_versions() -> Dict[str,Any]:
     return {
         "system_release":VERSION_TAG,
-        "strategy_versions":[f"{x}@{VERSION_TAG}" for x in sorted(INSTRUMENTS)],
+        "strategy_versions":[f"{x}@{VERSION_TAG}" for x in sorted(DIRECTIONAL_STRATEGY_IDS)],
         "risk_config_version":f"config_v{security_manager.current_version()}",
         "governance_version":f"governance@{VERSION_TAG}:config_v{security_manager.current_version()}",
         "deployment_version":f"deployment@{VERSION_TAG}",
@@ -2620,7 +2623,6 @@ def _direction_hypothesis(h1, m15, m5, m1, inst: str, sig: str) -> Dict[str, Any
     st=swing(m5[:-2],"h" if sig=="BUY" else "l",28)
     structural_reward=(st-entry) if sig=="BUY" else (entry-st)
     rr_raw=structural_reward/risk if structural_reward>0 else 0.0
-    rr=MIN_RR
     min_tp_distance=max(risk*MIN_RR, MIN_TAKE_PROFIT_PIPS*pip)
     target=entry+min_tp_distance if sig=="BUY" else entry-min_tp_distance
     barrier_allows_target=True
@@ -3136,8 +3138,8 @@ def feature_vector(features: Dict[str, Any]) -> List[float]:
 
 
 
-def setup_variant(r: Dict[str, Any]) -> str:
-    """Stable description of the current strategy variation. This is not a new trading strategy."""
+def setup_pattern(r: Dict[str, Any]) -> str:
+    """Describe the setup subtype without using it as the strategy identity."""
     if r.get("signal") not in ("BUY", "SELL"):
         return "WAIT"
     align = r.get("alignment", "N/A")
@@ -3146,6 +3148,26 @@ def setup_variant(r: Dict[str, Any]) -> str:
     score = int(r.get("score", 0))
     score_tag = "Q90" if score >= 90 else "Q85" if score >= 85 else "Q80" if score >= 80 else "QLOW"
     return f"SECOND_PULLBACK_{news_tag}_{rr_tag}_{score_tag}"
+
+
+def setup_variant(r: Dict[str, Any]) -> str:
+    """Return one of the ten instrument+direction PAPER strategy identities."""
+    if r.get("signal") not in ("BUY", "SELL"):
+        return "WAIT"
+    try:
+        return directional_strategy_id(r.get("instrument"), r.get("signal"))
+    except ValueError:
+        return "UNKNOWN_DIRECTIONAL_STRATEGY"
+
+
+def attach_directional_strategy(r: Dict[str, Any]) -> Dict[str, Any]:
+    lane=evaluate_directional_strategy(r)
+    r["directional_strategy"]=lane
+    r["setup_pattern"]=setup_pattern(r)
+    filters=dict(r.get("filters") or {})
+    filters["directional_lane"]=bool(lane.get("eligible"))
+    r["filters"]=filters
+    return lane
 
 
 
@@ -3376,11 +3398,16 @@ def empirical_confidence(r: Dict[str, Any]) -> Dict[str, Any]:
     c = conn()
     # Adaptive execution confidence is intentionally based only on trades the bot
     # actually executed. Rejected/counterfactual samples remain research evidence.
+    direction=str(r.get("signal") or "").upper()
     total = c.execute(
-        "SELECT COUNT(*) n FROM learning_samples WHERE instrument=? AND executed=1 AND label IN (0,1)",(instrument,)
+        """SELECT COUNT(*) n FROM learning_samples ls JOIN signals s ON s.id=ls.signal_id
+           WHERE ls.instrument=? AND s.instrument=? AND s.signal=? AND ls.executed=1 AND ls.label IN (0,1)""",
+        (instrument,instrument,direction)
     ).fetchone()["n"]
     wins = c.execute(
-        "SELECT COUNT(*) n FROM learning_samples WHERE instrument=? AND executed=1 AND label=1",(instrument,)
+        """SELECT COUNT(*) n FROM learning_samples ls JOIN signals s ON s.id=ls.signal_id
+           WHERE ls.instrument=? AND s.instrument=? AND s.signal=? AND ls.executed=1 AND ls.label=1""",
+        (instrument,instrument,direction)
     ).fetchone()["n"]
     variant = setup_variant(r)
 
@@ -3388,9 +3415,9 @@ def empirical_confidence(r: Dict[str, Any]) -> Dict[str, Any]:
         SELECT ls.label, s.setup_variant
         FROM learning_samples ls
         JOIN signals s ON s.id=ls.signal_id
-        WHERE ls.instrument=? AND s.instrument=? AND ls.executed=1 AND ls.label IN (0,1)
+        WHERE ls.instrument=? AND s.instrument=? AND s.signal=? AND ls.executed=1 AND ls.label IN (0,1)
         ORDER BY ls.id DESC
-    """,(instrument,instrument)).fetchall()
+    """,(instrument,instrument,direction)).fetchall()
     c.close()
 
     local = [int(x["label"]) for x in rows if x["setup_variant"] == variant]
@@ -4404,8 +4431,6 @@ def adaptive_risk_recommendation(
     dd_warn=float(managed_value("risk.drawdown_warning",RISK_DRAWDOWN_WARN))
     dd_stop=float(managed_value("risk.drawdown_stop",RISK_DRAWDOWN_STOP))
     max_losses=int(managed_value("risk.max_consecutive_losses",RISK_MAX_CONSECUTIVE_LOSSES))
-    max_correlated=int(managed_value("risk.max_correlated_positions",RISK_MAX_CORRELATED_POSITIONS))
-
     market_regime=(regime or {}).get("market_regime")
     volatility_state=(regime or {}).get("volatility_state")
     regime_conf=_risk_float((regime or {}).get("confidence"),0.0) or 0.0
@@ -4696,6 +4721,8 @@ def record_trade_memory_entry(
         "context_version":"v1_pre_trade_only",
         "candle_ts":r.get("candle_ts"),
         "strategy":setup_variant(r),
+        "setup_pattern":r.get("setup_pattern") or setup_pattern(r),
+        "directional_strategy":dict(r.get("directional_strategy") or evaluate_directional_strategy(r)),
         "planned_entry":r.get("entry"),
         "planned_stop":r.get("stop"),
         "planned_target":r.get("managed_target",r.get("target")),
@@ -6526,6 +6553,10 @@ def execution_decision(r: Dict[str, Any], conf: Dict[str, Any]) -> Dict[str, Any
     if r.get("blocked"):
         failed = [k for k,v in r.get("safety_checks", {}).items() if not v]
         return {"execute": False, "reason": "Safety veto: " + ", ".join(failed)}
+    lane=attach_directional_strategy(r)
+    if not lane.get("eligible"):
+        return {"execute":False,"reason":"Directional strategy veto: "+str(lane.get("reason")),
+                "directional_strategy":lane}
     q = quality_entry_gate(r, conf)
     if not q["ok"]:
         return {"execute": False, "reason": "Quality veto: " + q["reason"]}
@@ -9799,6 +9830,7 @@ async def scan(client: httpx.AsyncClient, inst: str, *, batch_collect: bool=Fals
 
     obs_strategy_started=time.perf_counter()
     r = analyze(h1, m15, m5, m1, inst)
+    attach_directional_strategy(r)
     obs_strategy_ms=(time.perf_counter()-obs_strategy_started)*1000
     r["market_data_stale"]=bool(obs_market_health.get("stale"))
     r["market_closed"]=bool(obs_market_health.get("market_closed"))
@@ -12363,6 +12395,18 @@ async def trade_memory_api(limit: int = 100, status: Optional[str] = None):
     }
 
 
+@app.get("/api/directional-strategies")
+async def directional_strategies_api():
+    return {
+        "version":VERSION_TAG,
+        "environment":TRADING_ENVIRONMENT,
+        "strategy_count":len(DIRECTIONAL_STRATEGY_IDS),
+        "max_simultaneous_positions_per_instrument":1 if SINGLE else None,
+        "production_authority":False,
+        "strategies":all_strategy_definitions(),
+    }
+
+
 @app.get("/api/trade-memory/analysis")
 async def trade_memory_analysis_api(group_by: str = "strategy",
                                     min_samples: int = TRADE_MEMORY_MIN_SAMPLE_SIZE,
@@ -12606,7 +12650,7 @@ async def research_review_active(authorization: Optional[str]=Header(None)):
 
 @app.post("/api/research/refresh")
 async def research_refresh(authorization: Optional[str]=Header(None)):
-    actor=_security_actor(authorization,"run_research")
+    _security_actor(authorization,"run_research")
     external_research = refresh_external_hypotheses()
     autonomous=autonomous_discovery_refresh()
     return {"external":external_research,"autonomous":autonomous,

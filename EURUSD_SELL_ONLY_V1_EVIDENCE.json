@@ -1,0 +1,83 @@
+{
+  "candidate": {
+    "auto_activation": false,
+    "candidate_definition_sha256": "2664cff2dce659caa8c2029f957673080a6f63466943ff6f5757aa8d7ecefb1c",
+    "direction": "SELL",
+    "filters": [
+      {"feature": "extension_atr", "operator": ">=", "threshold": 0.9},
+      {"feature": "session_strength", "operator": ">=", "threshold": 0.2}
+    ],
+    "instrument": "EUR_USD",
+    "paper_only": true,
+    "production_authority": false,
+    "research_only": true,
+    "strategy_id": "EURUSD_SELL_ONLY_V1"
+  },
+  "dataset": {
+    "identity_fields": ["trade_id", "entry_ts", "exit_ts", "outcome", "net_result", "features"],
+    "instrument": "EUR_USD",
+    "direction": "SELL",
+    "source": "OANDA Practice trade_memory broker-reconciled closures",
+    "sha256": "997eec70a423ac9ccc266f1d34598da6c82131097d780bfa20c77436abdc12ed",
+    "rows": [
+      {"entry_ts":"2026-08-27T11:34:27.347296732Z","exit_ts":"2026-08-27T13:19:58.984002494Z","features":{"extension_atr":1.2550612276204538,"session_strength":1.0},"net_result":-0.112,"outcome":"LOSS","trade_id":"101"},
+      {"entry_ts":"2026-08-28T06:46:18.947494060Z","exit_ts":"2026-08-28T14:00:22.169044492Z","features":{"extension_atr":1.2466796779319773,"session_strength":0.0},"net_result":-0.105,"outcome":"LOSS","trade_id":"126"},
+      {"entry_ts":"2026-08-28T14:35:16.320353762Z","exit_ts":"2026-08-28T14:56:13.263853004Z","features":{"extension_atr":0.8640420773715984,"session_strength":0.75},"net_result":-0.087,"outcome":"LOSS","trade_id":"132"},
+      {"entry_ts":"2026-08-28T15:00:12.936917433Z","exit_ts":"2026-08-28T15:32:10.941336670Z","features":{"extension_atr":1.3900373763983835,"session_strength":0.5363753213367686},"net_result":0.146,"outcome":"WIN","trade_id":"138"},
+      {"entry_ts":"2026-08-28T15:32:18.512585307Z","exit_ts":"2026-08-28T20:40:14.298144958Z","features":{"extension_atr":1.1585832304609076,"session_strength":0.75},"net_result":0.204,"outcome":"WIN","trade_id":"144"},
+      {"entry_ts":"2026-08-28T20:51:24.876666311Z","exit_ts":"2026-08-31T00:00:04.669884790Z","features":{"extension_atr":0.41435455692514117,"session_strength":1.0},"net_result":-0.0906,"outcome":"LOSS","trade_id":"152"},
+      {"entry_ts":"2026-08-31T00:38:23.298731677Z","exit_ts":"2026-08-31T07:43:23.537494393Z","features":{"extension_atr":0.5791611490760475,"session_strength":0.6914736842102962},"net_result":-0.083,"outcome":"LOSS","trade_id":"169"},
+      {"entry_ts":"2026-09-01T02:25:23.301200333Z","exit_ts":"2026-09-01T07:38:08.511715731Z","features":{"extension_atr":1.927434601416177,"session_strength":0.8391304347823713},"net_result":0.135,"outcome":"WIN","trade_id":"251"},
+      {"entry_ts":"2026-09-01T09:00:20.906017826Z","exit_ts":"2026-09-01T13:44:10.348800833Z","features":{"extension_atr":0.014605991257339088,"session_strength":0.783227176220832},"net_result":-0.09,"outcome":"LOSS","trade_id":"293"},
+      {"entry_ts":"2026-09-01T16:40:51.386856318Z","exit_ts":"2026-09-01T20:54:03.622977801Z","features":{"extension_atr":1.2028486825704252,"session_strength":0.8781865284975265},"net_result":-0.03,"outcome":"LOSS","trade_id":"337"},
+      {"entry_ts":"2026-09-02T02:43:08.336345320Z","exit_ts":"2026-09-02T07:05:12.852895742Z","features":{"extension_atr":1.3310746239180253,"session_strength":0.8146757679179873},"net_result":0.136,"outcome":"WIN","trade_id":"391"},
+      {"entry_ts":"2026-09-02T07:17:05.056145203Z","exit_ts":"2026-09-02T08:01:12.124953514Z","features":{"extension_atr":1.4874159827327946,"session_strength":0.0},"net_result":-0.09,"outcome":"LOSS","trade_id":"433"},
+      {"entry_ts":"2026-09-04T05:35:01.547239503Z","exit_ts":"2026-09-04T12:29:43.282697642Z","features":{"extension_atr":0.6242850876107717,"session_strength":0.8649999999996565},"net_result":-0.002,"outcome":"LOSS","trade_id":"911"},
+      {"entry_ts":"2026-09-04T14:02:28.810519585Z","exit_ts":"2026-09-04T14:33:07.841483029Z","features":{"extension_atr":0.37972487787820897,"session_strength":0.31582843713281894},"net_result":-0.094,"outcome":"LOSS","trade_id":"1017"},
+      {"entry_ts":"2026-09-04T15:01:59.132527847Z","exit_ts":"2026-09-04T15:19:44.829341586Z","features":{"extension_atr":0.3077533630232665,"session_strength":0.21230329041492244},"net_result":-0.09,"outcome":"LOSS","trade_id":"1049"},
+      {"entry_ts":"2026-09-04T15:27:11.029374819Z","exit_ts":"2026-09-04T20:51:03.708276257Z","features":{"extension_atr":0.905799253614541,"session_strength":0.23184615384621615},"net_result":0.059,"outcome":"WIN","trade_id":"1059"},
+      {"entry_ts":"2026-09-11T05:40:52.000038208Z","exit_ts":"2026-09-11T09:10:20.640925079Z","features":{"extension_atr":1.366317674096801,"session_strength":0.8261643835614758},"net_result":0.136,"outcome":"WIN","trade_id":"1203"},
+      {"entry_ts":"2026-09-14T15:21:58.341328637Z","exit_ts":"2026-09-14T15:37:56.022982903Z","features":{"extension_atr":0.9649636487168806,"session_strength":0.9470909090907879},"net_result":-0.091,"outcome":"LOSS","trade_id":"1354"},
+      {"entry_ts":"2026-09-14T15:42:45.743113477Z","exit_ts":"2026-09-14T16:39:40.405775323Z","features":{"extension_atr":0.8838893950509851,"session_strength":0.28370466321249266},"net_result":-0.091,"outcome":"LOSS","trade_id":"1364"}
+    ]
+  },
+  "methodology": {
+    "discovery_count": 13,
+    "holdout_count": 6,
+    "split": "chronological",
+    "future_fields_used_for_decision": false,
+    "outcomes_used_only_for_evaluation": true
+  },
+  "results": {
+    "discovery": {
+      "baseline": {"trades":13,"win":4,"loss":9,"win_rate":0.3076923076923077,"net_result":-0.0686},
+      "candidate": {"trades":6,"win":4,"loss":2,"win_rate":0.6666666666666666,"net_result":0.479},
+      "blocked_win": 0,
+      "blocked_loss": 7
+    },
+    "holdout": {
+      "baseline": {"trades":6,"win":2,"loss":4,"win_rate":0.3333333333333333,"net_result":-0.171},
+      "candidate": {"trades":3,"win":2,"loss":1,"win_rate":0.6666666666666666,"net_result":0.104},
+      "blocked_win": 0,
+      "blocked_loss": 3
+    },
+    "full": {
+      "baseline": {"trades":19,"win":6,"loss":13,"win_rate":0.3157894736842105,"net_result":-0.2396},
+      "candidate": {"trades":9,"win":6,"loss":3,"win_rate":0.6666666666666666,"net_result":0.583},
+      "blocked_win": 0,
+      "blocked_loss": 10
+    }
+  },
+  "guardrails": {
+    "current_strategy_modified": false,
+    "max_simultaneous_eurusd_positions": 1,
+    "risk_or_leverage_change": false,
+    "railway_touched": false,
+    "deployment_performed": false
+  },
+  "limitations": [
+    "Only 19 resolved broker-reconciled EUR_USD SELL trades were available.",
+    "The chronological holdout contains only six baseline observations and three admitted observations.",
+    "This is a PAPER/RESEARCH candidate, not profitability certification or deployment approval."
+  ]
+}

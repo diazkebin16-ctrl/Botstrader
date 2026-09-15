@@ -65,6 +65,7 @@ def test_rr2_collection_threshold_has_a_40_percent_floor(execution_gates_pass):
 
 def test_non_jpy_keeps_the_global_confidence_gate(execution_gates_pass):
     row, confidence = _signal(instrument="EUR_USD", probability=0.46, rr=1.5)
+    row["signal"] = "BUY"
     result = server.execution_decision(row, confidence)
     assert result["execute"] is False
     assert "46.0% < 69.0%" in result["reason"]
