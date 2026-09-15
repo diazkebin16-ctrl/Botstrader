@@ -25,7 +25,8 @@ BASE_FILTER_PIPELINE = (
 
 
 def _strategy_id(instrument: str, direction: str) -> str:
-    return f"{instrument.replace('_', '')}_{direction}_ONLY_V1"
+    version = "V2" if (instrument, direction) == ("EUR_USD", "SELL") else "V1"
+    return f"{instrument.replace('_', '')}_{direction}_ONLY_{version}"
 
 
 def _definition(instrument: str, direction: str) -> dict[str, Any]:
@@ -34,6 +35,7 @@ def _definition(instrument: str, direction: str) -> dict[str, Any]:
         filters = [
             {"feature": "extension_atr", "operator": ">=", "threshold": 0.9},
             {"feature": "session_strength", "operator": ">=", "threshold": 0.2},
+            {"feature": "session_momentum_atr", "operator": ">=", "threshold": -0.21},
         ]
     return {
         "strategy_id": _strategy_id(instrument, direction),
