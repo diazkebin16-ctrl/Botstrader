@@ -14,11 +14,18 @@ from directional_strategies import (
 PAIRS = ("EUR_USD", "GBP_USD", "USD_JPY", "AUD_USD", "USD_CAD")
 
 
-def signal(instrument="EUR_USD", direction="BUY", *, extension=1.0, strength=0.3):
+def signal(
+    instrument="EUR_USD", direction="BUY", *, extension=1.0, strength=0.3,
+    session_momentum=0.0,
+):
     return {
         "instrument": instrument,
         "signal": direction,
-        "features": {"extension_atr": extension, "session_strength": strength},
+        "features": {
+            "extension_atr": extension,
+            "session_strength": strength,
+            "session_momentum_atr": session_momentum,
+        },
         "filters": {},
     }
 
@@ -38,7 +45,8 @@ def test_registry_exposes_exactly_ten_unique_paper_only_strategies():
 @pytest.mark.parametrize("direction", ("BUY", "SELL"))
 def test_runtime_strategy_identity_is_bound_to_instrument_and_direction(instrument, direction):
     row = signal(instrument, direction)
-    expected = f"{instrument.replace('_', '')}_{direction}_ONLY_V1"
+    version = "V2" if (instrument, direction) == ("EUR_USD", "SELL") else "V1"
+    expected = f"{instrument.replace('_', '')}_{direction}_ONLY_{version}"
     assert directional_strategy_id(instrument, direction) == expected
     assert server.setup_variant(row) == expected
     evaluated = evaluate_directional_strategy(row)
@@ -54,10 +62,11 @@ def test_old_non_directional_runtime_identity_is_no_longer_selected():
     assert server.setup_variant(signal("EUR_USD", "WAIT")) == "WAIT"
 
 
-def test_eurusd_sell_uses_frozen_filters_and_other_lanes_remain_collecting():
+def test_eurusd_sell_v2_uses_two_month_filter_and_other_lanes_remain_collecting():
     assert evaluate_directional_strategy(signal("EUR_USD", "SELL"))["eligible"] is True
     assert evaluate_directional_strategy(signal("EUR_USD", "SELL", extension=0.89))["eligible"] is False
     assert evaluate_directional_strategy(signal("EUR_USD", "SELL", strength=0.19))["eligible"] is False
+    assert evaluate_directional_strategy(signal("EUR_USD", "SELL", session_momentum=-0.2101))["eligible"] is False
     missing = evaluate_directional_strategy({"instrument": "EUR_USD", "signal": "SELL", "features": {}})
     assert missing["eligible"] is False
     assert all(check["reason"] == "REQUIRED_PRE_ENTRY_EVIDENCE_MISSING" for check in missing["checks"])

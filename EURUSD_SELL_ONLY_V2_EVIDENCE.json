@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "research_report_sha256": "1045fea3abbfe1dbd75cbffdfdef230658d9de992870aea8cae0c06cee931487",
+  "candidate": {
+    "strategy_id": "EURUSD_SELL_ONLY_V2",
+    "instrument": "EUR_USD",
+    "direction": "SELL",
+    "filters": [
+      {"feature": "extension_atr", "operator": ">=", "threshold": 0.9},
+      {"feature": "session_strength", "operator": ">=", "threshold": 0.2},
+      {"feature": "session_momentum_atr", "operator": ">=", "threshold": -0.21}
+    ],
+    "candidate_definition_sha256": "fd9d17528d8b9046daf1d963f8f2614be6fb8eba80ed223aa4a0c7bccf905270",
+    "paper_only": true,
+    "research_only": true,
+    "production_authority": false,
+    "auto_activation": false
+  },
+  "dataset": {
+    "source": "OANDA Practice midpoint/BID/ASK candles",
+    "requested_window": {
+      "start": "2026-07-15T00:00:00Z",
+      "end": "2026-09-14T23:59:59Z"
+    },
+    "warmup_days": 10,
+    "horizon_minutes": 240,
+    "cache_sha256": "28079d1bfd3b27385f022bd693967c58768ad4096534277e23b5b63ca0205eff",
+    "m1_candles": 73282,
+    "bid_ask_complete": true,
+    "ordered": true,
+    "duplicates": 0
+  },
+  "methodology": {
+    "split": {"discovery": 0.5, "validation": 0.25, "holdout": 0.25},
+    "future_bars_only_for_outcomes": true,
+    "spread_and_slippage": true,
+    "global_entry_windows_unchanged": true,
+    "maximum_additional_rules": 2,
+    "candidate_filters_cannot_increase_frequency": true
+  },
+  "results": {
+    "full": {
+      "baseline": {"episodes": 36, "resolved": 28, "wins": 11, "losses": 17, "win_rate": 0.39285714285714285, "net_r": -3.511111111113282},
+      "candidate": {"episodes": 18, "resolved": 13, "wins": 8, "losses": 5, "win_rate": 0.6153846153846154, "net_r": 5.66666666666568}
+    },
+    "oos": {
+      "baseline": {"episodes": 13, "resolved": 11, "wins": 4, "losses": 7, "win_rate": 0.36363636363636365, "net_r": -2.1777777777784686},
+      "candidate": {"episodes": 6, "resolved": 6, "wins": 3, "losses": 3, "win_rate": 0.5, "net_r": 0.8888888888886421}
+    },
+    "holdout": {
+      "baseline": {"episodes": 8, "resolved": 6, "wins": 2, "losses": 4, "win_rate": 0.3333333333333333, "net_r": -1.6111111111112344},
+      "candidate": {"episodes": 4, "resolved": 4, "wins": 2, "losses": 2, "win_rate": 0.5, "net_r": 0.6000000000000494}
+    },
+    "resolved_retention": 0.4642857142857143,
+    "trades_per_30_days": 8.709679045265652
+  },
+  "limitations": [
+    "The validation and holdout subsets remain small and require PAPER forward evidence.",
+    "Replay covers deterministic technical and execution gates, not mutable production ML state.",
+    "This is experimental PAPER evidence, not profitability certification."
+  ]
+}
