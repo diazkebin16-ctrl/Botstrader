@@ -25,7 +25,6 @@ jobs:
       BOTS_V3_RAILWAY_ENVIRONMENT_ID: 3f0906f8-56a4-471f-9c19-cea4d0a82f20
       BOTS_V3_RAILWAY_SERVICE_ID: 06f23754-3652-4817-a119-2c9851408120
       OANDA: https://api-fxpractice.oanda.com
-      DIRECTIONAL_MONTH_ROOT: ${{ runner.temp }}/directional_two_month_min10
 
     steps:
       - name: Checkout research branch
@@ -38,6 +37,9 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+
+      - name: Configure isolated output path
+        run: echo "DIRECTIONAL_MONTH_ROOT=$RUNNER_TEMP/directional_two_month_min10" >> "$GITHUB_ENV"
 
       - name: Install research dependencies
         run: |
