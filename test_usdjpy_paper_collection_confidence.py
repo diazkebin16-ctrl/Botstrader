@@ -3,10 +3,10 @@ import pytest
 import server
 
 
-def _signal(instrument="USD_JPY", probability=0.46, rr=1.5):
+def _signal(instrument="USD_JPY", probability=0.46, rr=1.5, direction="SELL"):
     row = {
         "instrument": instrument,
-        "signal": "SELL",
+        "signal": direction,
         "blocked": False,
         "safety_checks": {},
         "rr_raw": rr,
@@ -15,6 +15,7 @@ def _signal(instrument="USD_JPY", probability=0.46, rr=1.5):
             "m15_gap_atr": 0.0,
             "m15_slope_atr": 0.0,
             "extension_atr": 0.2,
+            "session_strength": 0.2,
         },
     }
     confidence = {
@@ -57,7 +58,7 @@ def test_usdjpy_paper_signal_below_expectancy_threshold_remains_blocked(executio
 
 
 def test_rr2_collection_threshold_has_a_40_percent_floor(execution_gates_pass):
-    row, confidence = _signal(probability=0.41, rr=2.0)
+    row, confidence = _signal(probability=0.41, rr=2.0, direction="BUY")
     result = server.execution_decision(row, confidence)
     assert result["execute"] is True
     assert result["paper_collection_confidence_gate"]["required_confidence"] == pytest.approx(0.40)
