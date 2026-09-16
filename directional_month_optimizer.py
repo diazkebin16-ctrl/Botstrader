@@ -1,7 +1,9 @@
-"""One-month, lane-isolated optimizer for the ten PAPER FX strategies.
+"""Two-month, lane-isolated optimizer for the ten PAPER FX strategies.
 
-Thresholds are learned only from the chronological discovery segment.  Exactly
-one candidate per lane may be frozen before the purged holdout is opened.
+The first frozen month is used for discovery. Exactly one candidate per lane
+may be frozen before the second frozen month is opened as an out-of-sample
+holdout. A candidate must retain at least ten resolved WIN/LOSS outcomes in
+each month; TIMEOUT and AMBIGUOUS episodes never count toward that minimum.
 """
 from __future__ import annotations
 
@@ -23,13 +25,9 @@ QUANTILES = tuple(index / 10.0 for index in range(1, 10))
 @dataclass(frozen=True)
 class MonthPolicy:
     target_win_rate: float = 0.50
+    minimum_resolved_per_month: int = 10
     minimum_total_resolved: int = 20
-    minimum_discovery_resolved: int = 12
-    minimum_holdout_resolved: int = 8
-    minimum_discovery_win_rate: float = 0.55
-    minimum_discovery_bucket_resolved: int = 4
-    minimum_win_rate_gain: float = 0.03
-    discovery_fraction: float = 0.60
+    minimum_first_month_win_rate_gain: float = 0.01
     purge_minutes: int = 240
     embargo_minutes: int = 30
     maximum_rules: int = 2
@@ -86,21 +84,23 @@ def _lane(rows: Sequence[Mapping[str, Any]], instrument: str, direction: str) ->
 
 
 def _segments(
-    rows: Sequence[Mapping[str, Any]], start: Any, end: Any, policy: MonthPolicy
+    rows: Sequence[Mapping[str, Any]], start: Any, second_month_start: Any, end: Any,
+    policy: MonthPolicy,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    start_dt, end_dt = _dt(start), _dt(end)
-    boundary = start_dt + (end_dt - start_dt) * policy.discovery_fraction
-    discovery_end = boundary - timedelta(minutes=policy.purge_minutes)
-    holdout_start = boundary + timedelta(minutes=policy.embargo_minutes)
-    discovery: list[dict[str, Any]] = []
-    holdout: list[dict[str, Any]] = []
+    start_dt, second_start_dt, end_dt = _dt(start), _dt(second_month_start), _dt(end)
+    if not start_dt < second_start_dt <= end_dt:
+        raise ValueError("second_month_start must fall inside the frozen window")
+    first_month_end = second_start_dt - timedelta(minutes=policy.purge_minutes)
+    second_month_open = second_start_dt + timedelta(minutes=policy.embargo_minutes)
+    first_month: list[dict[str, Any]] = []
+    second_month: list[dict[str, Any]] = []
     for row in sorted(rows, key=lambda item: str(item.get("candle_ts") or "")):
         timestamp = _dt(row["candle_ts"])
-        if start_dt <= timestamp <= discovery_end:
-            discovery.append(dict(row))
-        elif holdout_start <= timestamp <= end_dt:
-            holdout.append(dict(row))
-    return discovery, holdout
+        if start_dt <= timestamp < first_month_end:
+            first_month.append(dict(row))
+        elif second_month_open <= timestamp <= end_dt:
+            second_month.append(dict(row))
+    return first_month, second_month
 
 
 def _candidate_rules(rows: Sequence[Mapping[str, Any]], current_rules: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
@@ -114,7 +114,7 @@ def _candidate_rules(rows: Sequence[Mapping[str, Any]], current_rules: Sequence[
             value = _finite(source.get(feature))
             if value is not None:
                 values.append(value)
-        if len(values) < 12 or min(values) == max(values):
+        if len(values) < 10 or min(values) == max(values):
             continue
         for fraction in QUANTILES:
             threshold = round(_quantile(values, fraction), 8)
@@ -127,39 +127,51 @@ def _candidate_rules(rows: Sequence[Mapping[str, Any]], current_rules: Sequence[
     return result
 
 
-def _split_discovery_buckets(rows: Sequence[Mapping[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    ordered = sorted((dict(row) for row in rows), key=lambda item: str(item.get("candle_ts") or ""))
-    midpoint = len(ordered) // 2
-    return ordered[:midpoint], ordered[midpoint:]
+def _wr(value: Mapping[str, Any]) -> float:
+    return float(value["win_rate"]) if value.get("win_rate") is not None else -1.0
+
+
+def _positive(value: Mapping[str, Any]) -> bool:
+    return (
+        float(value.get("expectancy_r") or 0.0) > 0.0
+        and float(value.get("net_r") or 0.0) > 0.0
+        and float(value.get("profit_factor") or 0.0) > 1.0
+    )
 
 
 def optimize_lane(
-    rows: Sequence[Mapping[str, Any]], *, instrument: str, direction: str, start: Any, end: Any,
-    policy: MonthPolicy = MonthPolicy(),
+    rows: Sequence[Mapping[str, Any]], *, instrument: str, direction: str, start: Any,
+    second_month_start: Any, end: Any, policy: MonthPolicy = MonthPolicy(),
 ) -> dict[str, Any]:
     definition = strategy_definition(instrument, direction)
     current_rules = list(definition["filters"])
     raw_lane = _lane(rows, instrument, direction)
     current_lane = apply_rules(raw_lane, current_rules)
-    discovery, holdout = _segments(current_lane, start, end, policy)
-    total_days = (_dt(end) - _dt(start)).total_seconds() / 86400.0
-    discovery_days = total_days * policy.discovery_fraction
-    holdout_days = total_days * (1.0 - policy.discovery_fraction)
+    first_month, second_month = _segments(current_lane, start, second_month_start, end, policy)
+    first_days = (_dt(second_month_start) - _dt(start)).total_seconds() / 86400.0
+    second_days = (_dt(end) - _dt(second_month_start)).total_seconds() / 86400.0
+    total_days = first_days + second_days
     baseline = {
-        "total": metrics(current_lane, total_days),
-        "discovery": metrics(discovery, discovery_days),
-        "holdout": metrics(holdout, holdout_days),
+        "first_month": metrics(first_month, first_days),
+        "second_month": metrics(second_month, second_days),
+        "total": metrics([*first_month, *second_month], total_days),
     }
     report: dict[str, Any] = {
         "strategy_id": definition["strategy_id"],
         "instrument": instrument,
         "direction": direction,
-        "window": {"start": _dt(start).isoformat(), "end": _dt(end).isoformat()},
+        "window": {
+            "start": _dt(start).isoformat(),
+            "second_month_start": _dt(second_month_start).isoformat(),
+            "end": _dt(end).isoformat(),
+        },
         "split": {
-            "discovery_fraction": policy.discovery_fraction,
+            "first_month_role": "DISCOVERY",
+            "second_month_role": "FROZEN_HOLDOUT",
             "purge_minutes": policy.purge_minutes,
             "embargo_minutes": policy.embargo_minutes,
         },
+        "resolved_definition": "WIN + LOSS only; TIMEOUT and AMBIGUOUS excluded",
         "policy": policy.__dict__,
         "current_rules": current_rules,
         "baseline": baseline,
@@ -169,31 +181,22 @@ def optimize_lane(
         "verdict": "INSUFFICIENT_BASELINE_EVIDENCE",
         "production_authority": False,
     }
-    if baseline["total"]["resolved"] < policy.minimum_total_resolved:
+    if (
+        baseline["first_month"]["resolved"] < policy.minimum_resolved_per_month
+        or baseline["second_month"]["resolved"] < policy.minimum_resolved_per_month
+    ):
         return report
 
-    first_bucket, second_bucket = _split_discovery_buckets(discovery)
+    baseline_first_rate = _wr(baseline["first_month"])
 
     def screen(additional_rules: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
-        selected = apply_rules(discovery, additional_rules)
-        selected_metrics = metrics(selected, discovery_days)
-        first_metrics = metrics(apply_rules(first_bucket, additional_rules), discovery_days / 2.0)
-        second_metrics = metrics(apply_rules(second_bucket, additional_rules), discovery_days / 2.0)
-        win_rate = float(selected_metrics["win_rate"]) if selected_metrics["win_rate"] is not None else -1.0
-        baseline_rate = float(baseline["discovery"]["win_rate"] or 0.0)
-        bucket_stable = all(
-            item["resolved"] >= policy.minimum_discovery_bucket_resolved
-            and float(item["win_rate"] or 0.0) > policy.target_win_rate
-            and float(item["net_r"]) > 0.0
-            for item in (first_metrics, second_metrics)
-        )
+        selected_metrics = metrics(apply_rules(first_month, additional_rules), first_days)
+        win_rate = _wr(selected_metrics)
         qualified = (
-            selected_metrics["resolved"] >= policy.minimum_discovery_resolved
-            and win_rate >= policy.minimum_discovery_win_rate
-            and win_rate >= baseline_rate + policy.minimum_win_rate_gain
-            and float(selected_metrics["expectancy_r"] or 0.0) > 0.0
-            and float(selected_metrics["net_r"]) > 0.0
-            and bucket_stable
+            selected_metrics["resolved"] >= policy.minimum_resolved_per_month
+            and win_rate > policy.target_win_rate
+            and win_rate >= baseline_first_rate + policy.minimum_first_month_win_rate_gain
+            and _positive(selected_metrics)
         )
         score = (
             8.0 * _wilson_lower(selected_metrics["wins"], selected_metrics["resolved"])
@@ -203,15 +206,13 @@ def optimize_lane(
         )
         return {
             "additional_rules": [dict(rule) for rule in additional_rules],
-            "discovery": selected_metrics,
-            "discovery_first_bucket": first_metrics,
-            "discovery_second_bucket": second_metrics,
+            "first_month": selected_metrics,
             "wilson_lower_80": _wilson_lower(selected_metrics["wins"], selected_metrics["resolved"]),
             "qualified": qualified,
             "selection_score": score,
         }
 
-    rules = _candidate_rules(discovery, current_rules)
+    rules = _candidate_rules(first_month, current_rules)
     singles = [screen([rule]) for rule in rules]
     seeds = sorted(singles, key=lambda item: (-float(item["selection_score"]), str(item["additional_rules"])))[:policy.pair_seed_count]
     evaluated = list(singles)
@@ -225,6 +226,7 @@ def optimize_lane(
         "single_candidates": len(singles),
         "evaluated_candidates": len(evaluated),
         "eligible_before_holdout": len(eligible),
+        "threshold_source": "FIRST_MONTH_ONLY",
         "directional_score_excluded": True,
     }
     if not eligible:
@@ -240,46 +242,50 @@ def optimize_lane(
         "definition_sha256": _definition_sha(all_rules),
     }
     report["holdout_opened"] = True
-    holdout_metrics = metrics(apply_rules(holdout, additional_rules), holdout_days)
-    total_metrics = metrics(apply_rules(current_lane, additional_rules), total_days)
-    holdout_rate = float(holdout_metrics["win_rate"] or 0.0)
-    total_rate = float(total_metrics["win_rate"] or 0.0)
-    baseline_total_rate = float(baseline["total"]["win_rate"] or 0.0)
-    baseline_holdout_rate = float(baseline["holdout"]["win_rate"] or 0.0)
+    second_metrics = metrics(apply_rules(second_month, additional_rules), second_days)
+    total_metrics = metrics(apply_rules([*first_month, *second_month], additional_rules), total_days)
+    second_rate = _wr(second_metrics)
+    total_rate = _wr(total_metrics)
     gates = {
+        "first_month_minimum_10_resolved": frozen["first_month"]["resolved"] >= policy.minimum_resolved_per_month,
+        "first_month_win_rate_above_50": _wr(frozen["first_month"]) > policy.target_win_rate,
+        "first_month_positive": _positive(frozen["first_month"]),
+        "second_month_minimum_10_resolved": second_metrics["resolved"] >= policy.minimum_resolved_per_month,
+        "second_month_win_rate_above_50": second_rate > policy.target_win_rate,
+        "second_month_not_worse_than_baseline": second_rate >= _wr(baseline["second_month"]),
+        "second_month_positive": _positive(second_metrics),
         "total_minimum_20_resolved": total_metrics["resolved"] >= policy.minimum_total_resolved,
         "total_win_rate_above_50": total_rate > policy.target_win_rate,
-        "total_win_rate_improved": total_rate >= baseline_total_rate + policy.minimum_win_rate_gain,
-        "total_expectancy_positive": float(total_metrics["expectancy_r"] or 0.0) > 0.0,
-        "total_net_positive": float(total_metrics["net_r"]) > 0.0,
-        "total_profit_factor_above_one": float(total_metrics["profit_factor"] or 0.0) > 1.0,
-        "holdout_minimum_sample": holdout_metrics["resolved"] >= policy.minimum_holdout_resolved,
-        "holdout_win_rate_above_50": holdout_rate > policy.target_win_rate,
-        "holdout_not_worse_than_baseline": holdout_rate >= baseline_holdout_rate,
-        "holdout_expectancy_positive": float(holdout_metrics["expectancy_r"] or 0.0) > 0.0,
-        "holdout_net_positive": float(holdout_metrics["net_r"]) > 0.0,
-        "holdout_profit_factor_above_one": float(holdout_metrics["profit_factor"] or 0.0) > 1.0,
-        "holdout_loss_streak_not_worse": holdout_metrics["maximum_loss_streak"] <= baseline["holdout"]["maximum_loss_streak"],
+        "total_positive": _positive(total_metrics),
     }
-    report["holdout"] = holdout_metrics
+    report["second_month"] = second_metrics
     report["total"] = total_metrics
     report["final_gates"] = gates
-    report["verdict"] = "RESEARCH_CANDIDATE" if all(gates.values()) else "HOLDOUT_REJECTED"
+    report["verdict"] = "RESEARCH_CANDIDATE" if all(gates.values()) else "SECOND_MONTH_REJECTED"
     return report
 
 
 def optimize_all_lanes(
-    rows_by_instrument: Mapping[str, Sequence[Mapping[str, Any]]], *, start: Any, end: Any,
-    policy: MonthPolicy = MonthPolicy(),
+    rows_by_instrument: Mapping[str, Sequence[Mapping[str, Any]]], *, start: Any,
+    second_month_start: Any, end: Any, policy: MonthPolicy = MonthPolicy(),
 ) -> dict[str, Any]:
     results = []
     for instrument in ("EUR_USD", "GBP_USD", "USD_JPY", "AUD_USD", "USD_CAD"):
         rows = rows_by_instrument.get(instrument, ())
         for direction in ("BUY", "SELL"):
-            results.append(optimize_lane(rows, instrument=instrument, direction=direction, start=start, end=end, policy=policy))
+            results.append(
+                optimize_lane(
+                    rows, instrument=instrument, direction=direction, start=start,
+                    second_month_start=second_month_start, end=end, policy=policy,
+                )
+            )
     approved = [item["strategy_id"] for item in results if item["verdict"] == "RESEARCH_CANDIDATE"]
     return {
-        "window": {"start": _dt(start).isoformat(), "end": _dt(end).isoformat()},
+        "window": {
+            "start": _dt(start).isoformat(),
+            "second_month_start": _dt(second_month_start).isoformat(),
+            "end": _dt(end).isoformat(),
+        },
         "policy": policy.__dict__,
         "results": results,
         "approved_strategy_ids": approved,
