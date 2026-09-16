@@ -1,0 +1,99 @@
+name: Directional One-Month Min-10 PAPER Research
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 2 * * 1"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: directional-one-month-min10
+  cancel-in-progress: false
+
+jobs:
+  optimize:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      BOTS_V3_PRODUCTION_AUTHORITY: "false"
+      BOTS_V3_RAILWAY_PROJECT_ID: c19fa79a-6284-4d9d-bddc-06a62c0f998b
+      BOTS_V3_RAILWAY_ENVIRONMENT_ID: 3f0906f8-56a4-471f-9c19-cea4d0a82f20
+      BOTS_V3_RAILWAY_SERVICE_ID: 06f23754-3652-4817-a119-2c9851408120
+      TRADING_ENVIRONMENT: PAPER
+      PRIMARY_OANDA_ENV: practice
+      PRODUCTION_AUTHORIZED: "false"
+      OANDA: https://api-fxpractice.oanda.com
+
+    steps:
+      - name: Checkout exact main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Configure isolated output path
+        run: echo "DIRECTIONAL_MONTH_ROOT=$RUNNER_TEMP/directional_one_month_min10" >> "$GITHUB_ENV"
+
+      - name: Install research dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-research.txt pytest
+          npm install -g @railway/cli@5.23.3
+
+      - name: Validate single-window optimizer
+        run: python -m pytest -q test_directional_month_optimizer.py
+
+      - name: Import PAPER credentials securely
+        run: python automation_v3_railway_adapter.py export-runtime
+
+      - name: Run all ten PAPER strategies over one 30-day window
+        run: python run_directional_month_optimization.py
+
+      - name: Record governed evidence
+        shell: bash
+        run: |
+          cp "$DIRECTIONAL_MONTH_ROOT/DIRECTIONAL_ONE_MONTH_MIN10_EVIDENCE.json" DIRECTIONAL_ONE_MONTH_MIN10_EVIDENCE.json
+          git config user.name "Botstrader PAPER Research"
+          git config user.email "research@users.noreply.github.com"
+          git add DIRECTIONAL_ONE_MONTH_MIN10_EVIDENCE.json
+          git diff --cached --check
+          git commit -m "Record one-month min-10 PAPER evidence" || true
+          git push origin HEAD:research/one-month-min10-evidence
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: directional-one-month-min10-${{ github.run_id }}
+          path: ${{ runner.temp }}/directional_one_month_min10/DIRECTIONAL_ONE_MONTH_MIN10_EVIDENCE.json
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Publish compact gate summary
+        if: always()
+        shell: bash
+        run: |
+          report="$DIRECTIONAL_MONTH_ROOT/DIRECTIONAL_ONE_MONTH_MIN10_EVIDENCE.json"
+          if [ -f "$report" ]; then
+            python - "$report" >> "$GITHUB_STEP_SUMMARY" <<'PY'
+          import json, sys
+          report = json.load(open(sys.argv[1], encoding="utf-8"))
+          print("## One-month PAPER gate")
+          print(f"Approved: {report['approved_count']}/10")
+          for item in report["results"]:
+              candidate = item.get("frozen_candidate") or {}
+              metrics = candidate.get("metrics") or item.get("baseline") or {}
+              print(f"- {item['strategy_id']}: {item['verdict']} — resolved={metrics.get('resolved')} win_rate={metrics.get('win_rate')}")
+          print("\nLIVE authority: disabled")
+          PY
+          fi
