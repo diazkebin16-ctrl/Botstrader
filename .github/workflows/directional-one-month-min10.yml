@@ -131,7 +131,7 @@ jobs:
           git add DIRECTIONAL_TREND_60D_EVIDENCE.json
           git diff --cached --check
           git diff --cached --quiet || git commit -m "Record adaptive 60-day PAPER evidence"
-          git push origin "HEAD:research/adaptive-60d-${{ github.run_id }}"
+          git push origin "HEAD:refs/heads/research/adaptive-60d-${{ github.run_id }}"
       - name: Refresh qualified PAPER configuration on main
         if: github.ref == 'refs/heads/main'
         run: |
@@ -156,7 +156,7 @@ jobs:
                 exit 0
               fi
               git commit -m "Refresh qualified adaptive 60-day PAPER strategies"
-              git push origin HEAD:main
+              git push origin HEAD:refs/heads/main
             fi
           fi
       - name: Upload final evidence
