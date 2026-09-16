@@ -46,9 +46,9 @@ def test_future_or_unclosed_candles_cannot_change_trend():
     assert major_trend(h1, h4, now) == before
 
 
-def test_missing_stale_and_lateral_data():
+def test_missing_and_lateral_data_and_context_across_market_closure():
     assert major_trend([], [], END)["regime"] == "UNKNOWN"
-    assert not timeframe_trend(candles(1, 0), 1, END)["available"]
+    assert timeframe_trend(candles(1, 0), 1, END)["available"]
     assert timeframe_trend(candles(1, 0), 1, START + timedelta(hours=140))["score"] == 0
 
 

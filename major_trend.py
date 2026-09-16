@@ -28,8 +28,9 @@ def timeframe_trend(rows, hours, decision_time):
     closed = [r for r in rows if utc(r["t"]) + timedelta(hours=hours) <= utc(decision_time)][-140:]
     if len(closed) < 55:
         return {"available": False}
-    if utc(decision_time) - (utc(closed[-1]["t"]) + timedelta(hours=hours)) > timedelta(hours=hours + 1):
-        return {"available": False}
+    # At a market reopening, the last completed H4 can be from Friday.
+    # It remains the last known context until a new H4 closes; freshness of
+    # executable M1 prices is enforced separately by the runtime.
     values = [float(r["c"]) for r in closed]
     fast, slow = _ema(values, 20), _ema(values, 50)
     ranges = [max(float(closed[i]["h"]) - float(closed[i]["l"]),
