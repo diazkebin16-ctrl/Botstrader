@@ -1,0 +1,3573 @@
+{
+  "all_ten_qualified": false,
+  "approved_count": 6,
+  "approved_pairs": [
+    "EUR_USD",
+    "GBP_USD",
+    "USD_JPY"
+  ],
+  "comparison_periods": [],
+  "datasets": {
+    "AUD_USD": {
+      "candles": {
+        "H1": 1728,
+        "H4": 432,
+        "M1": 102314,
+        "M15": 6912,
+        "M5": 20731
+      },
+      "sha256": "36304e9611b6131307a6080d3dcc996d63845d37dbe92b31274bad1ba013f9ba"
+    },
+    "EUR_USD": {
+      "candles": {
+        "H1": 1728,
+        "H4": 432,
+        "M1": 102934,
+        "M15": 6912,
+        "M5": 20735
+      },
+      "sha256": "446499d42f80e7f151ba212f7d8b14916893a18b6aa9c82075e69dd53f3c116d"
+    },
+    "GBP_USD": {
+      "candles": {
+        "H1": 1728,
+        "H4": 432,
+        "M1": 103102,
+        "M15": 6912,
+        "M5": 20731
+      },
+      "sha256": "c9f2349adea29e8e185e5ff45f63d2e53c9a013a5f01d4c7d99c057422e5edad"
+    },
+    "USD_CAD": {
+      "candles": {
+        "H1": 1728,
+        "H4": 432,
+        "M1": 102872,
+        "M15": 6912,
+        "M5": 20732
+      },
+      "sha256": "6661c85832c2973131285caecb31c7de6ce43d5b9a3418aea4b57345cb422cdb"
+    },
+    "USD_JPY": {
+      "candles": {
+        "H1": 1728,
+        "H4": 432,
+        "M1": 102882,
+        "M15": 6912,
+        "M5": 20729
+      },
+      "sha256": "d91072c3c40a95f33aac6eb1e20e14d22f2065ac7baac90e29ddf47cb19eaffc"
+    }
+  },
+  "execution_model": {
+    "bid_ask_required": true,
+    "closed_within_window_only": true,
+    "entry_slippage_pips": 0.1,
+    "exit_slippage_pips": 0.1,
+    "mutable_runtime_gates_reconstructed": false,
+    "overlapping_positions": false,
+    "warmup_days": 40,
+    "warmup_used_for_selection": false
+  },
+  "pairs": [
+    {
+      "exposure_minutes": {
+        "DOWN": 3931,
+        "LATERAL": 9231,
+        "UP": 6717,
+        "WEAK_DOWN": 11751,
+        "WEAK_UP": 12039
+      },
+      "instrument": "EUR_USD",
+      "pair_qualified": true,
+      "results": [
+        {
+          "baseline": {
+            "ambiguous": 0,
+            "episodes": 92,
+            "episodes_per_30_days": 46.0,
+            "expectancy_r": -0.19121951219520955,
+            "losses": 52,
+            "maximum_loss_streak": 11,
+            "net_r": -15.680000000007183,
+            "profit_factor": 0.7272094641613561,
+            "resolved": 82,
+            "resolved_per_30_days": 41.0,
+            "timeouts": 10,
+            "win_rate": 0.36585365853658536,
+            "wins": 30
+          },
+          "candidate": {
+            "conditional_rules": {
+              "AGAINST": {
+                "enabled": true,
+                "filters": [
+                  {
+                    "feature": "room_to_barrier_r",
+                    "operator": ">=",
+                    "threshold": 0.43555556
+                  },
+                  {
+                    "feature": "volatility_ratio",
+                    "operator": ">=",
+                    "threshold": 0.80637491
+                  }
+                ]
+              },
+              "LATERAL": {
+                "enabled": true,
+                "filters": [
+                  {
+                    "feature": "volatility_ratio",
+                    "operator": ">=",
+                    "threshold": 0.87205909
+                  },
+                  {
+                    "feature": "h1_slope_atr",
+                    "operator": "<=",
+                    "threshold": 0.18367599
+                  }
+                ]
+              },
+              "WITH": {
+                "enabled": true,
+                "filters": [
+                  {
+                    "feature": "extension_atr",
+                    "operator": "<=",
+                    "threshold": 0.63251634
+                  },
+                  {
+                    "feature": "session_strength",
+                    "operator": ">=",
+                    "threshold": 0.14814206
+                  }
+                ]
+              }
+            },
+            "definition_sha256": "7a0e92b9fa5bf7813f8309c300c49fedf73259250acf94a00e2ea8e8cd1b1374",
+            "direction": "BUY",
+            "instrument": "EUR_USD",
+            "minimum_by_regime": {
+              "DOWN": 2,
+              "LATERAL": 6,
+              "UP": 5,
+              "WEAK_DOWN": 6,
+              "WEAK_UP": 9
+            },
+            "minimum_resolved": 28,
+            "minimum_win_rate_exclusive": 0.5,
+            "paper_only": true,
+            "production_authority": false,
+            "trend_version": "H1_H4_EMA20_50_ATR14_V1",
+            "window": {
+              "days": 60,
+              "end": "2026-09-16T16:36:00+00:00",
+              "start": "2026-07-18T16:36:00+00:00"
+            }
+          },
+          "direction": "BUY",
+          "evaluated_candidates": 83631,
+          "final_gates": {
+            "positive_expectancy_safety": true,
+            "regime_minima": true,
+            "win_rate_strictly_above_50": true
+          },
+          "instrument": "EUR_USD",
+          "metrics": {
+            "ambiguous": 0,
+            "episodes": 33,
+            "episodes_per_30_days": 16.5,
+            "expectancy_r": 0.5310344827585595,
+            "losses": 10,
+            "maximum_loss_streak": 3,
+            "net_r": 15.399999999998224,
+            "profit_factor": 2.3915662650599003,
+            "resolved": 29,
+            "resolved_per_30_days": 14.5,
+            "timeouts": 4,
+            "win_rate": 0.6551724137931034,
+            "wins": 19
+          },
+          "minimum_by_regime": {
+            "DOWN": 2,
+            "LATERAL": 6,
+            "UP": 5,
+            "WEAK_DOWN": 6,
+            "WEAK_UP": 9
+          },
+          "resolved_by_regime": {
+            "DOWN": 3,
+            "LATERAL": 6,
+            "UP": 5,
+            "WEAK_DOWN": 6,
+            "WEAK_UP": 9
+          },
+          "role_metrics": {
+            "AGAINST": {
+              "ambiguous": 0,
+              "episodes": 10,
+              "episodes_per_30_days": 5.0,
+              "expectancy_r": 0.282716049382653,
+              "losses": 4,
+              "maximum_loss_streak": 2,
+              "net_r": 2.5444444444438767,
+              "profit_factor": 1.5768261964733552,
+              "resolved": 9,
+              "resolved_per_30_days": 4.5,
+              "timeouts": 1,
+              "win_rate": 0.5555555555555556,
+              "wins": 5
+            },
+            "LATERAL": {
+              "ambiguous": 0,
+              "episodes": 6,
+              "episodes_per_30_days": 3.0,
+              "expectancy_r": 0.9703703703703375,
+              "losses": 1,
+              "maximum_loss_streak": 1,
+              "net_r": 5.822222222222025,
+              "profit_factor": 6.137254901959938,
+              "resolved": 6,
+              "resolved_per_30_days": 3.0,
+              "timeouts": 0,
+              "win_rate": 0.8333333333333334,
+              "wins": 5
+            },
+            "WITH": {
+              "ambiguous": 0,
+              "episodes": 17,
+              "episodes_per_30_days": 8.5,
+              "expectancy_r": 0.5023809523808801,
+              "losses": 5,
+              "maximum_loss_streak": 2,
+              "net_r": 7.033333333332322,
+              "profit_factor": 2.27364185110628,
+              "resolved": 14,
+              "resolved_per_30_days": 7.0,
+              "timeouts": 3,
+              "win_rate": 0.6428571428571429,
+              "wins": 9
+            }
+          },
+          "strategy_id": "EURUSD_BUY_ONLY_V1",
+          "verdict": "PAPER_CANDIDATE"
+        },
+        {
+          "baseline": {
+            "ambiguous": 0,
+            "episodes": 74,
+            "episodes_per_30_days": 37.0,
+            "expectancy_r": -0.3291187739464767,
+            "losses": 40,
+            "maximum_loss_streak": 6,
+            "net_r": -19.08888888889565,
+            "profit_factor": 0.5682332244281549,
+            "resolved": 58,
+            "resolved_per_30_days": 29.0,
+            "timeouts": 16,
+            "win_rate": 0.3103448275862069,
+            "wins": 18
+          },
+          "candidate": {
+            "conditional_rules": {
+              "AGAINST": {
+                "enabled": true,
+                "filters": [
+                  {
+                    "feature": "buy_score",
+                    "operator": ">=",
+                    "threshold": 1.4
+                  },
+                  {
+                    "feature": "session_momentum_atr",
+                    "operator": ">=",
+                    "threshold": -0.01235294
+                  }
+                ]
+              },
+              "LATERAL": {
+                "enabled": true,
+                "filters": [
+                  {
+                    "feature": "room_to_barrier_r",
+                    "operator": ">=",
+                    "threshold": 0.38666667
+                  }
+                ]
+              },
+              "WITH": {
+                "enabled": true,
+                "filters": [
+                  {
+                    "feature": "room_to_barrier_r",
+                    "operator": ">=",
+                    "threshold": 0.32333333
+                  },
+                  {
+                    "feature": "h1_slope_atr",
+                    "operator": ">=",
+                    "threshold": -0.59005027
+                  }
+                ]
+              }
+            },
+            "definition_sha256": "24091be4e7664f313254dadda68893551a0079be42b59964541ed6aebf7cc7a6",
+            "direction": "SELL",
+            "instrument": "EUR_USD",
+            "minimum_by_regime": {
+              "DOWN": 3,
+              "LATERAL": 6,
+              "UP": 3,
+              "WEAK_DOWN": 8,
+              "WEAK_UP": 6
+            },
+            "minimum_resolved": 26,
+            "minimum_win_rate_exclusive": 0.5,
+            "paper_only": true,
+            "production_authority": false,
+            "trend_version": "H1_H4_EMA20_50_ATR14_V1",
+            "window": {
+              "days": 60,
+              "end": "2026-09-16T16:36:00+00:00",
+              "start": "2026-07-18T16:36:00+00:00"
+            }
+          },
+          "direction": "SELL",
+          "evaluated_candidates": 83619,
+          "final_gates": {
+            "positive_expectancy_safety": true,
+            "regime_minima": true,
+            "win_rate_strictly_above_50": true
+          },
+          "instrument": "EUR_USD",
+          "metrics": {
+            "ambiguous": 0,
+            "episodes": 34,
+            "episodes_per_30_days": 17.0,
+            "expectancy_r": 0.37777777777769006,
+            "losses": 11,
+            "maximum_loss_streak": 4,
+            "net_r": 10.199999999997631,
+            "profit_factor": 1.8391224862885478,
+            "resolved": 27,
+            "resolved_per_30_days": 13.5,
+            "timeouts": 7,
+            "win_rate": 0.5925925925925926,
+            "wins": 16
+          },
+          "minimum_by_regime": {
+            "DOWN": 3,
+            "LATERAL": 6,
+            "UP": 3,
+            "WEAK_DOWN": 8,
+            "WEAK_UP": 6
+          },
+          "resolved_by_regime": {
+            "DOWN": 3,
+            "LATERAL": 6,
+            "UP": 3,
+            "WEAK_DOWN": 9,
+            "WEAK_UP": 6
+          },
+          "role_metrics": {
+            "AGAINST": {
+              "ambiguous": 0,
+              "episodes": 12,
+              "episodes_per_30_days": 6.0,
+              "expectancy_r": 0.28518518518508373,
+              "losses": 4,
+              "maximum_loss_streak": 2,
+              "net_r": 2.566666666665754,
+              "profit_factor": 1.5818639798485914,
+              "resolved": 9,
+              "resolved_per_30_days": 4.5,
+              "timeouts": 3,
+              "win_rate": 0.5555555555555556,
+              "wins": 5
+            },
+            "LATERAL": {
+              "ambiguous": 0,
+              "episodes": 9,
+              "episodes_per_30_days": 4.5,
+              "expectancy_r": 0.5648148148147943,
+              "losses": 2,
+              "maximum_loss_streak": 2,
+              "net_r": 3.388888888888766,
+              "profit_factor": 2.524999999999775,
+              "resolved": 6,
+              "resolved_per_30_days": 3.0,
+              "timeouts": 3,
+              "win_rate": 0.6666666666666666,
+              "wins": 4
+            },
+            "WITH": {
+              "ambiguous": 0,
+              "episodes": 13,
+              "episodes_per_30_days": 6.5,
+              "expectancy_r": 0.35370370370359266,
+              "losses": 5,
+              "maximum_loss_streak": 1,
+              "net_r": 4.244444444443112,
+              "profit_factor": 1.7686116700197732,
+              "resolved": 12,
+              "resolved_per_30_days": 6.0,
+              "timeouts": 1,
+              "win_rate": 0.5833333333333334,
+              "wins": 7
+            }
+          },
+          "strategy_id": "EURUSD_SELL_ONLY_V2",
+          "verdict": "PAPER_CANDIDATE"
+        }
+      ],
+      "targets": {
+        "BUY": {
+          "DOWN": 2,
+          "LATERAL": 6,
+          "UP": 5,
+          "WEAK_DOWN": 6,
+          "WEAK_UP": 9
+        },
+        "SELL": {
+          "DOWN": 3,
+          "LATERAL": 6,
+          "UP": 3,
+          "WEAK_DOWN": 8,
+          "WEAK_UP": 6
+        }
+      }
+    },
+    {
+      "exposure_minutes": {
+        "DOWN": 5374,
+        "LATERAL": 6599,
+        "UP": 6778,
+        "WEAK_DOWN": 11640,
+        "WEAK_UP": 13315
+      },
+      "instrument": "GBP_USD",
+      "pair_qualified": true,
+      "results": [
+        {
+          "baseline": {
+            "ambiguous": 1,
+            "episodes": 125,
+            "episodes_per_30_days": 62.5,
+            "expectancy_r": -0.4373065043348788,
+            "losses": 82,
+            "maximum_loss_streak": 10,
+            "net_r": -49.4156349898413,
+            "profit_factor": 0.46354780059550554,
+            "resolved": 113,
+            "resolved_per_30_days": 56.5,
+            "timeouts": 11,
+            "win_rate": 0.2743362831858407,
+            "wins": 31
+          },
+          "candidate": {
+            "conditional_rules": {
+              "AGAINST": {
+                "enabled": true,
+                "filters": [
+                  {
+                    "feature": "m15_slope_atr",
+                    "operator": ">=",
+                    "threshold": 0.21978863
+                  },
+                  {
+                    "feature": "session_displacement_atr",
+                    "operator": "<=",
+                    "threshold": 1.39366614
+                  }
+                ]
+              },
+              "LATERAL": {
+                "enabled": true,
+                "filters": [
+                  {
+                    "feature": "rr_raw",
+                    "operator": "<=",
+                    "threshold": 0.71555556
+                  },
+                  {
+                    "feature": "m1_momentum",
+                    "operator": "<=",
+                    "threshold": 0.00013609
+                  }
+                ]
+              },
+              "WITH": {
+                "enabled": true,
+                "filters": [
+                  {
+                    "feature": "room_to_barrier_r",
+                    "operator": "<=",
+                    "threshold": 1.05333333
+                  },
+                  {
+                    "feature": "buy_score",
+                    "operator": ">=",
+                    "threshold": 58.0
+                  }
+                ]
+              }
+            },
+            "definition_sha256": "56e56436e1028ae656b6b270ab09886e7cbeb10f37489e1c5c2702c15e1ca320",
+            "direction": "BUY",
+            "instrument": "GBP_USD",
+            "minimum_by_regime": {
+              "DOWN": 2,
+              "LATERAL": 4,
+              "UP": 6,
+              "WEAK_DOWN": 6,
+              "WEAK_UP": 10
+            },
+            "minimum_resolved": 28,
+            "minimum_win_rate_exclusive": 0.5,
+            "paper_only": true,
+            "production_authority": false,
+            "trend_version": "H1_H4_EMA20_50_ATR14_V1",
+            "window": {
+              "days": 60,
+              "end": "2026-09-16T16:36:00+00:00",
+              "start": "2026-07-18T16:36:00+00:00"
+            }
+          },
+          "direction": "BUY",
+          "evaluated_candidates": 85017,
+          "final_gates": {
+            "positive_expectancy_safety": true,
+            "regime_minima": true,
+            "win_rate_strictly_above_50": true
+          },
+          "instrument": "GBP_USD",
+          "metrics": {
+            "ambiguous": 0,
+            "episodes": 33,
+            "episodes_per_30_days": 16.5,
+            "expectancy_r": 0.4057347670250148,
+            "losses": 12,
+            "maximum_loss_streak": 3,
+            "net_r": 12.57777777777546,
+            "profit_factor": 1.9301561216102425,
+            "resolved": 31,
+            "resolved_per_30_days": 15.5,
+            "timeouts": 2,
+            "win_rate": 0.6129032258064516,
+            "wins": 19
+          },
+          "minimum_by_regime": {
+            "DOWN": 2,
+            "LATERAL": 4,
+            "UP": 6,
+            "WEAK_DOWN": 6,
+            "WEAK_UP": 10
+          },
+          "resolved_by_regime": {
+            "DOWN": 2,
+            "LATERAL": 5,
+            "UP": 7,
+            "WEAK_DOWN": 7,
+            "WEAK_UP": 10
+          },
+          "role_metrics": {
+            "AGAINST": {
+              "ambiguous": 0,
+              "episodes": 10,
+              "episodes_per_30_days": 5.0,
+              "expectancy_r": -0.008641975308754372,
+              "losses": 5,
+              "maximum_loss_streak": 2,
+              "net_r": -0.07777777777878936,
+              "profit_factor": 0.9861660079049608,
+              "resolved": 9,
+              "resolved_per_30_days": 4.5,
+              "timeouts": 1,
+              "win_rate": 0.4444444444444444,
+              "wins": 4
+            },
+            "LATERAL": {
+              "ambiguous": 0,
+              "episodes": 5,
+              "episodes_per_30_days": 2.5,
+              "expectancy_r": 1.3755555555554912,
+              "losses": 0,
+              "maximum_loss_streak": 0,
+              "net_r": 6.877777777777457,
+              "profit_factor": 999.0,
+              "resolved": 5,
+              "resolved_per_30_days": 2.5,
+              "timeouts": 0,
+              "win_rate": 1.0,
+              "wins": 5
+            },
+            "WITH": {
+              "ambiguous": 0,
+              "episodes": 18,
+              "episodes_per_30_days": 9.0,
+              "expectancy_r": 0.3398692810456936,
+              "losses": 7,
+              "maximum_loss_streak": 3,
+              "net_r": 5.777777777776791,
+              "profit_factor": 1.7313642756678957,
+              "resolved": 17,
+              "resolved_per_30_days": 8.5,
+              "timeouts": 1,
+              "win_rate": 0.5882352941176471,
+              "wins": 10
+            }
+          },
+          "strategy_id": "GBPUSD_BUY_ONLY_V1",
+          "verdict": "PAPER_CANDIDATE"
+        },
+        {
+          "baseline": {
+            "ambiguous": 0,
+            "episodes": 120,
+            "episodes_per_30_days": 60.0,
+            "expectancy_r": -0.22567248540042817,
+            "losses": 68,
+            "maximum_loss_streak": 8,
+            "net_r": -23.921283452445387,
+            "profit_factor": 0.6864170927334196,
+            "resolved": 106,
+            "resolved_per_30_days": 53.0,
+            "timeouts": 14,
+            "win_rate": 0.3584905660377358,
+            "wins": 38
+          },
+          "candidate": {
+            "conditional_rules": {
+              "AGAINST": {
+                "enabled": true,
+                "filters": [
+                  {
+                    "feature": "m15_gap_atr",
+                    "operator": ">=",
+                    "threshold": -0.15094733
+                  },
+                  {
+                    "feature": "m15_slope_atr",
+                    "operator": "<=",
+                    "threshold": 0.04860348
+                  }
+                ]
+              },
+              "LATERAL": {
+                "enabled": true,
+                "filters": [
+                  {
+                    "feature": "volatility_ratio",
+                    "operator": ">=",
+                    "threshold": 1.03294015
+                  },
+                  {
+                    "feature": "h1_gap_atr",
+                    "operator": "<=",
+                    "threshold": -0.02330658
+                  }
+                ]
+              },
+              "WITH": {
+                "enabled": true,
+                "filters": [
+                  {
+                    "feature": "m15_slope_atr",
+                    "operator": "<=",
+                    "threshold": -0.1813765
+                  },
+                  {
+                    "feature": "session_momentum_atr",
+                    "operator": ">=",
+                    "threshold": 0.31682556
+                  }
+                ]
+              }
+            },
+            "definition_sha256": "fce6cd9fd9d658cee9bb03977bf9dd7ce0b4bd3b0778adc6d9bd09024470438d",
+            "direction": "SELL",
+            "instrument": "GBP_USD",
+            "minimum_by_regime": {
+              "DOWN": 4,
+              "LATERAL": 4,
+              "UP": 3,
+              "WEAK_DOWN": 8,
+              "WEAK_UP": 7
+            },
+            "minimum_resolved": 26,
+            "minimum_win_rate_exclusive": 0.5,
+            "paper_only": true,
+            "production_authority": false,
+            "trend_version": "H1_H4_EMA20_50_ATR14_V1",
+            "window": {
+              "days": 60,
+              "end": "2026-09-16T16:36:00+00:00",
+              "start": "2026-07-18T16:36:00+00:00"
+            }
+          },
+          "direction": "SELL",
+          "evaluated_candidates": 82269,
+          "final_gates": {
+            "positive_expectancy_safety": true,
+            "regime_minima": true,
+            "win_rate_strictly_above_50": true
+          },
+          "instrument": "GBP_USD",
+          "metrics": {
+            "ambiguous": 0,
+            "episodes": 36,
+            "episodes_per_30_days": 18.0,
+            "expectancy_r": 0.7745681803905812,
+            "losses": 7,
+            "maximum_loss_streak": 2,
+            "net_r": 22.462477231326854,
+            "profit_factor": 3.86755028484974,
+            "resolved": 29,
+            "resolved_per_30_days": 14.5,
+            "timeouts": 7,
+            "win_rate": 0.7586206896551724,
+            "wins": 22
+          },
+          "minimum_by_regime": {
+            "DOWN": 4,
+            "LATERAL": 4,
+            "UP": 3,
+            "WEAK_DOWN": 8,
+            "WEAK_UP": 7
+          },
+          "resolved_by_regime": {
+            "DOWN": 4,
+            "LATERAL": 4,
+            "UP": 3,
+            "WEAK_DOWN": 8,
+            "WEAK_UP": 10
+          },
+          "role_metrics": {
+            "AGAINST": {
+              "ambiguous": 0,
+              "episodes": 16,
+              "episodes_per_30_days": 8.0,
+              "expectancy_r": 0.8017094017092764,
+              "losses": 3,
+              "maximum_loss_streak": 1,
+              "net_r": 10.422222222220594,
+              "profit_factor": 4.085526315788271,
+              "resolved": 13,
+              "resolved_per_30_days": 6.5,
+              "timeouts": 3,
+              "win_rate": 0.7692307692307693,
+              "wins": 10
+            },
+            "LATERAL": {
+              "ambiguous": 0,
+              "episodes": 6,
+              "episodes_per_30_days": 3.0,
+              "expectancy_r": 1.3749999999999691,
+              "losses": 0,
+              "maximum_loss_streak": 0,
+              "net_r": 5.4999999999998765,
+              "profit_factor": 999.0,
+              "resolved": 4,
+              "resolved_per_30_days": 2.0,
+              "timeouts": 2,
+              "win_rate": 1.0,
+              "wins": 4
+            },
+            "WITH": {
+              "ambiguous": 0,
+              "episodes": 14,
+              "episodes_per_30_days": 7.0,
+              "expectancy_r": 0.5450212507588651,
+              "losses": 4,
+              "maximum_loss_streak": 2,
+              "net_r": 6.540255009106382,
+              "profit_factor": 2.4678876579039892,
+              "resolved": 12,
+              "resolved_per_30_days": 6.0,
+              "timeouts": 2,
+              "win_rate": 0.6666666666666666,
+              "wins": 8
+            }
+          },
+          "strategy_id": "GBPUSD_SELL_ONLY_V1",
+          "verdict": "PAPER_CANDIDATE"
+        }
+      ],
+      "targets": {
+        "BUY": {
+          "DOWN": 2,
+          "LATERAL": 4,
+          "UP": 6,
+          "WEAK_DOWN": 6,
+          "WEAK_UP": 10
+        },
+        "SELL": {
+          "DOWN": 4,
+          "LATERAL": 4,
+          "UP": 3,
+          "WEAK_DOWN": 8,
+          "WEAK_UP": 7
+        }
+      }
+    },
+    {
+      "exposure_minutes": {
+        "DOWN": 4854,
+        "LATERAL": 8258,
+        "UP": 5759,
+        "WEAK_DOWN": 10500,
+        "WEAK_UP": 14338
+      },
+      "instrument": "USD_JPY",
+      "pair_qualified": true,
+      "results": [
+        {
+          "baseline": {
+            "ambiguous": 0,
+            "episodes": 216,
+            "episodes_per_30_days": 108.0,
+            "expectancy_r": -0.2594442176750932,
+            "losses": 135,
+            "maximum_loss_streak": 8,
+            "net_r": -52.926620405719014,
+            "profit_factor": 0.6456145147206791,
+            "resolved": 204,
+            "resolved_per_30_days": 102.0,
+            "timeouts": 12,
+            "win_rate": 0.3382352941176471,
+            "wins": 69
+          },
+          "candidate": {
+            "conditional_rules": {
+              "AGAINST": {
+                "enabled": true,
+                "filters": [
+                  {
+                    "feature": "m1_momentum",
+                    "operator": "<=",
+                    "threshold": 0.00015607
+                  },
+                  {
+                    "feature": "m15_slope_atr",
+                    "operator": "<=",
+                    "threshold": 0.33036589
+                  }
+                ]
+              },
+              "LATERAL": {
+                "enabled": true,
+                "filters": [
+                  {
+                    "feature": "extension_atr",
+                    "operator": "<=",
+                    "threshold": 1.17940002
+                  },
+                  {
+                    "feature": "m1_momentum",
+                    "operator": "<=",
+                    "threshold": 0.00012571
+                  }
+                ]
+              },
+              "WITH": {
+                "enabled": true,
+                "filters": [
+                  {
+                    "feature": "volatility_ratio",
+                    "operator": "<=",
+                    "threshold": 0.88915025
+                  },
+                  {
+                    "feature": "session_displacement_atr",
+                    "operator": "<=",
+                    "threshold": 6.98620193
+                  }
+                ]
+              }
+            },
+            "definition_sha256": "4562460d6ebd3d31e496ed15645d23856b37c7ee413af278cef01360c6a07b5d",
+            "direction": "BUY",
+            "instrument": "USD_JPY",
+            "minimum_by_regime": {
+              "DOWN": 2,
+              "LATERAL": 5,
+              "UP": 5,
+              "WEAK_DOWN": 6,
+              "WEAK_UP": 10
+            },
+            "minimum_resolved": 28,
+            "minimum_win_rate_exclusive": 0.5,
+            "paper_only": true,
+            "production_authority": false,
+            "trend_version": "H1_H4_EMA20_50_ATR14_V1",
+            "window": {
+              "days": 60,
+              "end": "2026-09-16T16:36:00+00:00",
+              "start": "2026-07-18T16:36:00+00:00"
+            }
+          },
+          "direction": "BUY",
+          "evaluated_candidates": 83631,
+          "final_gates": {
+            "positive_expectancy_safety": true,
+            "regime_minima": true,
+            "win_rate_strictly_above_50": true
+          },
+          "instrument": "USD_JPY",
+          "metrics": {
+            "ambiguous": 0,
+            "episodes": 31,
+            "episodes_per_30_days": 15.5,
+            "expectancy_r": 0.7298245614032812,
+            "losses": 8,
+            "maximum_loss_streak": 2,
+            "net_r": 21.894736842098435,
+            "profit_factor": 3.4755355725988335,
+            "resolved": 30,
+            "resolved_per_30_days": 15.0,
+            "timeouts": 1,
+            "win_rate": 0.7333333333333333,
+            "wins": 22
+          },
+          "minimum_by_regime": {
+            "DOWN": 2,
+            "LATERAL": 5,
+            "UP": 5,
+            "WEAK_DOWN": 6,
+            "WEAK_UP": 10
+          },
+          "resolved_by_regime": {
+            "DOWN": 2,
+            "LATERAL": 6,
+            "UP": 5,
+            "WEAK_DOWN": 7,
+            "WEAK_UP": 10
+          },
+          "role_metrics": {
+            "AGAINST": {
+              "ambiguous": 0,
+              "episodes": 9,
+              "episodes_per_30_days": 4.5,
+              "expectancy_r": 0.8530864197528466,
+              "losses": 2,
+              "maximum_loss_streak": 1,
+              "net_r": 7.67777777777562,
+              "profit_factor": 4.472361809043671,
+              "resolved": 9,
+              "resolved_per_30_days": 4.5,
+              "timeouts": 0,
+              "win_rate": 0.7777777777777778,
+              "wins": 7
+            },
+            "LATERAL": {
+              "ambiguous": 0,
+              "episodes": 7,
+              "episodes_per_30_days": 3.5,
+              "expectancy_r": 1.395419103313553,
+              "losses": 0,
+              "maximum_loss_streak": 0,
+              "net_r": 8.372514619881319,
+              "profit_factor": 999.0,
+              "resolved": 6,
+              "resolved_per_30_days": 3.0,
+              "timeouts": 1,
+              "win_rate": 1.0,
+              "wins": 6
+            },
+            "WITH": {
+              "ambiguous": 0,
+              "episodes": 15,
+              "episodes_per_30_days": 7.5,
+              "expectancy_r": 0.38962962962943315,
+              "losses": 6,
+              "maximum_loss_streak": 3,
+              "net_r": 5.844444444441497,
+              "profit_factor": 1.8810720268001626,
+              "resolved": 15,
+              "resolved_per_30_days": 7.5,
+              "timeouts": 0,
+              "win_rate": 0.6,
+              "wins": 9
+            }
+          },
+          "strategy_id": "USDJPY_BUY_ONLY_V1",
+          "verdict": "PAPER_CANDIDATE"
+        },
+        {
+          "baseline": {
+            "ambiguous": 0,
+            "episodes": 237,
+            "episodes_per_30_days": 118.5,
+            "expectancy_r": -0.1859614025196848,
+            "losses": 147,
+            "maximum_loss_streak": 9,
+            "net_r": -43.143045384566875,
+            "profit_factor": 0.7331029723121129,
+            "resolved": 232,
+            "resolved_per_30_days": 116.0,
+            "timeouts": 5,
+            "win_rate": 0.36637931034482757,
+            "wins": 85
+          },
+          "candidate": {
+            "conditional_rules": {
+              "AGAINST": {
+                "enabled": true,
+                "filters": [
+                  {
+                    "feature": "m1_momentum",
+                    "operator": "<=",
+                    "threshold": -0.00012068
+                  },
+                  {
+                    "feature": "session_momentum_atr",
+                    "operator": ">=",
+                    "threshold": 0.0
+                  }
+                ]
+              },
+              "LATERAL": {
+                "enabled": true,
+                "filters": [
+                  {
+                    "feature": "extension_atr",
+                    "operator": "<=",
+                    "threshold": 0.51883796
+                  },
+                  {
+                    "feature": "direction_edge",
+                    "operator": ">=",
+                    "threshold": 64.8
+                  }
+                ]
+              },
+              "WITH": {
+                "enabled": true,
+                "filters": [
+                  {
+                    "feature": "room_to_barrier_r",
+                    "operator": ">=",
+                    "threshold": 1.98222222
+                  },
+                  {
+                    "feature": "session_momentum_atr",
+                    "operator": "<=",
+                    "threshold": -0.22952117
+                  }
+                ]
+              }
+            },
+            "definition_sha256": "824d141cd5fce7f38a5314614793cbe449a3bfa17f1eed3be57c0b40603dbb98",
+            "direction": "SELL",
+            "instrument": "USD_JPY",
+            "minimum_by_regime": {
+              "DOWN": 4,
+              "LATERAL": 5,
+              "UP": 2,
+              "WEAK_DOWN": 8,
+              "WEAK_UP": 7
+            },
+            "minimum_resolved": 26,
+            "minimum_win_rate_exclusive": 0.5,
+            "paper_only": true,
+            "production_authority": false,
+            "trend_version": "H1_H4_EMA20_50_ATR14_V1",
+            "window": {
+              "days": 60,
+              "end": "2026-09-16T16:36:00+00:00",
+              "start": "2026-07-18T16:36:00+00:00"
+            }
+          },
+          "direction": "SELL",
+          "evaluated_candidates": 85005,
+          "final_gates": {
+            "positive_expectancy_safety": true,
+            "regime_minima": true,
+            "win_rate_strictly_above_50": true
+          },
+          "instrument": "USD_JPY",
+          "metrics": {
+            "ambiguous": 0,
+            "episodes": 33,
+            "episodes_per_30_days": 16.5,
+            "expectancy_r": 0.7939143496539441,
+            "losses": 8,
+            "maximum_loss_streak": 2,
+            "net_r": 26.19917353858016,
+            "profit_factor": 4.017108679424673,
+            "resolved": 33,
+            "resolved_per_30_days": 16.5,
+            "timeouts": 0,
+            "win_rate": 0.7575757575757576,
+            "wins": 25
+          },
+          "minimum_by_regime": {
+            "DOWN": 4,
+            "LATERAL": 5,
+            "UP": 2,
+            "WEAK_DOWN": 8,
+            "WEAK_UP": 7
+          },
+          "resolved_by_regime": {
+            "DOWN": 6,
+            "LATERAL": 6,
+            "UP": 2,
+            "WEAK_DOWN": 8,
+            "WEAK_UP": 11
+          },
+          "role_metrics": {
+            "AGAINST": {
+              "ambiguous": 0,
+              "episodes": 13,
+              "episodes_per_30_days": 6.5,
+              "expectancy_r": 0.6299145299143073,
+              "losses": 4,
+              "maximum_loss_streak": 2,
+              "net_r": 8.188888888885995,
+              "profit_factor": 2.8564231738025825,
+              "resolved": 13,
+              "resolved_per_30_days": 6.5,
+              "timeouts": 0,
+              "win_rate": 0.6923076923076923,
+              "wins": 9
+            },
+            "LATERAL": {
+              "ambiguous": 0,
+              "episodes": 6,
+              "episodes_per_30_days": 3.0,
+              "expectancy_r": 0.9783060624230001,
+              "losses": 1,
+              "maximum_loss_streak": 1,
+              "net_r": 5.869836374538001,
+              "profit_factor": 6.2828527370832,
+              "resolved": 6,
+              "resolved_per_30_days": 3.0,
+              "timeouts": 0,
+              "win_rate": 0.8333333333333334,
+              "wins": 5
+            },
+            "WITH": {
+              "ambiguous": 0,
+              "episodes": 14,
+              "episodes_per_30_days": 7.0,
+              "expectancy_r": 0.8671748767968689,
+              "losses": 3,
+              "maximum_loss_streak": 1,
+              "net_r": 12.140448275156164,
+              "profit_factor": 4.84031670327844,
+              "resolved": 14,
+              "resolved_per_30_days": 7.0,
+              "timeouts": 0,
+              "win_rate": 0.7857142857142857,
+              "wins": 11
+            }
+          },
+          "strategy_id": "USDJPY_SELL_ONLY_V2",
+          "verdict": "PAPER_CANDIDATE"
+        }
+      ],
+      "targets": {
+        "BUY": {
+          "DOWN": 2,
+          "LATERAL": 5,
+          "UP": 5,
+          "WEAK_DOWN": 6,
+          "WEAK_UP": 10
+        },
+        "SELL": {
+          "DOWN": 4,
+          "LATERAL": 5,
+          "UP": 2,
+          "WEAK_DOWN": 8,
+          "WEAK_UP": 7
+        }
+      }
+    },
+    {
+      "exposure_minutes": {
+        "DOWN": 1078,
+        "LATERAL": 6522,
+        "UP": 12103,
+        "WEAK_DOWN": 8052,
+        "WEAK_UP": 15764
+      },
+      "instrument": "AUD_USD",
+      "pair_qualified": false,
+      "results": [
+        {
+          "baseline": {
+            "ambiguous": 0,
+            "episodes": 80,
+            "episodes_per_30_days": 40.0,
+            "expectancy_r": -0.28745519713254003,
+            "losses": 42,
+            "maximum_loss_streak": 9,
+            "net_r": -17.822222222217484,
+            "profit_factor": 0.6112457586040476,
+            "resolved": 62,
+            "resolved_per_30_days": 31.0,
+            "timeouts": 18,
+            "win_rate": 0.3225806451612903,
+            "wins": 20
+          },
+          "candidate": {
+            "conditional_rules": {
+              "AGAINST": {
+                "enabled": false,
+                "filters": []
+              },
+              "LATERAL": {
+                "enabled": true,
+                "filters": [
+                  {
+                    "feature": "room_to_barrier_r",
+                    "operator": ">=",
+                    "threshold": 0.48888889
+                  }
+                ]
+              },
+              "WITH": {
+                "enabled": true,
+                "filters": [
+                  {
+                    "feature": "room_to_barrier_r",
+                    "operator": ">=",
+                    "threshold": 0.24444444
+                  },
+                  {
+                    "feature": "buy_score",
+                    "operator": "<=",
+                    "threshold": 72.76252196
+                  }
+                ]
+              }
+            },
+            "definition_sha256": "1a19efd18a760f889a0fc27d57eb1ca74d30e44cf64392918eeed2ad87d1e26b",
+            "direction": "BUY",
+            "instrument": "AUD_USD",
+            "minimum_by_regime": {
+              "DOWN": 1,
+              "LATERAL": 4,
+              "UP": 10,
+              "WEAK_DOWN": 4,
+              "WEAK_UP": 11
+            },
+            "minimum_resolved": 30,
+            "minimum_win_rate_exclusive": 0.5,
+            "paper_only": true,
+            "production_authority": false,
+            "trend_version": "H1_H4_EMA20_50_ATR14_V1",
+            "window": {
+              "days": 60,
+              "end": "2026-09-16T16:36:00+00:00",
+              "start": "2026-07-18T16:36:00+00:00"
+            }
+          },
+          "direction": "BUY",
+          "evaluated_candidates": 87801,
+          "final_gates": {
+            "positive_expectancy_safety": true,
+            "regime_minima": false,
+            "win_rate_strictly_above_50": true
+          },
+          "instrument": "AUD_USD",
+          "metrics": {
+            "ambiguous": 0,
+            "episodes": 32,
+            "episodes_per_30_days": 16.0,
+            "expectancy_r": 0.20288065843627942,
+            "losses": 13,
+            "maximum_loss_streak": 3,
+            "net_r": 5.477777777779544,
+            "profit_factor": 1.387883556255068,
+            "resolved": 27,
+            "resolved_per_30_days": 13.5,
+            "timeouts": 5,
+            "win_rate": 0.5185185185185185,
+            "wins": 14
+          },
+          "minimum_by_regime": {
+            "DOWN": 1,
+            "LATERAL": 4,
+            "UP": 10,
+            "WEAK_DOWN": 4,
+            "WEAK_UP": 11
+          },
+          "resolved_by_regime": {
+            "LATERAL": 4,
+            "UP": 11,
+            "WEAK_UP": 12
+          },
+          "role_metrics": {
+            "AGAINST": {
+              "ambiguous": 0,
+              "episodes": 0,
+              "episodes_per_30_days": 0.0,
+              "expectancy_r": null,
+              "losses": 0,
+              "maximum_loss_streak": 0,
+              "net_r": 0,
+              "profit_factor": null,
+              "resolved": 0,
+              "resolved_per_30_days": 0.0,
+              "timeouts": 0,
+              "win_rate": null,
+              "wins": 0
+            },
+            "LATERAL": {
+              "ambiguous": 0,
+              "episodes": 7,
+              "episodes_per_30_days": 3.5,
+              "expectancy_r": 0.17500000000006477,
+              "losses": 2,
+              "maximum_loss_streak": 1,
+              "net_r": 0.7000000000002591,
+              "profit_factor": 1.3230769230770458,
+              "resolved": 4,
+              "resolved_per_30_days": 2.0,
+              "timeouts": 3,
+              "win_rate": 0.5,
+              "wins": 2
+            },
+            "WITH": {
+              "ambiguous": 0,
+              "episodes": 25,
+              "episodes_per_30_days": 12.5,
+              "expectancy_r": 0.20772946859909938,
+              "losses": 11,
+              "maximum_loss_streak": 2,
+              "net_r": 4.777777777779286,
+              "profit_factor": 1.3996282527882606,
+              "resolved": 23,
+              "resolved_per_30_days": 11.5,
+              "timeouts": 2,
+              "win_rate": 0.5217391304347826,
+              "wins": 12
+            }
+          },
+          "strategy_id": "AUDUSD_BUY_ONLY_V1",
+          "verdict": "INSUFFICIENT_60_DAY_EVIDENCE"
+        },
+        {
+          "baseline": {
+            "ambiguous": 0,
+            "episodes": 62,
+            "episodes_per_30_days": 31.0,
+            "expectancy_r": -0.2303418803417945,
+            "losses": 34,
+            "maximum_loss_streak": 6,
+            "net_r": -11.977777777773314,
+            "profit_factor": 0.6777279521675008,
+            "resolved": 52,
+            "resolved_per_30_days": 26.0,
+            "timeouts": 10,
+            "win_rate": 0.34615384615384615,
+            "wins": 18
+          },
+          "candidate": {
+            "conditional_rules": {
+              "AGAINST": {
+                "enabled": false,
+                "filters": []
+              },
+              "LATERAL": {
+                "enabled": true,
+                "filters": [
+                  {
+                    "feature": "m1_momentum",
+                    "operator": "<=",
+                    "threshold": -0.00019643
+                  }
+                ]
+              },
+              "WITH": {
+                "enabled": true,
+                "filters": [
+                  {
+                    "feature": "m15_slope_atr",
+                    "operator": "<=",
+                    "threshold": -0.24389957
+                  },
+                  {
+                    "feature": "session_displacement_atr",
+                    "operator": ">=",
+                    "threshold": -3.5630199
+                  }
+                ]
+              }
+            },
+            "definition_sha256": "3071ab8e2d530682747770c4835a66ccfdd1ede2b20c85b8d26fc1152ef722c9",
+            "direction": "SELL",
+            "instrument": "AUD_USD",
+            "minimum_by_regime": {
+              "DOWN": 1,
+              "LATERAL": 4,
+              "UP": 5,
+              "WEAK_DOWN": 6,
+              "WEAK_UP": 8
+            },
+            "minimum_resolved": 24,
+            "minimum_win_rate_exclusive": 0.5,
+            "paper_only": true,
+            "production_authority": false,
+            "trend_version": "H1_H4_EMA20_50_ATR14_V1",
+            "window": {
+              "days": 60,
+              "end": "2026-09-16T16:36:00+00:00",
+              "start": "2026-07-18T16:36:00+00:00"
+            }
+          },
+          "direction": "SELL",
+          "evaluated_candidates": 78219,
+          "final_gates": {
+            "positive_expectancy_safety": true,
+            "regime_minima": false,
+            "win_rate_strictly_above_50": true
+          },
+          "instrument": "AUD_USD",
+          "metrics": {
+            "ambiguous": 0,
+            "episodes": 13,
+            "episodes_per_30_days": 6.5,
+            "expectancy_r": 0.3638888888889447,
+            "losses": 5,
+            "maximum_loss_streak": 1,
+            "net_r": 4.366666666667337,
+            "profit_factor": 1.8004073319757707,
+            "resolved": 12,
+            "resolved_per_30_days": 6.0,
+            "timeouts": 1,
+            "win_rate": 0.5833333333333334,
+            "wins": 7
+          },
+          "minimum_by_regime": {
+            "DOWN": 1,
+            "LATERAL": 4,
+            "UP": 5,
+            "WEAK_DOWN": 6,
+            "WEAK_UP": 8
+          },
+          "resolved_by_regime": {
+            "DOWN": 1,
+            "LATERAL": 4,
+            "WEAK_DOWN": 7
+          },
+          "role_metrics": {
+            "AGAINST": {
+              "ambiguous": 0,
+              "episodes": 0,
+              "episodes_per_30_days": 0.0,
+              "expectancy_r": null,
+              "losses": 0,
+              "maximum_loss_streak": 0,
+              "net_r": 0,
+              "profit_factor": null,
+              "resolved": 0,
+              "resolved_per_30_days": 0.0,
+              "timeouts": 0,
+              "win_rate": null,
+              "wins": 0
+            },
+            "LATERAL": {
+              "ambiguous": 0,
+              "episodes": 4,
+              "episodes_per_30_days": 2.0,
+              "expectancy_r": 0.16388888888897357,
+              "losses": 2,
+              "maximum_loss_streak": 1,
+              "net_r": 0.6555555555558943,
+              "profit_factor": 1.3025641025642962,
+              "resolved": 4,
+              "resolved_per_30_days": 2.0,
+              "timeouts": 0,
+              "win_rate": 0.5,
+              "wins": 2
+            },
+            "WITH": {
+              "ambiguous": 0,
+              "episodes": 9,
+              "episodes_per_30_days": 4.5,
+              "expectancy_r": 0.4638888888889303,
+              "losses": 3,
+              "maximum_loss_streak": 2,
+              "net_r": 3.7111111111114425,
+              "profit_factor": 2.128378378378593,
+              "resolved": 8,
+              "resolved_per_30_days": 4.0,
+              "timeouts": 1,
+              "win_rate": 0.625,
+              "wins": 5
+            }
+          },
+          "strategy_id": "AUDUSD_SELL_ONLY_V1",
+          "verdict": "INSUFFICIENT_60_DAY_EVIDENCE"
+        }
+      ],
+      "targets": {
+        "BUY": {
+          "DOWN": 1,
+          "LATERAL": 4,
+          "UP": 10,
+          "WEAK_DOWN": 4,
+          "WEAK_UP": 11
+        },
+        "SELL": {
+          "DOWN": 1,
+          "LATERAL": 4,
+          "UP": 5,
+          "WEAK_DOWN": 6,
+          "WEAK_UP": 8
+        }
+      }
+    },
+    {
+      "exposure_minutes": {
+        "DOWN": 10297,
+        "LATERAL": 9465,
+        "UP": 2678,
+        "WEAK_DOWN": 10427,
+        "WEAK_UP": 10791
+      },
+      "instrument": "USD_CAD",
+      "pair_qualified": false,
+      "results": [
+        {
+          "baseline": {
+            "ambiguous": 0,
+            "episodes": 91,
+            "episodes_per_30_days": 45.5,
+            "expectancy_r": -0.3456521739131651,
+            "losses": 56,
+            "maximum_loss_streak": 9,
+            "net_r": -27.997826086966374,
+            "profit_factor": 0.5524965542801328,
+            "resolved": 81,
+            "resolved_per_30_days": 40.5,
+            "timeouts": 10,
+            "win_rate": 0.30864197530864196,
+            "wins": 25
+          },
+          "candidate": {
+            "conditional_rules": {
+              "AGAINST": {
+                "enabled": true,
+                "filters": [
+                  {
+                    "feature": "rr_raw",
+                    "operator": "<=",
+                    "threshold": 0.87777778
+                  },
+                  {
+                    "feature": "volatility_ratio",
+                    "operator": ">=",
+                    "threshold": 0.9915683
+                  }
+                ]
+              },
+              "LATERAL": {
+                "enabled": true,
+                "filters": [
+                  {
+                    "feature": "buy_score",
+                    "operator": ">=",
+                    "threshold": 39.0
+                  },
+                  {
+                    "feature": "direction_edge",
+                    "operator": "<=",
+                    "threshold": 72.0
+                  }
+                ]
+              },
+              "WITH": {
+                "enabled": true,
+                "filters": [
+                  {
+                    "feature": "rr_raw",
+                    "operator": ">=",
+                    "threshold": 0.57777778
+                  },
+                  {
+                    "feature": "m15_gap_atr",
+                    "operator": "<=",
+                    "threshold": 1.04489246
+                  }
+                ]
+              }
+            },
+            "definition_sha256": "94fd1c7f801c6060b724a6ac525400f0e19cafa3997c9ae1b7fcfff230c388a5",
+            "direction": "BUY",
+            "instrument": "USD_CAD",
+            "minimum_by_regime": {
+              "DOWN": 4,
+              "LATERAL": 6,
+              "UP": 2,
+              "WEAK_DOWN": 5,
+              "WEAK_UP": 8
+            },
+            "minimum_resolved": 25,
+            "minimum_win_rate_exclusive": 0.5,
+            "paper_only": true,
+            "production_authority": false,
+            "trend_version": "H1_H4_EMA20_50_ATR14_V1",
+            "window": {
+              "days": 60,
+              "end": "2026-09-16T16:36:00+00:00",
+              "start": "2026-07-18T16:36:00+00:00"
+            }
+          },
+          "direction": "BUY",
+          "evaluated_candidates": 83631,
+          "final_gates": {
+            "positive_expectancy_safety": true,
+            "regime_minima": true,
+            "win_rate_strictly_above_50": true
+          },
+          "instrument": "USD_CAD",
+          "metrics": {
+            "ambiguous": 0,
+            "episodes": 32,
+            "episodes_per_30_days": 16.0,
+            "expectancy_r": 0.4372397134765301,
+            "losses": 11,
+            "maximum_loss_streak": 3,
+            "net_r": 12.679951690819374,
+            "profit_factor": 2.0338749384536623,
+            "resolved": 29,
+            "resolved_per_30_days": 14.5,
+            "timeouts": 3,
+            "win_rate": 0.6206896551724138,
+            "wins": 18
+          },
+          "minimum_by_regime": {
+            "DOWN": 4,
+            "LATERAL": 6,
+            "UP": 2,
+            "WEAK_DOWN": 5,
+            "WEAK_UP": 8
+          },
+          "resolved_by_regime": {
+            "DOWN": 4,
+            "LATERAL": 7,
+            "UP": 2,
+            "WEAK_DOWN": 8,
+            "WEAK_UP": 8
+          },
+          "role_metrics": {
+            "AGAINST": {
+              "ambiguous": 0,
+              "episodes": 13,
+              "episodes_per_30_days": 6.5,
+              "expectancy_r": 0.34351851851848353,
+              "losses": 5,
+              "maximum_loss_streak": 2,
+              "net_r": 4.122222222221803,
+              "profit_factor": 1.734653465346379,
+              "resolved": 12,
+              "resolved_per_30_days": 6.0,
+              "timeouts": 1,
+              "win_rate": 0.5833333333333334,
+              "wins": 7
+            },
+            "LATERAL": {
+              "ambiguous": 0,
+              "episodes": 8,
+              "episodes_per_30_days": 4.0,
+              "expectancy_r": 0.665079365079284,
+              "losses": 2,
+              "maximum_loss_streak": 2,
+              "net_r": 4.655555555554988,
+              "profit_factor": 3.0742574257419566,
+              "resolved": 7,
+              "resolved_per_30_days": 3.5,
+              "timeouts": 1,
+              "win_rate": 0.7142857142857143,
+              "wins": 5
+            },
+            "WITH": {
+              "ambiguous": 0,
+              "episodes": 11,
+              "episodes_per_30_days": 5.5,
+              "expectancy_r": 0.3902173913042583,
+              "losses": 4,
+              "maximum_loss_streak": 4,
+              "net_r": 3.902173913042583,
+              "profit_factor": 1.8850599901382545,
+              "resolved": 10,
+              "resolved_per_30_days": 5.0,
+              "timeouts": 1,
+              "win_rate": 0.6,
+              "wins": 6
+            }
+          },
+          "strategy_id": "USDCAD_BUY_ONLY_V1",
+          "verdict": "PAPER_CANDIDATE"
+        },
+        {
+          "baseline": {
+            "ambiguous": 0,
+            "episodes": 90,
+            "episodes_per_30_days": 45.0,
+            "expectancy_r": -0.22565157750354964,
+            "losses": 52,
+            "maximum_loss_streak": 10,
+            "net_r": -18.27777777778752,
+            "profit_factor": 0.6870243531201253,
+            "resolved": 81,
+            "resolved_per_30_days": 40.5,
+            "timeouts": 9,
+            "win_rate": 0.35802469135802467,
+            "wins": 29
+          },
+          "candidate": {
+            "conditional_rules": {
+              "AGAINST": {
+                "enabled": false,
+                "filters": []
+              },
+              "LATERAL": {
+                "enabled": true,
+                "filters": [
+                  {
+                    "feature": "room_to_barrier_r",
+                    "operator": ">=",
+                    "threshold": 0.22222222
+                  },
+                  {
+                    "feature": "m15_gap_atr",
+                    "operator": ">=",
+                    "threshold": -0.38550405
+                  }
+                ]
+              },
+              "WITH": {
+                "enabled": true,
+                "filters": [
+                  {
+                    "feature": "extension_atr",
+                    "operator": ">=",
+                    "threshold": 0.64714817
+                  },
+                  {
+                    "feature": "m1_momentum",
+                    "operator": ">=",
+                    "threshold": -0.00021666
+                  }
+                ]
+              }
+            },
+            "definition_sha256": "5cf41fafc6033aa2a01b7aec9b24a9cdcd4e71fc5c06568eb4e981c70ab030dd",
+            "direction": "SELL",
+            "instrument": "USD_CAD",
+            "minimum_by_regime": {
+              "DOWN": 8,
+              "LATERAL": 6,
+              "UP": 1,
+              "WEAK_DOWN": 8,
+              "WEAK_UP": 6
+            },
+            "minimum_resolved": 29,
+            "minimum_win_rate_exclusive": 0.5,
+            "paper_only": true,
+            "production_authority": false,
+            "trend_version": "H1_H4_EMA20_50_ATR14_V1",
+            "window": {
+              "days": 60,
+              "end": "2026-09-16T16:36:00+00:00",
+              "start": "2026-07-18T16:36:00+00:00"
+            }
+          },
+          "direction": "SELL",
+          "evaluated_candidates": 82233,
+          "final_gates": {
+            "positive_expectancy_safety": true,
+            "regime_minima": false,
+            "win_rate_strictly_above_50": true
+          },
+          "instrument": "USD_CAD",
+          "metrics": {
+            "ambiguous": 0,
+            "episodes": 23,
+            "episodes_per_30_days": 11.5,
+            "expectancy_r": 0.48080808080799786,
+            "losses": 8,
+            "maximum_loss_streak": 5,
+            "net_r": 10.577777777775953,
+            "profit_factor": 2.187032418952262,
+            "resolved": 22,
+            "resolved_per_30_days": 11.0,
+            "timeouts": 1,
+            "win_rate": 0.6363636363636364,
+            "wins": 14
+          },
+          "minimum_by_regime": {
+            "DOWN": 8,
+            "LATERAL": 6,
+            "UP": 1,
+            "WEAK_DOWN": 8,
+            "WEAK_UP": 6
+          },
+          "resolved_by_regime": {
+            "DOWN": 8,
+            "LATERAL": 6,
+            "WEAK_DOWN": 8
+          },
+          "role_metrics": {
+            "AGAINST": {
+              "ambiguous": 0,
+              "episodes": 0,
+              "episodes_per_30_days": 0.0,
+              "expectancy_r": null,
+              "losses": 0,
+              "maximum_loss_streak": 0,
+              "net_r": 0,
+              "profit_factor": null,
+              "resolved": 0,
+              "resolved_per_30_days": 0.0,
+              "timeouts": 0,
+              "win_rate": null,
+              "wins": 0
+            },
+            "LATERAL": {
+              "ambiguous": 0,
+              "episodes": 6,
+              "episodes_per_30_days": 3.0,
+              "expectancy_r": 0.549999999999963,
+              "losses": 2,
+              "maximum_loss_streak": 2,
+              "net_r": 3.2999999999997778,
+              "profit_factor": 2.492462311557572,
+              "resolved": 6,
+              "resolved_per_30_days": 3.0,
+              "timeouts": 0,
+              "win_rate": 0.6666666666666666,
+              "wins": 4
+            },
+            "WITH": {
+              "ambiguous": 0,
+              "episodes": 17,
+              "episodes_per_30_days": 8.5,
+              "expectancy_r": 0.4548611111110109,
+              "losses": 6,
+              "maximum_loss_streak": 5,
+              "net_r": 7.2777777777761745,
+              "profit_factor": 2.0862354892201687,
+              "resolved": 16,
+              "resolved_per_30_days": 8.0,
+              "timeouts": 1,
+              "win_rate": 0.625,
+              "wins": 10
+            }
+          },
+          "strategy_id": "USDCAD_SELL_ONLY_V1",
+          "verdict": "INSUFFICIENT_60_DAY_EVIDENCE"
+        }
+      ],
+      "targets": {
+        "BUY": {
+          "DOWN": 4,
+          "LATERAL": 6,
+          "UP": 2,
+          "WEAK_DOWN": 5,
+          "WEAK_UP": 8
+        },
+        "SELL": {
+          "DOWN": 8,
+          "LATERAL": 6,
+          "UP": 1,
+          "WEAK_DOWN": 8,
+          "WEAK_UP": 6
+        }
+      }
+    }
+  ],
+  "production_authority": false,
+  "protocol": "ONE_60_DAY_CAUSAL_H1_H4_ADAPTIVE_PAPER",
+  "replay_sha256": {
+    "AUD_USD": "ea8daf31e09519b5fd250c58c25a22ed3a3558e07e73b9b4d06272eca859ea88",
+    "EUR_USD": "3d208ba7277ce9b9f3f6bf01790eed512fdcf027ad730ed89187fdeccfcaf7ac",
+    "GBP_USD": "e98a1341580d12cd67fa845676e8dbbf71d2e14a565c77e0e173ef64cb9f59fa",
+    "USD_CAD": "cc9d3e35119878a64ae2d4b3f7826e1190cbc4618946cb7642cd19494ce4f19f",
+    "USD_JPY": "d377bfe39dc99f51b96cafebfef13a02954916db69c7100e6389c877bc80b015"
+  },
+  "results": [
+    {
+      "baseline": {
+        "ambiguous": 0,
+        "episodes": 92,
+        "episodes_per_30_days": 46.0,
+        "expectancy_r": -0.19121951219520955,
+        "losses": 52,
+        "maximum_loss_streak": 11,
+        "net_r": -15.680000000007183,
+        "profit_factor": 0.7272094641613561,
+        "resolved": 82,
+        "resolved_per_30_days": 41.0,
+        "timeouts": 10,
+        "win_rate": 0.36585365853658536,
+        "wins": 30
+      },
+      "candidate": {
+        "conditional_rules": {
+          "AGAINST": {
+            "enabled": true,
+            "filters": [
+              {
+                "feature": "room_to_barrier_r",
+                "operator": ">=",
+                "threshold": 0.43555556
+              },
+              {
+                "feature": "volatility_ratio",
+                "operator": ">=",
+                "threshold": 0.80637491
+              }
+            ]
+          },
+          "LATERAL": {
+            "enabled": true,
+            "filters": [
+              {
+                "feature": "volatility_ratio",
+                "operator": ">=",
+                "threshold": 0.87205909
+              },
+              {
+                "feature": "h1_slope_atr",
+                "operator": "<=",
+                "threshold": 0.18367599
+              }
+            ]
+          },
+          "WITH": {
+            "enabled": true,
+            "filters": [
+              {
+                "feature": "extension_atr",
+                "operator": "<=",
+                "threshold": 0.63251634
+              },
+              {
+                "feature": "session_strength",
+                "operator": ">=",
+                "threshold": 0.14814206
+              }
+            ]
+          }
+        },
+        "definition_sha256": "7a0e92b9fa5bf7813f8309c300c49fedf73259250acf94a00e2ea8e8cd1b1374",
+        "direction": "BUY",
+        "instrument": "EUR_USD",
+        "minimum_by_regime": {
+          "DOWN": 2,
+          "LATERAL": 6,
+          "UP": 5,
+          "WEAK_DOWN": 6,
+          "WEAK_UP": 9
+        },
+        "minimum_resolved": 28,
+        "minimum_win_rate_exclusive": 0.5,
+        "paper_only": true,
+        "production_authority": false,
+        "trend_version": "H1_H4_EMA20_50_ATR14_V1",
+        "window": {
+          "days": 60,
+          "end": "2026-09-16T16:36:00+00:00",
+          "start": "2026-07-18T16:36:00+00:00"
+        }
+      },
+      "direction": "BUY",
+      "evaluated_candidates": 83631,
+      "final_gates": {
+        "positive_expectancy_safety": true,
+        "regime_minima": true,
+        "win_rate_strictly_above_50": true
+      },
+      "instrument": "EUR_USD",
+      "metrics": {
+        "ambiguous": 0,
+        "episodes": 33,
+        "episodes_per_30_days": 16.5,
+        "expectancy_r": 0.5310344827585595,
+        "losses": 10,
+        "maximum_loss_streak": 3,
+        "net_r": 15.399999999998224,
+        "profit_factor": 2.3915662650599003,
+        "resolved": 29,
+        "resolved_per_30_days": 14.5,
+        "timeouts": 4,
+        "win_rate": 0.6551724137931034,
+        "wins": 19
+      },
+      "minimum_by_regime": {
+        "DOWN": 2,
+        "LATERAL": 6,
+        "UP": 5,
+        "WEAK_DOWN": 6,
+        "WEAK_UP": 9
+      },
+      "resolved_by_regime": {
+        "DOWN": 3,
+        "LATERAL": 6,
+        "UP": 5,
+        "WEAK_DOWN": 6,
+        "WEAK_UP": 9
+      },
+      "role_metrics": {
+        "AGAINST": {
+          "ambiguous": 0,
+          "episodes": 10,
+          "episodes_per_30_days": 5.0,
+          "expectancy_r": 0.282716049382653,
+          "losses": 4,
+          "maximum_loss_streak": 2,
+          "net_r": 2.5444444444438767,
+          "profit_factor": 1.5768261964733552,
+          "resolved": 9,
+          "resolved_per_30_days": 4.5,
+          "timeouts": 1,
+          "win_rate": 0.5555555555555556,
+          "wins": 5
+        },
+        "LATERAL": {
+          "ambiguous": 0,
+          "episodes": 6,
+          "episodes_per_30_days": 3.0,
+          "expectancy_r": 0.9703703703703375,
+          "losses": 1,
+          "maximum_loss_streak": 1,
+          "net_r": 5.822222222222025,
+          "profit_factor": 6.137254901959938,
+          "resolved": 6,
+          "resolved_per_30_days": 3.0,
+          "timeouts": 0,
+          "win_rate": 0.8333333333333334,
+          "wins": 5
+        },
+        "WITH": {
+          "ambiguous": 0,
+          "episodes": 17,
+          "episodes_per_30_days": 8.5,
+          "expectancy_r": 0.5023809523808801,
+          "losses": 5,
+          "maximum_loss_streak": 2,
+          "net_r": 7.033333333332322,
+          "profit_factor": 2.27364185110628,
+          "resolved": 14,
+          "resolved_per_30_days": 7.0,
+          "timeouts": 3,
+          "win_rate": 0.6428571428571429,
+          "wins": 9
+        }
+      },
+      "strategy_id": "EURUSD_BUY_ONLY_V1",
+      "verdict": "PAPER_CANDIDATE"
+    },
+    {
+      "baseline": {
+        "ambiguous": 0,
+        "episodes": 74,
+        "episodes_per_30_days": 37.0,
+        "expectancy_r": -0.3291187739464767,
+        "losses": 40,
+        "maximum_loss_streak": 6,
+        "net_r": -19.08888888889565,
+        "profit_factor": 0.5682332244281549,
+        "resolved": 58,
+        "resolved_per_30_days": 29.0,
+        "timeouts": 16,
+        "win_rate": 0.3103448275862069,
+        "wins": 18
+      },
+      "candidate": {
+        "conditional_rules": {
+          "AGAINST": {
+            "enabled": true,
+            "filters": [
+              {
+                "feature": "buy_score",
+                "operator": ">=",
+                "threshold": 1.4
+              },
+              {
+                "feature": "session_momentum_atr",
+                "operator": ">=",
+                "threshold": -0.01235294
+              }
+            ]
+          },
+          "LATERAL": {
+            "enabled": true,
+            "filters": [
+              {
+                "feature": "room_to_barrier_r",
+                "operator": ">=",
+                "threshold": 0.38666667
+              }
+            ]
+          },
+          "WITH": {
+            "enabled": true,
+            "filters": [
+              {
+                "feature": "room_to_barrier_r",
+                "operator": ">=",
+                "threshold": 0.32333333
+              },
+              {
+                "feature": "h1_slope_atr",
+                "operator": ">=",
+                "threshold": -0.59005027
+              }
+            ]
+          }
+        },
+        "definition_sha256": "24091be4e7664f313254dadda68893551a0079be42b59964541ed6aebf7cc7a6",
+        "direction": "SELL",
+        "instrument": "EUR_USD",
+        "minimum_by_regime": {
+          "DOWN": 3,
+          "LATERAL": 6,
+          "UP": 3,
+          "WEAK_DOWN": 8,
+          "WEAK_UP": 6
+        },
+        "minimum_resolved": 26,
+        "minimum_win_rate_exclusive": 0.5,
+        "paper_only": true,
+        "production_authority": false,
+        "trend_version": "H1_H4_EMA20_50_ATR14_V1",
+        "window": {
+          "days": 60,
+          "end": "2026-09-16T16:36:00+00:00",
+          "start": "2026-07-18T16:36:00+00:00"
+        }
+      },
+      "direction": "SELL",
+      "evaluated_candidates": 83619,
+      "final_gates": {
+        "positive_expectancy_safety": true,
+        "regime_minima": true,
+        "win_rate_strictly_above_50": true
+      },
+      "instrument": "EUR_USD",
+      "metrics": {
+        "ambiguous": 0,
+        "episodes": 34,
+        "episodes_per_30_days": 17.0,
+        "expectancy_r": 0.37777777777769006,
+        "losses": 11,
+        "maximum_loss_streak": 4,
+        "net_r": 10.199999999997631,
+        "profit_factor": 1.8391224862885478,
+        "resolved": 27,
+        "resolved_per_30_days": 13.5,
+        "timeouts": 7,
+        "win_rate": 0.5925925925925926,
+        "wins": 16
+      },
+      "minimum_by_regime": {
+        "DOWN": 3,
+        "LATERAL": 6,
+        "UP": 3,
+        "WEAK_DOWN": 8,
+        "WEAK_UP": 6
+      },
+      "resolved_by_regime": {
+        "DOWN": 3,
+        "LATERAL": 6,
+        "UP": 3,
+        "WEAK_DOWN": 9,
+        "WEAK_UP": 6
+      },
+      "role_metrics": {
+        "AGAINST": {
+          "ambiguous": 0,
+          "episodes": 12,
+          "episodes_per_30_days": 6.0,
+          "expectancy_r": 0.28518518518508373,
+          "losses": 4,
+          "maximum_loss_streak": 2,
+          "net_r": 2.566666666665754,
+          "profit_factor": 1.5818639798485914,
+          "resolved": 9,
+          "resolved_per_30_days": 4.5,
+          "timeouts": 3,
+          "win_rate": 0.5555555555555556,
+          "wins": 5
+        },
+        "LATERAL": {
+          "ambiguous": 0,
+          "episodes": 9,
+          "episodes_per_30_days": 4.5,
+          "expectancy_r": 0.5648148148147943,
+          "losses": 2,
+          "maximum_loss_streak": 2,
+          "net_r": 3.388888888888766,
+          "profit_factor": 2.524999999999775,
+          "resolved": 6,
+          "resolved_per_30_days": 3.0,
+          "timeouts": 3,
+          "win_rate": 0.6666666666666666,
+          "wins": 4
+        },
+        "WITH": {
+          "ambiguous": 0,
+          "episodes": 13,
+          "episodes_per_30_days": 6.5,
+          "expectancy_r": 0.35370370370359266,
+          "losses": 5,
+          "maximum_loss_streak": 1,
+          "net_r": 4.244444444443112,
+          "profit_factor": 1.7686116700197732,
+          "resolved": 12,
+          "resolved_per_30_days": 6.0,
+          "timeouts": 1,
+          "win_rate": 0.5833333333333334,
+          "wins": 7
+        }
+      },
+      "strategy_id": "EURUSD_SELL_ONLY_V2",
+      "verdict": "PAPER_CANDIDATE"
+    },
+    {
+      "baseline": {
+        "ambiguous": 1,
+        "episodes": 125,
+        "episodes_per_30_days": 62.5,
+        "expectancy_r": -0.4373065043348788,
+        "losses": 82,
+        "maximum_loss_streak": 10,
+        "net_r": -49.4156349898413,
+        "profit_factor": 0.46354780059550554,
+        "resolved": 113,
+        "resolved_per_30_days": 56.5,
+        "timeouts": 11,
+        "win_rate": 0.2743362831858407,
+        "wins": 31
+      },
+      "candidate": {
+        "conditional_rules": {
+          "AGAINST": {
+            "enabled": true,
+            "filters": [
+              {
+                "feature": "m15_slope_atr",
+                "operator": ">=",
+                "threshold": 0.21978863
+              },
+              {
+                "feature": "session_displacement_atr",
+                "operator": "<=",
+                "threshold": 1.39366614
+              }
+            ]
+          },
+          "LATERAL": {
+            "enabled": true,
+            "filters": [
+              {
+                "feature": "rr_raw",
+                "operator": "<=",
+                "threshold": 0.71555556
+              },
+              {
+                "feature": "m1_momentum",
+                "operator": "<=",
+                "threshold": 0.00013609
+              }
+            ]
+          },
+          "WITH": {
+            "enabled": true,
+            "filters": [
+              {
+                "feature": "room_to_barrier_r",
+                "operator": "<=",
+                "threshold": 1.05333333
+              },
+              {
+                "feature": "buy_score",
+                "operator": ">=",
+                "threshold": 58.0
+              }
+            ]
+          }
+        },
+        "definition_sha256": "56e56436e1028ae656b6b270ab09886e7cbeb10f37489e1c5c2702c15e1ca320",
+        "direction": "BUY",
+        "instrument": "GBP_USD",
+        "minimum_by_regime": {
+          "DOWN": 2,
+          "LATERAL": 4,
+          "UP": 6,
+          "WEAK_DOWN": 6,
+          "WEAK_UP": 10
+        },
+        "minimum_resolved": 28,
+        "minimum_win_rate_exclusive": 0.5,
+        "paper_only": true,
+        "production_authority": false,
+        "trend_version": "H1_H4_EMA20_50_ATR14_V1",
+        "window": {
+          "days": 60,
+          "end": "2026-09-16T16:36:00+00:00",
+          "start": "2026-07-18T16:36:00+00:00"
+        }
+      },
+      "direction": "BUY",
+      "evaluated_candidates": 85017,
+      "final_gates": {
+        "positive_expectancy_safety": true,
+        "regime_minima": true,
+        "win_rate_strictly_above_50": true
+      },
+      "instrument": "GBP_USD",
+      "metrics": {
+        "ambiguous": 0,
+        "episodes": 33,
+        "episodes_per_30_days": 16.5,
+        "expectancy_r": 0.4057347670250148,
+        "losses": 12,
+        "maximum_loss_streak": 3,
+        "net_r": 12.57777777777546,
+        "profit_factor": 1.9301561216102425,
+        "resolved": 31,
+        "resolved_per_30_days": 15.5,
+        "timeouts": 2,
+        "win_rate": 0.6129032258064516,
+        "wins": 19
+      },
+      "minimum_by_regime": {
+        "DOWN": 2,
+        "LATERAL": 4,
+        "UP": 6,
+        "WEAK_DOWN": 6,
+        "WEAK_UP": 10
+      },
+      "resolved_by_regime": {
+        "DOWN": 2,
+        "LATERAL": 5,
+        "UP": 7,
+        "WEAK_DOWN": 7,
+        "WEAK_UP": 10
+      },
+      "role_metrics": {
+        "AGAINST": {
+          "ambiguous": 0,
+          "episodes": 10,
+          "episodes_per_30_days": 5.0,
+          "expectancy_r": -0.008641975308754372,
+          "losses": 5,
+          "maximum_loss_streak": 2,
+          "net_r": -0.07777777777878936,
+          "profit_factor": 0.9861660079049608,
+          "resolved": 9,
+          "resolved_per_30_days": 4.5,
+          "timeouts": 1,
+          "win_rate": 0.4444444444444444,
+          "wins": 4
+        },
+        "LATERAL": {
+          "ambiguous": 0,
+          "episodes": 5,
+          "episodes_per_30_days": 2.5,
+          "expectancy_r": 1.3755555555554912,
+          "losses": 0,
+          "maximum_loss_streak": 0,
+          "net_r": 6.877777777777457,
+          "profit_factor": 999.0,
+          "resolved": 5,
+          "resolved_per_30_days": 2.5,
+          "timeouts": 0,
+          "win_rate": 1.0,
+          "wins": 5
+        },
+        "WITH": {
+          "ambiguous": 0,
+          "episodes": 18,
+          "episodes_per_30_days": 9.0,
+          "expectancy_r": 0.3398692810456936,
+          "losses": 7,
+          "maximum_loss_streak": 3,
+          "net_r": 5.777777777776791,
+          "profit_factor": 1.7313642756678957,
+          "resolved": 17,
+          "resolved_per_30_days": 8.5,
+          "timeouts": 1,
+          "win_rate": 0.5882352941176471,
+          "wins": 10
+        }
+      },
+      "strategy_id": "GBPUSD_BUY_ONLY_V1",
+      "verdict": "PAPER_CANDIDATE"
+    },
+    {
+      "baseline": {
+        "ambiguous": 0,
+        "episodes": 120,
+        "episodes_per_30_days": 60.0,
+        "expectancy_r": -0.22567248540042817,
+        "losses": 68,
+        "maximum_loss_streak": 8,
+        "net_r": -23.921283452445387,
+        "profit_factor": 0.6864170927334196,
+        "resolved": 106,
+        "resolved_per_30_days": 53.0,
+        "timeouts": 14,
+        "win_rate": 0.3584905660377358,
+        "wins": 38
+      },
+      "candidate": {
+        "conditional_rules": {
+          "AGAINST": {
+            "enabled": true,
+            "filters": [
+              {
+                "feature": "m15_gap_atr",
+                "operator": ">=",
+                "threshold": -0.15094733
+              },
+              {
+                "feature": "m15_slope_atr",
+                "operator": "<=",
+                "threshold": 0.04860348
+              }
+            ]
+          },
+          "LATERAL": {
+            "enabled": true,
+            "filters": [
+              {
+                "feature": "volatility_ratio",
+                "operator": ">=",
+                "threshold": 1.03294015
+              },
+              {
+                "feature": "h1_gap_atr",
+                "operator": "<=",
+                "threshold": -0.02330658
+              }
+            ]
+          },
+          "WITH": {
+            "enabled": true,
+            "filters": [
+              {
+                "feature": "m15_slope_atr",
+                "operator": "<=",
+                "threshold": -0.1813765
+              },
+              {
+                "feature": "session_momentum_atr",
+                "operator": ">=",
+                "threshold": 0.31682556
+              }
+            ]
+          }
+        },
+        "definition_sha256": "fce6cd9fd9d658cee9bb03977bf9dd7ce0b4bd3b0778adc6d9bd09024470438d",
+        "direction": "SELL",
+        "instrument": "GBP_USD",
+        "minimum_by_regime": {
+          "DOWN": 4,
+          "LATERAL": 4,
+          "UP": 3,
+          "WEAK_DOWN": 8,
+          "WEAK_UP": 7
+        },
+        "minimum_resolved": 26,
+        "minimum_win_rate_exclusive": 0.5,
+        "paper_only": true,
+        "production_authority": false,
+        "trend_version": "H1_H4_EMA20_50_ATR14_V1",
+        "window": {
+          "days": 60,
+          "end": "2026-09-16T16:36:00+00:00",
+          "start": "2026-07-18T16:36:00+00:00"
+        }
+      },
+      "direction": "SELL",
+      "evaluated_candidates": 82269,
+      "final_gates": {
+        "positive_expectancy_safety": true,
+        "regime_minima": true,
+        "win_rate_strictly_above_50": true
+      },
+      "instrument": "GBP_USD",
+      "metrics": {
+        "ambiguous": 0,
+        "episodes": 36,
+        "episodes_per_30_days": 18.0,
+        "expectancy_r": 0.7745681803905812,
+        "losses": 7,
+        "maximum_loss_streak": 2,
+        "net_r": 22.462477231326854,
+        "profit_factor": 3.86755028484974,
+        "resolved": 29,
+        "resolved_per_30_days": 14.5,
+        "timeouts": 7,
+        "win_rate": 0.7586206896551724,
+        "wins": 22
+      },
+      "minimum_by_regime": {
+        "DOWN": 4,
+        "LATERAL": 4,
+        "UP": 3,
+        "WEAK_DOWN": 8,
+        "WEAK_UP": 7
+      },
+      "resolved_by_regime": {
+        "DOWN": 4,
+        "LATERAL": 4,
+        "UP": 3,
+        "WEAK_DOWN": 8,
+        "WEAK_UP": 10
+      },
+      "role_metrics": {
+        "AGAINST": {
+          "ambiguous": 0,
+          "episodes": 16,
+          "episodes_per_30_days": 8.0,
+          "expectancy_r": 0.8017094017092764,
+          "losses": 3,
+          "maximum_loss_streak": 1,
+          "net_r": 10.422222222220594,
+          "profit_factor": 4.085526315788271,
+          "resolved": 13,
+          "resolved_per_30_days": 6.5,
+          "timeouts": 3,
+          "win_rate": 0.7692307692307693,
+          "wins": 10
+        },
+        "LATERAL": {
+          "ambiguous": 0,
+          "episodes": 6,
+          "episodes_per_30_days": 3.0,
+          "expectancy_r": 1.3749999999999691,
+          "losses": 0,
+          "maximum_loss_streak": 0,
+          "net_r": 5.4999999999998765,
+          "profit_factor": 999.0,
+          "resolved": 4,
+          "resolved_per_30_days": 2.0,
+          "timeouts": 2,
+          "win_rate": 1.0,
+          "wins": 4
+        },
+        "WITH": {
+          "ambiguous": 0,
+          "episodes": 14,
+          "episodes_per_30_days": 7.0,
+          "expectancy_r": 0.5450212507588651,
+          "losses": 4,
+          "maximum_loss_streak": 2,
+          "net_r": 6.540255009106382,
+          "profit_factor": 2.4678876579039892,
+          "resolved": 12,
+          "resolved_per_30_days": 6.0,
+          "timeouts": 2,
+          "win_rate": 0.6666666666666666,
+          "wins": 8
+        }
+      },
+      "strategy_id": "GBPUSD_SELL_ONLY_V1",
+      "verdict": "PAPER_CANDIDATE"
+    },
+    {
+      "baseline": {
+        "ambiguous": 0,
+        "episodes": 216,
+        "episodes_per_30_days": 108.0,
+        "expectancy_r": -0.2594442176750932,
+        "losses": 135,
+        "maximum_loss_streak": 8,
+        "net_r": -52.926620405719014,
+        "profit_factor": 0.6456145147206791,
+        "resolved": 204,
+        "resolved_per_30_days": 102.0,
+        "timeouts": 12,
+        "win_rate": 0.3382352941176471,
+        "wins": 69
+      },
+      "candidate": {
+        "conditional_rules": {
+          "AGAINST": {
+            "enabled": true,
+            "filters": [
+              {
+                "feature": "m1_momentum",
+                "operator": "<=",
+                "threshold": 0.00015607
+              },
+              {
+                "feature": "m15_slope_atr",
+                "operator": "<=",
+                "threshold": 0.33036589
+              }
+            ]
+          },
+          "LATERAL": {
+            "enabled": true,
+            "filters": [
+              {
+                "feature": "extension_atr",
+                "operator": "<=",
+                "threshold": 1.17940002
+              },
+              {
+                "feature": "m1_momentum",
+                "operator": "<=",
+                "threshold": 0.00012571
+              }
+            ]
+          },
+          "WITH": {
+            "enabled": true,
+            "filters": [
+              {
+                "feature": "volatility_ratio",
+                "operator": "<=",
+                "threshold": 0.88915025
+              },
+              {
+                "feature": "session_displacement_atr",
+                "operator": "<=",
+                "threshold": 6.98620193
+              }
+            ]
+          }
+        },
+        "definition_sha256": "4562460d6ebd3d31e496ed15645d23856b37c7ee413af278cef01360c6a07b5d",
+        "direction": "BUY",
+        "instrument": "USD_JPY",
+        "minimum_by_regime": {
+          "DOWN": 2,
+          "LATERAL": 5,
+          "UP": 5,
+          "WEAK_DOWN": 6,
+          "WEAK_UP": 10
+        },
+        "minimum_resolved": 28,
+        "minimum_win_rate_exclusive": 0.5,
+        "paper_only": true,
+        "production_authority": false,
+        "trend_version": "H1_H4_EMA20_50_ATR14_V1",
+        "window": {
+          "days": 60,
+          "end": "2026-09-16T16:36:00+00:00",
+          "start": "2026-07-18T16:36:00+00:00"
+        }
+      },
+      "direction": "BUY",
+      "evaluated_candidates": 83631,
+      "final_gates": {
+        "positive_expectancy_safety": true,
+        "regime_minima": true,
+        "win_rate_strictly_above_50": true
+      },
+      "instrument": "USD_JPY",
+      "metrics": {
+        "ambiguous": 0,
+        "episodes": 31,
+        "episodes_per_30_days": 15.5,
+        "expectancy_r": 0.7298245614032812,
+        "losses": 8,
+        "maximum_loss_streak": 2,
+        "net_r": 21.894736842098435,
+        "profit_factor": 3.4755355725988335,
+        "resolved": 30,
+        "resolved_per_30_days": 15.0,
+        "timeouts": 1,
+        "win_rate": 0.7333333333333333,
+        "wins": 22
+      },
+      "minimum_by_regime": {
+        "DOWN": 2,
+        "LATERAL": 5,
+        "UP": 5,
+        "WEAK_DOWN": 6,
+        "WEAK_UP": 10
+      },
+      "resolved_by_regime": {
+        "DOWN": 2,
+        "LATERAL": 6,
+        "UP": 5,
+        "WEAK_DOWN": 7,
+        "WEAK_UP": 10
+      },
+      "role_metrics": {
+        "AGAINST": {
+          "ambiguous": 0,
+          "episodes": 9,
+          "episodes_per_30_days": 4.5,
+          "expectancy_r": 0.8530864197528466,
+          "losses": 2,
+          "maximum_loss_streak": 1,
+          "net_r": 7.67777777777562,
+          "profit_factor": 4.472361809043671,
+          "resolved": 9,
+          "resolved_per_30_days": 4.5,
+          "timeouts": 0,
+          "win_rate": 0.7777777777777778,
+          "wins": 7
+        },
+        "LATERAL": {
+          "ambiguous": 0,
+          "episodes": 7,
+          "episodes_per_30_days": 3.5,
+          "expectancy_r": 1.395419103313553,
+          "losses": 0,
+          "maximum_loss_streak": 0,
+          "net_r": 8.372514619881319,
+          "profit_factor": 999.0,
+          "resolved": 6,
+          "resolved_per_30_days": 3.0,
+          "timeouts": 1,
+          "win_rate": 1.0,
+          "wins": 6
+        },
+        "WITH": {
+          "ambiguous": 0,
+          "episodes": 15,
+          "episodes_per_30_days": 7.5,
+          "expectancy_r": 0.38962962962943315,
+          "losses": 6,
+          "maximum_loss_streak": 3,
+          "net_r": 5.844444444441497,
+          "profit_factor": 1.8810720268001626,
+          "resolved": 15,
+          "resolved_per_30_days": 7.5,
+          "timeouts": 0,
+          "win_rate": 0.6,
+          "wins": 9
+        }
+      },
+      "strategy_id": "USDJPY_BUY_ONLY_V1",
+      "verdict": "PAPER_CANDIDATE"
+    },
+    {
+      "baseline": {
+        "ambiguous": 0,
+        "episodes": 237,
+        "episodes_per_30_days": 118.5,
+        "expectancy_r": -0.1859614025196848,
+        "losses": 147,
+        "maximum_loss_streak": 9,
+        "net_r": -43.143045384566875,
+        "profit_factor": 0.7331029723121129,
+        "resolved": 232,
+        "resolved_per_30_days": 116.0,
+        "timeouts": 5,
+        "win_rate": 0.36637931034482757,
+        "wins": 85
+      },
+      "candidate": {
+        "conditional_rules": {
+          "AGAINST": {
+            "enabled": true,
+            "filters": [
+              {
+                "feature": "m1_momentum",
+                "operator": "<=",
+                "threshold": -0.00012068
+              },
+              {
+                "feature": "session_momentum_atr",
+                "operator": ">=",
+                "threshold": 0.0
+              }
+            ]
+          },
+          "LATERAL": {
+            "enabled": true,
+            "filters": [
+              {
+                "feature": "extension_atr",
+                "operator": "<=",
+                "threshold": 0.51883796
+              },
+              {
+                "feature": "direction_edge",
+                "operator": ">=",
+                "threshold": 64.8
+              }
+            ]
+          },
+          "WITH": {
+            "enabled": true,
+            "filters": [
+              {
+                "feature": "room_to_barrier_r",
+                "operator": ">=",
+                "threshold": 1.98222222
+              },
+              {
+                "feature": "session_momentum_atr",
+                "operator": "<=",
+                "threshold": -0.22952117
+              }
+            ]
+          }
+        },
+        "definition_sha256": "824d141cd5fce7f38a5314614793cbe449a3bfa17f1eed3be57c0b40603dbb98",
+        "direction": "SELL",
+        "instrument": "USD_JPY",
+        "minimum_by_regime": {
+          "DOWN": 4,
+          "LATERAL": 5,
+          "UP": 2,
+          "WEAK_DOWN": 8,
+          "WEAK_UP": 7
+        },
+        "minimum_resolved": 26,
+        "minimum_win_rate_exclusive": 0.5,
+        "paper_only": true,
+        "production_authority": false,
+        "trend_version": "H1_H4_EMA20_50_ATR14_V1",
+        "window": {
+          "days": 60,
+          "end": "2026-09-16T16:36:00+00:00",
+          "start": "2026-07-18T16:36:00+00:00"
+        }
+      },
+      "direction": "SELL",
+      "evaluated_candidates": 85005,
+      "final_gates": {
+        "positive_expectancy_safety": true,
+        "regime_minima": true,
+        "win_rate_strictly_above_50": true
+      },
+      "instrument": "USD_JPY",
+      "metrics": {
+        "ambiguous": 0,
+        "episodes": 33,
+        "episodes_per_30_days": 16.5,
+        "expectancy_r": 0.7939143496539441,
+        "losses": 8,
+        "maximum_loss_streak": 2,
+        "net_r": 26.19917353858016,
+        "profit_factor": 4.017108679424673,
+        "resolved": 33,
+        "resolved_per_30_days": 16.5,
+        "timeouts": 0,
+        "win_rate": 0.7575757575757576,
+        "wins": 25
+      },
+      "minimum_by_regime": {
+        "DOWN": 4,
+        "LATERAL": 5,
+        "UP": 2,
+        "WEAK_DOWN": 8,
+        "WEAK_UP": 7
+      },
+      "resolved_by_regime": {
+        "DOWN": 6,
+        "LATERAL": 6,
+        "UP": 2,
+        "WEAK_DOWN": 8,
+        "WEAK_UP": 11
+      },
+      "role_metrics": {
+        "AGAINST": {
+          "ambiguous": 0,
+          "episodes": 13,
+          "episodes_per_30_days": 6.5,
+          "expectancy_r": 0.6299145299143073,
+          "losses": 4,
+          "maximum_loss_streak": 2,
+          "net_r": 8.188888888885995,
+          "profit_factor": 2.8564231738025825,
+          "resolved": 13,
+          "resolved_per_30_days": 6.5,
+          "timeouts": 0,
+          "win_rate": 0.6923076923076923,
+          "wins": 9
+        },
+        "LATERAL": {
+          "ambiguous": 0,
+          "episodes": 6,
+          "episodes_per_30_days": 3.0,
+          "expectancy_r": 0.9783060624230001,
+          "losses": 1,
+          "maximum_loss_streak": 1,
+          "net_r": 5.869836374538001,
+          "profit_factor": 6.2828527370832,
+          "resolved": 6,
+          "resolved_per_30_days": 3.0,
+          "timeouts": 0,
+          "win_rate": 0.8333333333333334,
+          "wins": 5
+        },
+        "WITH": {
+          "ambiguous": 0,
+          "episodes": 14,
+          "episodes_per_30_days": 7.0,
+          "expectancy_r": 0.8671748767968689,
+          "losses": 3,
+          "maximum_loss_streak": 1,
+          "net_r": 12.140448275156164,
+          "profit_factor": 4.84031670327844,
+          "resolved": 14,
+          "resolved_per_30_days": 7.0,
+          "timeouts": 0,
+          "win_rate": 0.7857142857142857,
+          "wins": 11
+        }
+      },
+      "strategy_id": "USDJPY_SELL_ONLY_V2",
+      "verdict": "PAPER_CANDIDATE"
+    },
+    {
+      "baseline": {
+        "ambiguous": 0,
+        "episodes": 80,
+        "episodes_per_30_days": 40.0,
+        "expectancy_r": -0.28745519713254003,
+        "losses": 42,
+        "maximum_loss_streak": 9,
+        "net_r": -17.822222222217484,
+        "profit_factor": 0.6112457586040476,
+        "resolved": 62,
+        "resolved_per_30_days": 31.0,
+        "timeouts": 18,
+        "win_rate": 0.3225806451612903,
+        "wins": 20
+      },
+      "candidate": {
+        "conditional_rules": {
+          "AGAINST": {
+            "enabled": false,
+            "filters": []
+          },
+          "LATERAL": {
+            "enabled": true,
+            "filters": [
+              {
+                "feature": "room_to_barrier_r",
+                "operator": ">=",
+                "threshold": 0.48888889
+              }
+            ]
+          },
+          "WITH": {
+            "enabled": true,
+            "filters": [
+              {
+                "feature": "room_to_barrier_r",
+                "operator": ">=",
+                "threshold": 0.24444444
+              },
+              {
+                "feature": "buy_score",
+                "operator": "<=",
+                "threshold": 72.76252196
+              }
+            ]
+          }
+        },
+        "definition_sha256": "1a19efd18a760f889a0fc27d57eb1ca74d30e44cf64392918eeed2ad87d1e26b",
+        "direction": "BUY",
+        "instrument": "AUD_USD",
+        "minimum_by_regime": {
+          "DOWN": 1,
+          "LATERAL": 4,
+          "UP": 10,
+          "WEAK_DOWN": 4,
+          "WEAK_UP": 11
+        },
+        "minimum_resolved": 30,
+        "minimum_win_rate_exclusive": 0.5,
+        "paper_only": true,
+        "production_authority": false,
+        "trend_version": "H1_H4_EMA20_50_ATR14_V1",
+        "window": {
+          "days": 60,
+          "end": "2026-09-16T16:36:00+00:00",
+          "start": "2026-07-18T16:36:00+00:00"
+        }
+      },
+      "direction": "BUY",
+      "evaluated_candidates": 87801,
+      "final_gates": {
+        "positive_expectancy_safety": true,
+        "regime_minima": false,
+        "win_rate_strictly_above_50": true
+      },
+      "instrument": "AUD_USD",
+      "metrics": {
+        "ambiguous": 0,
+        "episodes": 32,
+        "episodes_per_30_days": 16.0,
+        "expectancy_r": 0.20288065843627942,
+        "losses": 13,
+        "maximum_loss_streak": 3,
+        "net_r": 5.477777777779544,
+        "profit_factor": 1.387883556255068,
+        "resolved": 27,
+        "resolved_per_30_days": 13.5,
+        "timeouts": 5,
+        "win_rate": 0.5185185185185185,
+        "wins": 14
+      },
+      "minimum_by_regime": {
+        "DOWN": 1,
+        "LATERAL": 4,
+        "UP": 10,
+        "WEAK_DOWN": 4,
+        "WEAK_UP": 11
+      },
+      "resolved_by_regime": {
+        "LATERAL": 4,
+        "UP": 11,
+        "WEAK_UP": 12
+      },
+      "role_metrics": {
+        "AGAINST": {
+          "ambiguous": 0,
+          "episodes": 0,
+          "episodes_per_30_days": 0.0,
+          "expectancy_r": null,
+          "losses": 0,
+          "maximum_loss_streak": 0,
+          "net_r": 0,
+          "profit_factor": null,
+          "resolved": 0,
+          "resolved_per_30_days": 0.0,
+          "timeouts": 0,
+          "win_rate": null,
+          "wins": 0
+        },
+        "LATERAL": {
+          "ambiguous": 0,
+          "episodes": 7,
+          "episodes_per_30_days": 3.5,
+          "expectancy_r": 0.17500000000006477,
+          "losses": 2,
+          "maximum_loss_streak": 1,
+          "net_r": 0.7000000000002591,
+          "profit_factor": 1.3230769230770458,
+          "resolved": 4,
+          "resolved_per_30_days": 2.0,
+          "timeouts": 3,
+          "win_rate": 0.5,
+          "wins": 2
+        },
+        "WITH": {
+          "ambiguous": 0,
+          "episodes": 25,
+          "episodes_per_30_days": 12.5,
+          "expectancy_r": 0.20772946859909938,
+          "losses": 11,
+          "maximum_loss_streak": 2,
+          "net_r": 4.777777777779286,
+          "profit_factor": 1.3996282527882606,
+          "resolved": 23,
+          "resolved_per_30_days": 11.5,
+          "timeouts": 2,
+          "win_rate": 0.5217391304347826,
+          "wins": 12
+        }
+      },
+      "strategy_id": "AUDUSD_BUY_ONLY_V1",
+      "verdict": "INSUFFICIENT_60_DAY_EVIDENCE"
+    },
+    {
+      "baseline": {
+        "ambiguous": 0,
+        "episodes": 62,
+        "episodes_per_30_days": 31.0,
+        "expectancy_r": -0.2303418803417945,
+        "losses": 34,
+        "maximum_loss_streak": 6,
+        "net_r": -11.977777777773314,
+        "profit_factor": 0.6777279521675008,
+        "resolved": 52,
+        "resolved_per_30_days": 26.0,
+        "timeouts": 10,
+        "win_rate": 0.34615384615384615,
+        "wins": 18
+      },
+      "candidate": {
+        "conditional_rules": {
+          "AGAINST": {
+            "enabled": false,
+            "filters": []
+          },
+          "LATERAL": {
+            "enabled": true,
+            "filters": [
+              {
+                "feature": "m1_momentum",
+                "operator": "<=",
+                "threshold": -0.00019643
+              }
+            ]
+          },
+          "WITH": {
+            "enabled": true,
+            "filters": [
+              {
+                "feature": "m15_slope_atr",
+                "operator": "<=",
+                "threshold": -0.24389957
+              },
+              {
+                "feature": "session_displacement_atr",
+                "operator": ">=",
+                "threshold": -3.5630199
+              }
+            ]
+          }
+        },
+        "definition_sha256": "3071ab8e2d530682747770c4835a66ccfdd1ede2b20c85b8d26fc1152ef722c9",
+        "direction": "SELL",
+        "instrument": "AUD_USD",
+        "minimum_by_regime": {
+          "DOWN": 1,
+          "LATERAL": 4,
+          "UP": 5,
+          "WEAK_DOWN": 6,
+          "WEAK_UP": 8
+        },
+        "minimum_resolved": 24,
+        "minimum_win_rate_exclusive": 0.5,
+        "paper_only": true,
+        "production_authority": false,
+        "trend_version": "H1_H4_EMA20_50_ATR14_V1",
+        "window": {
+          "days": 60,
+          "end": "2026-09-16T16:36:00+00:00",
+          "start": "2026-07-18T16:36:00+00:00"
+        }
+      },
+      "direction": "SELL",
+      "evaluated_candidates": 78219,
+      "final_gates": {
+        "positive_expectancy_safety": true,
+        "regime_minima": false,
+        "win_rate_strictly_above_50": true
+      },
+      "instrument": "AUD_USD",
+      "metrics": {
+        "ambiguous": 0,
+        "episodes": 13,
+        "episodes_per_30_days": 6.5,
+        "expectancy_r": 0.3638888888889447,
+        "losses": 5,
+        "maximum_loss_streak": 1,
+        "net_r": 4.366666666667337,
+        "profit_factor": 1.8004073319757707,
+        "resolved": 12,
+        "resolved_per_30_days": 6.0,
+        "timeouts": 1,
+        "win_rate": 0.5833333333333334,
+        "wins": 7
+      },
+      "minimum_by_regime": {
+        "DOWN": 1,
+        "LATERAL": 4,
+        "UP": 5,
+        "WEAK_DOWN": 6,
+        "WEAK_UP": 8
+      },
+      "resolved_by_regime": {
+        "DOWN": 1,
+        "LATERAL": 4,
+        "WEAK_DOWN": 7
+      },
+      "role_metrics": {
+        "AGAINST": {
+          "ambiguous": 0,
+          "episodes": 0,
+          "episodes_per_30_days": 0.0,
+          "expectancy_r": null,
+          "losses": 0,
+          "maximum_loss_streak": 0,
+          "net_r": 0,
+          "profit_factor": null,
+          "resolved": 0,
+          "resolved_per_30_days": 0.0,
+          "timeouts": 0,
+          "win_rate": null,
+          "wins": 0
+        },
+        "LATERAL": {
+          "ambiguous": 0,
+          "episodes": 4,
+          "episodes_per_30_days": 2.0,
+          "expectancy_r": 0.16388888888897357,
+          "losses": 2,
+          "maximum_loss_streak": 1,
+          "net_r": 0.6555555555558943,
+          "profit_factor": 1.3025641025642962,
+          "resolved": 4,
+          "resolved_per_30_days": 2.0,
+          "timeouts": 0,
+          "win_rate": 0.5,
+          "wins": 2
+        },
+        "WITH": {
+          "ambiguous": 0,
+          "episodes": 9,
+          "episodes_per_30_days": 4.5,
+          "expectancy_r": 0.4638888888889303,
+          "losses": 3,
+          "maximum_loss_streak": 2,
+          "net_r": 3.7111111111114425,
+          "profit_factor": 2.128378378378593,
+          "resolved": 8,
+          "resolved_per_30_days": 4.0,
+          "timeouts": 1,
+          "win_rate": 0.625,
+          "wins": 5
+        }
+      },
+      "strategy_id": "AUDUSD_SELL_ONLY_V1",
+      "verdict": "INSUFFICIENT_60_DAY_EVIDENCE"
+    },
+    {
+      "baseline": {
+        "ambiguous": 0,
+        "episodes": 91,
+        "episodes_per_30_days": 45.5,
+        "expectancy_r": -0.3456521739131651,
+        "losses": 56,
+        "maximum_loss_streak": 9,
+        "net_r": -27.997826086966374,
+        "profit_factor": 0.5524965542801328,
+        "resolved": 81,
+        "resolved_per_30_days": 40.5,
+        "timeouts": 10,
+        "win_rate": 0.30864197530864196,
+        "wins": 25
+      },
+      "candidate": {
+        "conditional_rules": {
+          "AGAINST": {
+            "enabled": true,
+            "filters": [
+              {
+                "feature": "rr_raw",
+                "operator": "<=",
+                "threshold": 0.87777778
+              },
+              {
+                "feature": "volatility_ratio",
+                "operator": ">=",
+                "threshold": 0.9915683
+              }
+            ]
+          },
+          "LATERAL": {
+            "enabled": true,
+            "filters": [
+              {
+                "feature": "buy_score",
+                "operator": ">=",
+                "threshold": 39.0
+              },
+              {
+                "feature": "direction_edge",
+                "operator": "<=",
+                "threshold": 72.0
+              }
+            ]
+          },
+          "WITH": {
+            "enabled": true,
+            "filters": [
+              {
+                "feature": "rr_raw",
+                "operator": ">=",
+                "threshold": 0.57777778
+              },
+              {
+                "feature": "m15_gap_atr",
+                "operator": "<=",
+                "threshold": 1.04489246
+              }
+            ]
+          }
+        },
+        "definition_sha256": "94fd1c7f801c6060b724a6ac525400f0e19cafa3997c9ae1b7fcfff230c388a5",
+        "direction": "BUY",
+        "instrument": "USD_CAD",
+        "minimum_by_regime": {
+          "DOWN": 4,
+          "LATERAL": 6,
+          "UP": 2,
+          "WEAK_DOWN": 5,
+          "WEAK_UP": 8
+        },
+        "minimum_resolved": 25,
+        "minimum_win_rate_exclusive": 0.5,
+        "paper_only": true,
+        "production_authority": false,
+        "trend_version": "H1_H4_EMA20_50_ATR14_V1",
+        "window": {
+          "days": 60,
+          "end": "2026-09-16T16:36:00+00:00",
+          "start": "2026-07-18T16:36:00+00:00"
+        }
+      },
+      "direction": "BUY",
+      "evaluated_candidates": 83631,
+      "final_gates": {
+        "positive_expectancy_safety": true,
+        "regime_minima": true,
+        "win_rate_strictly_above_50": true
+      },
+      "instrument": "USD_CAD",
+      "metrics": {
+        "ambiguous": 0,
+        "episodes": 32,
+        "episodes_per_30_days": 16.0,
+        "expectancy_r": 0.4372397134765301,
+        "losses": 11,
+        "maximum_loss_streak": 3,
+        "net_r": 12.679951690819374,
+        "profit_factor": 2.0338749384536623,
+        "resolved": 29,
+        "resolved_per_30_days": 14.5,
+        "timeouts": 3,
+        "win_rate": 0.6206896551724138,
+        "wins": 18
+      },
+      "minimum_by_regime": {
+        "DOWN": 4,
+        "LATERAL": 6,
+        "UP": 2,
+        "WEAK_DOWN": 5,
+        "WEAK_UP": 8
+      },
+      "resolved_by_regime": {
+        "DOWN": 4,
+        "LATERAL": 7,
+        "UP": 2,
+        "WEAK_DOWN": 8,
+        "WEAK_UP": 8
+      },
+      "role_metrics": {
+        "AGAINST": {
+          "ambiguous": 0,
+          "episodes": 13,
+          "episodes_per_30_days": 6.5,
+          "expectancy_r": 0.34351851851848353,
+          "losses": 5,
+          "maximum_loss_streak": 2,
+          "net_r": 4.122222222221803,
+          "profit_factor": 1.734653465346379,
+          "resolved": 12,
+          "resolved_per_30_days": 6.0,
+          "timeouts": 1,
+          "win_rate": 0.5833333333333334,
+          "wins": 7
+        },
+        "LATERAL": {
+          "ambiguous": 0,
+          "episodes": 8,
+          "episodes_per_30_days": 4.0,
+          "expectancy_r": 0.665079365079284,
+          "losses": 2,
+          "maximum_loss_streak": 2,
+          "net_r": 4.655555555554988,
+          "profit_factor": 3.0742574257419566,
+          "resolved": 7,
+          "resolved_per_30_days": 3.5,
+          "timeouts": 1,
+          "win_rate": 0.7142857142857143,
+          "wins": 5
+        },
+        "WITH": {
+          "ambiguous": 0,
+          "episodes": 11,
+          "episodes_per_30_days": 5.5,
+          "expectancy_r": 0.3902173913042583,
+          "losses": 4,
+          "maximum_loss_streak": 4,
+          "net_r": 3.902173913042583,
+          "profit_factor": 1.8850599901382545,
+          "resolved": 10,
+          "resolved_per_30_days": 5.0,
+          "timeouts": 1,
+          "win_rate": 0.6,
+          "wins": 6
+        }
+      },
+      "strategy_id": "USDCAD_BUY_ONLY_V1",
+      "verdict": "PAPER_CANDIDATE"
+    },
+    {
+      "baseline": {
+        "ambiguous": 0,
+        "episodes": 90,
+        "episodes_per_30_days": 45.0,
+        "expectancy_r": -0.22565157750354964,
+        "losses": 52,
+        "maximum_loss_streak": 10,
+        "net_r": -18.27777777778752,
+        "profit_factor": 0.6870243531201253,
+        "resolved": 81,
+        "resolved_per_30_days": 40.5,
+        "timeouts": 9,
+        "win_rate": 0.35802469135802467,
+        "wins": 29
+      },
+      "candidate": {
+        "conditional_rules": {
+          "AGAINST": {
+            "enabled": false,
+            "filters": []
+          },
+          "LATERAL": {
+            "enabled": true,
+            "filters": [
+              {
+                "feature": "room_to_barrier_r",
+                "operator": ">=",
+                "threshold": 0.22222222
+              },
+              {
+                "feature": "m15_gap_atr",
+                "operator": ">=",
+                "threshold": -0.38550405
+              }
+            ]
+          },
+          "WITH": {
+            "enabled": true,
+            "filters": [
+              {
+                "feature": "extension_atr",
+                "operator": ">=",
+                "threshold": 0.64714817
+              },
+              {
+                "feature": "m1_momentum",
+                "operator": ">=",
+                "threshold": -0.00021666
+              }
+            ]
+          }
+        },
+        "definition_sha256": "5cf41fafc6033aa2a01b7aec9b24a9cdcd4e71fc5c06568eb4e981c70ab030dd",
+        "direction": "SELL",
+        "instrument": "USD_CAD",
+        "minimum_by_regime": {
+          "DOWN": 8,
+          "LATERAL": 6,
+          "UP": 1,
+          "WEAK_DOWN": 8,
+          "WEAK_UP": 6
+        },
+        "minimum_resolved": 29,
+        "minimum_win_rate_exclusive": 0.5,
+        "paper_only": true,
+        "production_authority": false,
+        "trend_version": "H1_H4_EMA20_50_ATR14_V1",
+        "window": {
+          "days": 60,
+          "end": "2026-09-16T16:36:00+00:00",
+          "start": "2026-07-18T16:36:00+00:00"
+        }
+      },
+      "direction": "SELL",
+      "evaluated_candidates": 82233,
+      "final_gates": {
+        "positive_expectancy_safety": true,
+        "regime_minima": false,
+        "win_rate_strictly_above_50": true
+      },
+      "instrument": "USD_CAD",
+      "metrics": {
+        "ambiguous": 0,
+        "episodes": 23,
+        "episodes_per_30_days": 11.5,
+        "expectancy_r": 0.48080808080799786,
+        "losses": 8,
+        "maximum_loss_streak": 5,
+        "net_r": 10.577777777775953,
+        "profit_factor": 2.187032418952262,
+        "resolved": 22,
+        "resolved_per_30_days": 11.0,
+        "timeouts": 1,
+        "win_rate": 0.6363636363636364,
+        "wins": 14
+      },
+      "minimum_by_regime": {
+        "DOWN": 8,
+        "LATERAL": 6,
+        "UP": 1,
+        "WEAK_DOWN": 8,
+        "WEAK_UP": 6
+      },
+      "resolved_by_regime": {
+        "DOWN": 8,
+        "LATERAL": 6,
+        "WEAK_DOWN": 8
+      },
+      "role_metrics": {
+        "AGAINST": {
+          "ambiguous": 0,
+          "episodes": 0,
+          "episodes_per_30_days": 0.0,
+          "expectancy_r": null,
+          "losses": 0,
+          "maximum_loss_streak": 0,
+          "net_r": 0,
+          "profit_factor": null,
+          "resolved": 0,
+          "resolved_per_30_days": 0.0,
+          "timeouts": 0,
+          "win_rate": null,
+          "wins": 0
+        },
+        "LATERAL": {
+          "ambiguous": 0,
+          "episodes": 6,
+          "episodes_per_30_days": 3.0,
+          "expectancy_r": 0.549999999999963,
+          "losses": 2,
+          "maximum_loss_streak": 2,
+          "net_r": 3.2999999999997778,
+          "profit_factor": 2.492462311557572,
+          "resolved": 6,
+          "resolved_per_30_days": 3.0,
+          "timeouts": 0,
+          "win_rate": 0.6666666666666666,
+          "wins": 4
+        },
+        "WITH": {
+          "ambiguous": 0,
+          "episodes": 17,
+          "episodes_per_30_days": 8.5,
+          "expectancy_r": 0.4548611111110109,
+          "losses": 6,
+          "maximum_loss_streak": 5,
+          "net_r": 7.2777777777761745,
+          "profit_factor": 2.0862354892201687,
+          "resolved": 16,
+          "resolved_per_30_days": 8.0,
+          "timeouts": 1,
+          "win_rate": 0.625,
+          "wins": 10
+        }
+      },
+      "strategy_id": "USDCAD_SELL_ONLY_V1",
+      "verdict": "INSUFFICIENT_60_DAY_EVIDENCE"
+    }
+  ],
+  "schema_version": 1,
+  "selection_is_out_of_sample": false,
+  "source_commit": "c16910a23430b91372140aed6cfa32b8b0fea67e",
+  "split": null,
+  "strategy_count": 10,
+  "trend_version": "H1_H4_EMA20_50_ATR14_V1",
+  "window": {
+    "days": 60,
+    "end": "2026-09-16T16:36:00+00:00",
+    "start": "2026-07-18T16:36:00+00:00"
+  }
+}
