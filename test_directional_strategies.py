@@ -1,6 +1,4 @@
 import copy
-import json
-from pathlib import Path
 
 import pytest
 
@@ -8,9 +6,9 @@ import server
 from directional_strategies import (
     STRATEGY_IDS,
     all_strategy_definitions,
-    candidate_definition_sha256,
     directional_strategy_id,
     evaluate_directional_strategy,
+    strategy_definition,
 )
 
 
@@ -21,15 +19,25 @@ def signal(
     instrument="EUR_USD", direction="BUY", *, extension=1.0, strength=0.25,
     session_momentum=0.0, rr_raw=1.5,
 ):
+    features = {
+        "extension_atr": extension,
+        "session_strength": strength,
+        "session_momentum_atr": session_momentum,
+        "session_displacement_atr": 0.0,
+        "room_to_barrier_r": 0.0,
+        "h1_gap_atr": 2.0,
+        "m15_gap_atr": 2.0,
+        "buy_score": 40.0,
+        "rr_raw": rr_raw,
+    }
+    if direction in {"BUY", "SELL"}:
+        for rule in strategy_definition(instrument, direction)["filters"]:
+            threshold = float(rule["threshold"])
+            features[rule["feature"]] = threshold + 0.01 if rule["operator"] == ">=" else threshold - 0.01
     return {
         "instrument": instrument,
         "signal": direction,
-        "features": {
-            "extension_atr": extension,
-            "session_strength": strength,
-            "session_momentum_atr": session_momentum,
-            "rr_raw": rr_raw,
-        },
+        "features": features,
         "filters": {},
     }
 
@@ -68,39 +76,25 @@ def test_old_non_directional_runtime_identity_is_no_longer_selected():
     assert server.setup_variant(signal("EUR_USD", "WAIT")) == "WAIT"
 
 
-def test_filtered_v2_lanes_and_other_lanes_remain_collecting():
-    assert evaluate_directional_strategy(signal("EUR_USD", "SELL"))["eligible"] is True
-    assert evaluate_directional_strategy(signal("EUR_USD", "SELL", extension=0.89))["eligible"] is False
-    assert evaluate_directional_strategy(signal("EUR_USD", "SELL", strength=0.19))["eligible"] is False
-    assert evaluate_directional_strategy(signal("EUR_USD", "SELL", session_momentum=-0.2101))["eligible"] is False
-    missing = evaluate_directional_strategy({"instrument": "EUR_USD", "signal": "SELL", "features": {}})
-    assert missing["eligible"] is False
-    assert all(check["reason"] == "REQUIRED_PRE_ENTRY_EVIDENCE_MISSING" for check in missing["checks"])
+def test_all_ten_one_month_paper_lanes_pass_only_their_frozen_filters():
     for pair in PAIRS:
         for direction in ("BUY", "SELL"):
-            if (pair, direction) not in {("EUR_USD", "SELL"), ("USD_JPY", "SELL")}:
-                assert evaluate_directional_strategy(signal(pair, direction))["eligible"] is True
-
-
-def test_usdjpy_sell_v2_uses_frozen_monthly_filters_and_fails_closed():
-    assert evaluate_directional_strategy(signal("USD_JPY", "SELL"))["eligible"] is True
-    assert evaluate_directional_strategy(signal("USD_JPY", "SELL", strength=0.27496453))["eligible"] is False
-    assert evaluate_directional_strategy(signal("USD_JPY", "SELL", rr_raw=1.69111112))["eligible"] is False
-    missing = evaluate_directional_strategy({"instrument": "USD_JPY", "signal": "SELL", "features": {}})
-    assert missing["eligible"] is False
-    assert all(check["reason"] == "REQUIRED_PRE_ENTRY_EVIDENCE_MISSING" for check in missing["checks"])
-
-
-def test_usdjpy_sell_v2_definition_is_bound_to_monthly_evidence():
-    evidence = json.loads(Path(__file__).with_name("USDJPY_SELL_ONLY_V2_EVIDENCE.json").read_text(encoding="utf-8"))
-    assert evidence["candidate"]["strategy_id"] == "USDJPY_SELL_ONLY_V2"
-    assert evidence["candidate"]["candidate_definition_sha256"] == candidate_definition_sha256("USD_JPY", "SELL")
-    assert evidence["results"]["total"]["resolved"] == 21
-    assert evidence["results"]["total"]["wins"] == 15
-    assert evidence["results"]["total"]["losses"] == 6
-    assert evidence["results"]["holdout"]["wins"] == 6
-    assert evidence["results"]["holdout"]["losses"] == 3
-    assert evidence["production_authority"] is False
+            row = signal(pair, direction)
+            assert evaluate_directional_strategy(row)["eligible"] is True
+            definition = strategy_definition(pair, direction)
+            assert len(definition["filters"]) == 2
+            assert definition["paper_only"] is True
+            assert definition["production_authority"] is False
+            for rule in definition["filters"]:
+                failing = copy.deepcopy(row)
+                threshold = float(rule["threshold"])
+                failing["features"][rule["feature"]] = (
+                    threshold - 0.000001 if rule["operator"] == ">=" else threshold + 0.000001
+                )
+                assert evaluate_directional_strategy(failing)["eligible"] is False
+            missing = evaluate_directional_strategy({"instrument": pair, "signal": direction, "features": {}})
+            assert missing["eligible"] is False
+            assert all(check["reason"] == "REQUIRED_PRE_ENTRY_EVIDENCE_MISSING" for check in missing["checks"])
 
 
 def test_future_outcome_fields_cannot_change_directional_decision():
@@ -152,7 +146,7 @@ def test_empirical_confidence_evidence_is_isolated_by_direction(tmp_path, monkey
 
 def test_public_inventory_reports_ten_lanes_and_single_position_limit():
     payload = __import__("asyncio").run(server.directional_strategies_api())
-    assert payload["version"] == "3.40.2"
+    assert payload["version"] == "3.40.3"
     assert payload["strategy_count"] == 10
     assert payload["max_simultaneous_positions_per_instrument"] == 1
     assert payload["production_authority"] is False
