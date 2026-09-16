@@ -2,6 +2,14 @@ name: Directional One-Month Min-10 PAPER Research
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/directional-one-month-min10.yml
+      - directional_month_optimizer.py
+      - run_directional_month_optimization.py
+      - test_directional_month_optimizer.py
   schedule:
     - cron: "17 2 * * 1"
 
