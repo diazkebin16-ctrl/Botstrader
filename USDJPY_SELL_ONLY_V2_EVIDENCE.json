@@ -1,0 +1,99 @@
+{
+  "schema_version": 1,
+  "research_window": {
+    "start": "2026-08-15T00:00:00Z",
+    "end": "2026-09-14T23:59:59Z",
+    "discovery_fraction": 0.6,
+    "purge_minutes": 240,
+    "embargo_minutes": 30
+  },
+  "dataset": {
+    "source": "OANDA Practice",
+    "price_components": ["MID", "BID", "ASK"],
+    "m1_candles": 41686,
+    "sha256": "44b1c02361a1575d08d125036c1880d4740f33a9e366fc34cce1a6ae97726c1d"
+  },
+  "candidate": {
+    "strategy_id": "USDJPY_SELL_ONLY_V2",
+    "instrument": "USD_JPY",
+    "direction": "SELL",
+    "filters": [
+      {"feature": "session_strength", "operator": "<=", "threshold": 0.27496452},
+      {"feature": "rr_raw", "operator": "<=", "threshold": 1.69111111}
+    ],
+    "research_rules_sha256": "967036165a7ecd256f3e041cffce58d967bb402ed1d075db26bcd5ce7e538457",
+    "candidate_definition_sha256": "409ecb82384196ef3edcec8fb4c910047301f936c126d31fd9ff8f5f39679ca4",
+    "paper_only": true,
+    "production_authority": false
+  },
+  "results": {
+    "baseline_total": {
+      "resolved": 204,
+      "wins": 76,
+      "losses": 128,
+      "timeouts": 10,
+      "ambiguous": 0,
+      "win_rate": 0.37254901960784315,
+      "net_r": -35.205364341690775
+    },
+    "discovery": {
+      "resolved": 12,
+      "wins": 9,
+      "losses": 3,
+      "timeouts": 1,
+      "ambiguous": 0,
+      "win_rate": 0.75,
+      "net_r": 9.333333333331122,
+      "expectancy_r": 0.7777777777775935,
+      "profit_factor": 3.8378378378370743,
+      "maximum_loss_streak": 1
+    },
+    "holdout": {
+      "resolved": 9,
+      "wins": 6,
+      "losses": 3,
+      "timeouts": 0,
+      "ambiguous": 0,
+      "win_rate": 0.6666666666666666,
+      "net_r": 4.953295787274392,
+      "expectancy_r": 0.5503661985860435,
+      "profit_factor": 2.479286467397789,
+      "maximum_loss_streak": 1
+    },
+    "total": {
+      "resolved": 21,
+      "wins": 15,
+      "losses": 6,
+      "timeouts": 1,
+      "ambiguous": 0,
+      "win_rate": 0.7142857142857143,
+      "net_r": 14.286629120605514,
+      "expectancy_r": 0.6803156724097864,
+      "profit_factor": 3.152468013717363,
+      "maximum_loss_streak": 1
+    }
+  },
+  "gates": {
+    "minimum_20_resolved": true,
+    "total_win_rate_above_50": true,
+    "holdout_minimum_8_resolved": true,
+    "holdout_win_rate_above_50": true,
+    "expectancy_positive": true,
+    "net_positive": true,
+    "profit_factor_above_one": true,
+    "look_ahead": false
+  },
+  "other_lane_decisions": {
+    "EURUSD_BUY_ONLY_V1": "HOLDOUT_REJECTED",
+    "EURUSD_SELL_ONLY_V2": "INSUFFICIENT_BASELINE_EVIDENCE",
+    "GBPUSD_BUY_ONLY_V1": "HOLDOUT_REJECTED",
+    "GBPUSD_SELL_ONLY_V1": "HOLDOUT_REJECTED",
+    "USDJPY_BUY_ONLY_V1": "HOLDOUT_REJECTED",
+    "AUDUSD_BUY_ONLY_V1": "NO_CANDIDATE_BEFORE_HOLDOUT",
+    "AUDUSD_SELL_ONLY_V1": "HOLDOUT_REJECTED",
+    "USDCAD_BUY_ONLY_V1": "HOLDOUT_REJECTED_INSUFFICIENT_HOLDOUT",
+    "USDCAD_SELL_ONLY_V1": "HOLDOUT_REJECTED_INSUFFICIENT_HOLDOUT"
+  },
+  "research_report_sha256": "f48c00d820194eb3e92c74daa70d93751c14c3cf5ede87e4076a109516d53957",
+  "production_authority": false
+}
