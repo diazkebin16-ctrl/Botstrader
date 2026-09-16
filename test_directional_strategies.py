@@ -17,7 +17,7 @@ PAIRS = ("EUR_USD", "GBP_USD", "USD_JPY", "AUD_USD", "USD_CAD")
 
 def signal(
     instrument="EUR_USD", direction="BUY", *, extension=1.0, strength=0.25,
-    session_momentum=0.0, rr_raw=1.5,
+    session_momentum=0.0, rr_raw=1.5, role=None,
 ):
     features = {
         "extension_atr": extension,
@@ -31,7 +31,17 @@ def signal(
         "rr_raw": rr_raw,
     }
     if direction in {"BUY", "SELL"}:
-        for rule in strategy_definition(instrument, direction)["filters"]:
+        definition = strategy_definition(instrument, direction)
+        rules = definition["filters"]
+        if "conditional_rules" in definition:
+            from major_trend import TREND_VERSION
+            policies = definition["conditional_rules"]
+            role = role or next(key for key, policy in policies.items() if policy["enabled"])
+            regime = "LATERAL" if role == "LATERAL" else (
+                "UP" if (direction == "BUY") == (role == "WITH") else "DOWN")
+            features.update(major_trend_regime=regime, major_trend_version=TREND_VERSION)
+            rules = policies[role]["filters"]
+        for rule in rules:
             threshold = float(rule["threshold"])
             features[rule["feature"]] = threshold + 0.01 if rule["operator"] == ">=" else threshold - 0.01
     return {
@@ -76,25 +86,29 @@ def test_old_non_directional_runtime_identity_is_no_longer_selected():
     assert server.setup_variant(signal("EUR_USD", "WAIT")) == "WAIT"
 
 
-def test_all_ten_one_month_paper_lanes_pass_only_their_frozen_filters():
+def test_all_ten_paper_lanes_enforce_their_current_frozen_filters():
     for pair in PAIRS:
         for direction in ("BUY", "SELL"):
-            row = signal(pair, direction)
-            assert evaluate_directional_strategy(row)["eligible"] is True
             definition = strategy_definition(pair, direction)
-            assert len(definition["filters"]) == 2
             assert definition["paper_only"] is True
             assert definition["production_authority"] is False
-            for rule in definition["filters"]:
-                failing = copy.deepcopy(row)
-                threshold = float(rule["threshold"])
-                failing["features"][rule["feature"]] = (
-                    threshold - 0.000001 if rule["operator"] == ">=" else threshold + 0.000001
-                )
-                assert evaluate_directional_strategy(failing)["eligible"] is False
+            policies = definition.get("conditional_rules") or {None: {"enabled": True, "filters": definition["filters"]}}
+            for role, policy in policies.items():
+                if not policy["enabled"]:
+                    continue
+                row = signal(pair, direction, role=role)
+                assert evaluate_directional_strategy(row)["eligible"] is True
+                for rule in policy["filters"]:
+                    failing = copy.deepcopy(row)
+                    threshold = float(rule["threshold"])
+                    failing["features"][rule["feature"]] = (
+                        threshold - 0.000001 if rule["operator"] == ">=" else threshold + 0.000001
+                    )
+                    assert evaluate_directional_strategy(failing)["eligible"] is False
             missing = evaluate_directional_strategy({"instrument": pair, "signal": direction, "features": {}})
             assert missing["eligible"] is False
-            assert all(check["reason"] == "REQUIRED_PRE_ENTRY_EVIDENCE_MISSING" for check in missing["checks"])
+            expected = "NO_QUALIFIED_TREND_EVIDENCE" if "conditional_rules" in definition else "REQUIRED_PRE_ENTRY_EVIDENCE_MISSING"
+            assert missing["checks"][0]["reason"] == expected
 
 
 def test_future_outcome_fields_cannot_change_directional_decision():
@@ -146,11 +160,12 @@ def test_empirical_confidence_evidence_is_isolated_by_direction(tmp_path, monkey
 
 def test_public_inventory_reports_ten_lanes_and_single_position_limit():
     payload = __import__("asyncio").run(server.directional_strategies_api())
-    assert payload["version"] == "3.40.3"
+    assert payload["version"] == "3.41.0"
     assert payload["strategy_count"] == 10
     assert payload["max_simultaneous_positions_per_instrument"] == 1
     assert payload["production_authority"] is False
 
 
 def test_directional_registry_is_covered_by_runtime_integrity_manifest():
-    assert "directional_strategies.py" in server.security_manager._file_hashes()
+    hashes = server.security_manager._file_hashes()
+    assert {"directional_strategies.py", "major_trend.py", "trend_paper_activation.py"} <= hashes.keys()

@@ -26,7 +26,7 @@ from replay_validation import ReplayValidationConfig, chronological_holdout, wal
 from legacy_v331_scoring import legacy_v331_score
 
 
-BAR_SECONDS = {"M1": 60, "M5": 300, "M15": 900, "H1": 3600}
+BAR_SECONDS = {"M1": 60, "M5": 300, "M15": 900, "H1": 3600, "H4": 14400}
 
 
 def _dt(v: Any) -> datetime:
@@ -91,6 +91,8 @@ class ReplayConfig:
     episode_gap_minutes: int = 15
     save_m1_rejection_shadow: bool = False
     save_target_population: bool = False
+    adaptive_major_trend: bool = False
+    temporal_validation: bool = True
     execution: HistoricalExecutionConfig = HistoricalExecutionConfig()
     validation: ReplayValidationConfig = ReplayValidationConfig()
 
@@ -370,6 +372,12 @@ def replay_history(server: Any, candles_by_tf: Mapping[str,Sequence[Mapping[str,
     raw={v.name:[] for v in variants}; rejection={v.name:{} for v in variants}
     m1_rejected={v.name:[] for v in variants}
     m1_all=store.data["M1"]
+    exposure = {}
+    trend_cache = {}
+    if config.adaptive_major_trend:
+        from major_trend import major_trend, trend_features
+        if not store.data.get("H4"):
+            raise ValueError("Adaptive research requires native H4 candles")
     for bar in m1_all:
         ts=bar["t"]
         if ts<start or ts>end:continue
@@ -377,11 +385,24 @@ def replay_history(server: Any, candles_by_tf: Mapping[str,Sequence[Mapping[str,
         h1=store.history("H1",decision_time,config.h1_history);m15=store.history("M15",decision_time,config.m15_history)
         m5=store.history("M5",decision_time,config.m5_history);m1=store.history("M1",decision_time,config.m1_history)
         if min(len(h1),len(m15),len(m5),len(m1))<55:continue
+        trend = None
+        if config.adaptive_major_trend:
+            h4 = store.history("H4", decision_time, 140)
+            key = (h1[-1]["t"], h4[-1]["t"] if h4 else None)
+            if key not in trend_cache:
+                trend_cache[key] = major_trend(h1, h4, decision_time)
+            trend = trend_cache[key]
+            if not trend["available"]:
+                raise ValueError("H1/H4 evidence missing during frozen window")
+            if fixed_entry_gate(decision_time)["allowed"]:
+                exposure[trend["regime"]] = exposure.get(trend["regime"], 0) + 1
         # Technical hypotheses are invariant across research variants; compute them once.
         hypotheses=(server._direction_hypothesis(h1,m15,m5,m1,inst,"BUY"),
                     server._direction_hypothesis(h1,m15,m5,m1,inst,"SELL"))
         for v in variants:
             row=replay_snapshot(server,h1,m15,m5,m1,inst,v,hypotheses=hypotheses)
+            if trend is not None:
+                row["features"].update(trend_features(trend))
             planned_entry=planned_entry_time(_dt(row["candle_ts"]), config.execution.latency_bars)
             operational_gate=fixed_entry_gate(planned_entry)
             row["planned_entry_ts"]=planned_entry.isoformat()
@@ -428,18 +449,22 @@ def replay_history(server: Any, candles_by_tf: Mapping[str,Sequence[Mapping[str,
         for r in episodes:
             resolved.append(_resolve_episode(store,r,inst,config))
 
-        holdout=chronological_holdout(resolved,horizon_bars=config.horizon_bars,config=config.validation)
-        wf=walk_forward_splits(resolved,horizon_bars=config.horizon_bars,config=config.validation)
-        holdout_report={k:_metrics(holdout[k]) for k in ("discovery","validation","test")}
-        holdout_report.update({"status":holdout["status"],"purged":holdout["purged"],"embargoed":holdout["embargoed"],
-                               "boundaries":holdout.get("boundaries",{})})
-        wf_report=[]
-        for i,fold in enumerate(wf,1):
-            wf_report.append({"fold":i,"boundary":fold["boundary"],"purged":fold["purged"],"embargoed":fold["embargoed"],
-                              "train_metrics":_metrics(fold["train"]),"test_metrics":_metrics(fold["test"])})
+        holdout_report = None
+        wf_report = []
+        if config.temporal_validation:
+            holdout=chronological_holdout(resolved,horizon_bars=config.horizon_bars,config=config.validation)
+            wf=walk_forward_splits(resolved,horizon_bars=config.horizon_bars,config=config.validation)
+            holdout_report={k:_metrics(holdout[k]) for k in ("discovery","validation","test")}
+            holdout_report.update({"status":holdout["status"],"purged":holdout["purged"],"embargoed":holdout["embargoed"],
+                                   "boundaries":holdout.get("boundaries",{})})
+            wf_report=[]
+            for i,fold in enumerate(wf,1):
+                wf_report.append({"fold":i,"boundary":fold["boundary"],"purged":fold["purged"],"embargoed":fold["embargoed"],
+                                  "train_metrics":_metrics(fold["train"]),"test_metrics":_metrics(fold["test"])})
         reports[v.name]={"raw_snapshots":len(raw[v.name]),"actionable_snapshots":len(actionable),"independent_episodes":len(episodes),
                          "rejections":rejection[v.name],"metrics":_metrics(resolved),"holdout":holdout_report,
                          "walk_forward":wf_report,"episodes":resolved,
+                         "major_trend_exposure_minutes": exposure,
                          "target_population":{
                              "enabled":bool(config.save_target_population),
                              "scope":"RESEARCH_ONLY_SELECTED_DIRECTION_BEFORE_STRATEGIC_GATES",
@@ -474,7 +499,7 @@ def replay_history(server: Any, candles_by_tf: Mapping[str,Sequence[Mapping[str,
                            "trade_outcome_lifetime":"TP_OR_SL_OR_16:50_AMERICA_NEW_YORK",
                            "data_coverage_horizon_bars":config.horizon_bars,
                            "data_coverage_horizon_is_trade_timeout":False,
-                           "validation":"CHRONOLOGICAL_HOLDOUT_PLUS_WALK_FORWARD_WITH_PURGING_AND_EMBARGO",
+                           "validation":("CHRONOLOGICAL_HOLDOUT_PLUS_WALK_FORWARD_WITH_PURGING_AND_EMBARGO" if config.temporal_validation else "ONE_WINDOW_NO_TEMPORAL_SPLIT"),
                            "embargo_minutes":config.validation.embargo_minutes,
                            "scope":"DETERMINISTIC_STRATEGY_CORE_NOT_PRODUCTION_ML_OR_MUTABLE_GATES",
                            "limitations":["M1 OHLC cannot reconstruct intrabar tick ordering; dual TP/SL touches remain AMBIGUOUS",

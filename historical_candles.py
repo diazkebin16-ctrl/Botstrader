@@ -5,7 +5,7 @@ from typing import Any, Dict, List
 import asyncio, json, os
 import httpx
 
-DUR={"M1":60,"M5":300,"M15":900,"H1":3600}
+DUR={"M1":60,"M5":300,"M15":900,"H1":3600,"H4":14400}
 RETRYABLE_STATUS={429,500,502,503,504}
 
 def _dt(v):

@@ -1,15 +1,18 @@
-name: Directional One-Month Min-10 PAPER Research
+name: Directional Adaptive 60-Day PAPER Research
 
 on:
   workflow_dispatch:
   push:
     branches:
-      - main
+      - codex/adaptive-60-day-trends
     paths:
       - .github/workflows/directional-one-month-min10.yml
-      - directional_month_optimizer.py
-      - run_directional_month_optimization.py
-      - test_directional_month_optimizer.py
+      - directional_trend_optimizer.py
+      - run_directional_trend_optimization.py
+      - test_directional_trend_optimizer.py
+      - major_trend.py
+      - historical_replay.py
+      - historical_candles.py
   schedule:
     - cron: "17 2 * * 1"
 
@@ -17,14 +20,35 @@ permissions:
   contents: write
 
 concurrency:
-  group: directional-one-month-min10
-  cancel-in-progress: false
+  group: directional-adaptive-60d
+  cancel-in-progress: true
 
 jobs:
-  optimize:
-    if: github.actor != 'github-actions[bot]'
+  window:
     runs-on: ubuntu-latest
-    timeout-minutes: 240
+    outputs:
+      start: ${{ steps.freeze.outputs.start }}
+      end: ${{ steps.freeze.outputs.end }}
+    steps:
+      - name: Freeze one shared 60-day window
+        id: freeze
+        run: |
+          python - <<'PY'
+          import os
+          from datetime import datetime, timedelta, timezone
+          end = datetime.now(timezone.utc).replace(second=0, microsecond=0) - timedelta(minutes=1)
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as handle:
+              handle.write(f'start={(end-timedelta(days=60)).isoformat()}\nend={end.isoformat()}\n')
+          PY
+
+  replay:
+    needs: window
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        instrument: [EUR_USD, GBP_USD, USD_JPY, AUD_USD, USD_CAD]
     env:
       RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
       BOTS_V3_PRODUCTION_AUTHORITY: "false"
@@ -35,73 +59,127 @@ jobs:
       PRIMARY_OANDA_ENV: practice
       PRODUCTION_AUTHORIZED: "false"
       OANDA: https://api-fxpractice.oanda.com
-
+      TREND60_WINDOW_START: ${{ needs.window.outputs.start }}
+      TREND60_WINDOW_END: ${{ needs.window.outputs.end }}
+      TREND60_INSTRUMENT: ${{ matrix.instrument }}
     steps:
-      - name: Checkout exact main
+      - name: Configure isolated output path
+        run: echo "DIRECTIONAL_TREND_ROOT=$RUNNER_TEMP/directional_trend_60d" >> "$GITHUB_ENV"
+      - name: Checkout triggering revision
         uses: actions/checkout@v4
         with:
-          ref: main
-          fetch-depth: 0
-          persist-credentials: true
-
+          ref: ${{ github.sha }}
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-
-      - name: Configure isolated output path
-        run: echo "DIRECTIONAL_MONTH_ROOT=$RUNNER_TEMP/directional_one_month_min10" >> "$GITHUB_ENV"
-
+          cache: pip
       - name: Install research dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt -r requirements-research.txt pytest
+          pip install -r requirements.txt -r requirements-research.txt
           npm install -g @railway/cli@5.23.3
-
-      - name: Validate single-window optimizer
-        run: python -m pytest -q test_directional_month_optimizer.py
-
       - name: Import PAPER credentials securely
         run: python automation_v3_railway_adapter.py export-runtime
+      - name: Replay this pair over the complete shared 60 days
+        run: python run_directional_trend_optimization.py
+      - name: Preserve reproducible pair evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: trend60-replay-${{ matrix.instrument }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/directional_trend_60d/${{ matrix.instrument }}_replay.json
+          if-no-files-found: error
+          retention-days: 30
 
-      - name: Run all ten PAPER strategies over one 30-day window
-        run: python run_directional_month_optimization.py
-
+  optimize:
+    needs: [window, replay]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      TREND60_WINDOW_START: ${{ needs.window.outputs.start }}
+      TREND60_WINDOW_END: ${{ needs.window.outputs.end }}
+      TREND60_AGGREGATE_ONLY: "true"
+    steps:
+      - name: Configure isolated output path
+        run: echo "DIRECTIONAL_TREND_ROOT=$RUNNER_TEMP/directional_trend_60d" >> "$GITHUB_ENV"
+      - name: Checkout triggering revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install selector dependencies
+        run: pip install -r requirements.txt -r requirements-research.txt pytest
+      - name: Validate causal selection and activation
+        run: python -m pytest -q test_directional_trend_optimizer.py
+      - name: Collect all five complete-window replays
+        uses: actions/download-artifact@v4
+        with:
+          pattern: trend60-replay-*-${{ github.run_id }}
+          path: ${{ runner.temp }}/directional_trend_60d
+          merge-multiple: true
+      - name: Fit all ten strategies on their complete 60-day samples
+        run: python run_directional_trend_optimization.py
       - name: Record governed evidence
-        shell: bash
         run: |
-          cp "$DIRECTIONAL_MONTH_ROOT/DIRECTIONAL_ONE_MONTH_MIN10_EVIDENCE.json" DIRECTIONAL_ONE_MONTH_MIN10_EVIDENCE.json
+          cp "$DIRECTIONAL_TREND_ROOT/DIRECTIONAL_TREND_60D_EVIDENCE.json" DIRECTIONAL_TREND_60D_EVIDENCE.json
           git config user.name "Botstrader PAPER Research"
           git config user.email "research@users.noreply.github.com"
-          git add DIRECTIONAL_ONE_MONTH_MIN10_EVIDENCE.json
+          git add DIRECTIONAL_TREND_60D_EVIDENCE.json
           git diff --cached --check
-          git commit -m "Record one-month min-10 PAPER evidence" || true
-          git push origin HEAD:research/one-month-min10-evidence
-
-      - name: Upload evidence
+          git diff --cached --quiet || git commit -m "Record adaptive 60-day PAPER evidence"
+          git push origin "HEAD:refs/heads/research/adaptive-60d-${{ github.run_id }}"
+      - name: Refresh qualified PAPER configuration on main
+        if: github.ref == 'refs/heads/main'
+        run: |
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          from trend_paper_activation import activate_report
+          source = Path(os.environ['DIRECTIONAL_TREND_ROOT']) / 'DIRECTIONAL_TREND_60D_EVIDENCE.json'
+          report = json.loads(source.read_text())
+          if report['all_ten_qualified']:
+              assert activate_report(source) == 10
+          else:
+              print('Not all ten strategies qualified; active PAPER configuration retained.')
+          PY
+          if [ -f ACTIVE_TREND_60D_PAPER.json ]; then
+            git add ACTIVE_TREND_60D_PAPER.json
+            if ! git diff --cached --quiet; then
+              git fetch origin main
+              current_main="$(git rev-parse origin/main)"
+              if [ "$current_main" != "${{ github.sha }}" ]; then
+                echo "Main changed during research; evidence saved, activation deferred."
+                exit 0
+              fi
+              git commit -m "Refresh qualified adaptive 60-day PAPER strategies"
+              git push origin HEAD:refs/heads/main
+            fi
+          fi
+      - name: Upload final evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: directional-one-month-min10-${{ github.run_id }}
-          path: ${{ runner.temp }}/directional_one_month_min10/DIRECTIONAL_ONE_MONTH_MIN10_EVIDENCE.json
+          name: directional-adaptive-60d-${{ github.run_id }}
+          path: ${{ runner.temp }}/directional_trend_60d/DIRECTIONAL_TREND_60D_EVIDENCE.json
           if-no-files-found: warn
           retention-days: 30
-
       - name: Publish compact gate summary
         if: always()
-        shell: bash
         run: |
-          report="$DIRECTIONAL_MONTH_ROOT/DIRECTIONAL_ONE_MONTH_MIN10_EVIDENCE.json"
+          report="$DIRECTIONAL_TREND_ROOT/DIRECTIONAL_TREND_60D_EVIDENCE.json"
           if [ -f "$report" ]; then
             python - "$report" >> "$GITHUB_STEP_SUMMARY" <<'PY'
           import json, sys
-          report = json.load(open(sys.argv[1], encoding="utf-8"))
-          print("## One-month PAPER gate")
+          report = json.load(open(sys.argv[1], encoding='utf-8'))
+          print('## Adaptive 60-day PAPER gate')
           print(f"Approved: {report['approved_count']}/10")
-          for item in report["results"]:
-              candidate = item.get("frozen_candidate") or {}
-              metrics = candidate.get("metrics") or item.get("baseline") or {}
-              print(f"- {item['strategy_id']}: {item['verdict']} — resolved={metrics.get('resolved')} win_rate={metrics.get('win_rate')}")
-          print("\nLIVE authority: disabled")
+          for item in report['results']:
+              metrics = item['metrics']
+              print(f"- {item['strategy_id']}: {item['verdict']} — resolved={metrics['resolved']} win_rate={metrics['win_rate']}")
+          print('\nLIVE authority: disabled')
           PY
           fi
