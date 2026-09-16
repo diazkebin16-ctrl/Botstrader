@@ -38,6 +38,7 @@ def execution_gates_pass(monkeypatch):
     monkeypatch.setattr(server, "evaluate_active_research_rules", lambda r: {"ok": True, "vetoes": []})
     monkeypatch.setattr(server, "strategy_execution_gate", lambda r: {"ok": True})
     monkeypatch.setattr(server, "reentry_guard", lambda r: {"ok": True})
+    monkeypatch.setattr(server, "evaluate_directional_strategy", lambda r: {"eligible": True})
 
 
 def test_mature_usdjpy_paper_signal_uses_rr15_collection_threshold(execution_gates_pass):
