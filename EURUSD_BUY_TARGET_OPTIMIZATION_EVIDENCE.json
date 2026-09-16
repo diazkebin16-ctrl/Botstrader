@@ -1,0 +1,121 @@
+{
+  "schema_version": 1,
+  "status": "HOLDOUT_REJECTED",
+  "production_authority": false,
+  "strategy_id": "EURUSD_BUY_ONLY_V1",
+  "dataset": {
+    "source": "OANDA Practice midpoint/BID/ASK candles",
+    "start": "2026-07-15T00:00:00Z",
+    "end": "2026-09-14T23:59:59Z",
+    "m1_candles": 73282,
+    "bytes": 20335311,
+    "sha256": "28079d1bfd3b27385f022bd693967c58768ad4096534277e23b5b63ca0205eff",
+    "sha_match": true
+  },
+  "target": {
+    "minimum_resolved_per_30_days": 10,
+    "maximum_resolved_per_30_days": 20
+  },
+  "baseline": {
+    "full": {
+      "episodes": 242,
+      "resolved": 196,
+      "wins": 70,
+      "losses": 126,
+      "timeouts": 46,
+      "win_rate": 0.35714285714285715,
+      "net_r": -42.0355555555767,
+      "expectancy_r": -0.2144671201815138
+    },
+    "holdout": {
+      "episodes": 63,
+      "resolved": 47,
+      "wins": 12,
+      "losses": 35,
+      "timeouts": 16,
+      "win_rate": 0.2553191489361702,
+      "net_r": -22.122222222228217,
+      "expectancy_r": -0.470685579196345
+    }
+  },
+  "frozen_candidate": {
+    "rules": [
+      {
+        "feature": "session_momentum_atr",
+        "operator": "<=",
+        "threshold": -1.8478631
+      }
+    ],
+    "definition_sha256": "4b1367eb3ae4a44b586fa44de86f781c4c9e201de57acd329587608b77409188",
+    "discovery": {
+      "resolved": 18,
+      "wins": 10,
+      "losses": 8,
+      "win_rate": 0.5555555555555556,
+      "net_r": 5.0444444444432595,
+      "resolved_per_30_days": 17.419358090531304
+    },
+    "validation": {
+      "resolved": 6,
+      "wins": 5,
+      "losses": 1,
+      "win_rate": 0.8333333333333334,
+      "net_r": 5.866666666666272,
+      "resolved_per_30_days": 11.612905393687535
+    },
+    "holdout": {
+      "resolved": 7,
+      "wins": 1,
+      "losses": 6,
+      "win_rate": 0.14285714285714285,
+      "net_r": -5.311111111112196,
+      "expectancy_r": -0.7587301587303138,
+      "resolved_per_30_days": 13.548389625968792
+    },
+    "oos": {
+      "resolved": 13,
+      "wins": 6,
+      "losses": 7,
+      "win_rate": 0.46153846153846156,
+      "net_r": 0.5555555555540757,
+      "expectancy_r": 0.042735042734928896,
+      "resolved_per_30_days": 12.580647509828164
+    },
+    "full": {
+      "resolved": 31,
+      "wins": 16,
+      "losses": 15,
+      "win_rate": 0.5161290322580645,
+      "net_r": 5.599999999997335,
+      "expectancy_r": 0.1806451612902366,
+      "resolved_per_30_days": 15.000002800179734
+    }
+  },
+  "failed_gates": [
+    "holdout_win_rate_improved",
+    "holdout_expectancy_positive",
+    "holdout_net_positive"
+  ],
+  "methodology": {
+    "split": {
+      "discovery": 0.5,
+      "validation": 0.25,
+      "holdout": 0.25
+    },
+    "holdout_opened_after_freeze": true,
+    "directional_score_excluded": true,
+    "maximum_rules": 2,
+    "look_ahead": false,
+    "bid_ask_required": true,
+    "entry_slippage_pips": 0.1,
+    "exit_slippage_pips": 0.1
+  },
+  "search": {
+    "single_candidates": 456,
+    "screened_candidates": 2043,
+    "validation_candidates": 168,
+    "eligible_before_holdout": 21
+  },
+  "source_report_sha256": "ed3f709f58fcea721b2cdd8a61d0ea37d6d563e694f6231074f0a3941a047e70",
+  "decision": "Do not deploy or retune against the opened holdout. Keep EURUSD BUY V1 unchanged."
+}
