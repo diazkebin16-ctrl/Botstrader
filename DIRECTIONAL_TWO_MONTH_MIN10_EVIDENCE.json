@@ -1,0 +1,1728 @@
+{
+  "approved_count": 0,
+  "approved_strategy_ids": [],
+  "datasets": {
+    "AUD_USD": {
+      "bid_ask_required": true,
+      "bytes": 20208273,
+      "m1_candles": 72783,
+      "sha256": "6e1a85cafa58e7e8dbf558fbdd24a83692b27dc59c4f14583b6e36ce7fe56c1a"
+    },
+    "EUR_USD": {
+      "bid_ask_required": true,
+      "bytes": 20335311,
+      "m1_candles": 73282,
+      "sha256": "28079d1bfd3b27385f022bd693967c58768ad4096534277e23b5b63ca0205eff"
+    },
+    "GBP_USD": {
+      "bid_ask_required": true,
+      "bytes": 20382753,
+      "m1_candles": 73403,
+      "sha256": "8584b825e18a9b5dec60756f25db59445e8ccfc6aa30c4ca7f24e7fe90d888e8"
+    },
+    "USD_CAD": {
+      "bid_ask_required": true,
+      "bytes": 20320035,
+      "m1_candles": 73243,
+      "sha256": "913db926721c6b50a43842bb2f7957608a5996750004b172abc2cf6582fa7ed5"
+    },
+    "USD_JPY": {
+      "bid_ask_required": true,
+      "bytes": 20378720,
+      "m1_candles": 73303,
+      "sha256": "1667e22d49b139b8d5a2527612ec2238ec3630da7acde8859622347b59119cd5"
+    }
+  },
+  "execution_model": {
+    "bid_ask_required": true,
+    "entry_slippage_pips": 0.1,
+    "exit_slippage_pips": 0.1,
+    "horizon_minutes": 240,
+    "look_ahead": false,
+    "source": "OANDA Practice"
+  },
+  "policy": {
+    "embargo_minutes": 30,
+    "maximum_rules": 2,
+    "minimum_first_month_win_rate_gain": 0.01,
+    "minimum_resolved_per_month": 10,
+    "minimum_total_resolved": 20,
+    "pair_seed_count": 36,
+    "purge_minutes": 240,
+    "target_win_rate": 0.5
+  },
+  "production_authority": false,
+  "results": [
+    {
+      "baseline": {
+        "first_month": {
+          "ambiguous": 0,
+          "episodes": 129,
+          "episodes_per_30_days": 124.83870967741936,
+          "expectancy_r": -0.30452830188690255,
+          "losses": 72,
+          "maximum_loss_streak": 17,
+          "net_r": -32.28000000001167,
+          "profit_factor": 0.5942004693260897,
+          "resolved": 106,
+          "resolved_per_30_days": 102.58064516129032,
+          "timeouts": 23,
+          "win_rate": 0.32075471698113206,
+          "wins": 34
+        },
+        "second_month": {
+          "ambiguous": 0,
+          "episodes": 113,
+          "episodes_per_30_days": 109.35487953811213,
+          "expectancy_r": -0.10839506172850032,
+          "losses": 54,
+          "maximum_loss_streak": 18,
+          "net_r": -9.755555555565028,
+          "profit_factor": 0.8370150361981218,
+          "resolved": 90,
+          "resolved_per_30_days": 87.09680671177072,
+          "timeouts": 23,
+          "win_rate": 0.4,
+          "wins": 36
+        },
+        "total": {
+          "ambiguous": 0,
+          "episodes": 242,
+          "episodes_per_30_days": 117.09679605301599,
+          "expectancy_r": -0.2144671201815138,
+          "losses": 126,
+          "maximum_loss_streak": 18,
+          "net_r": -42.0355555555767,
+          "profit_factor": 0.6984584973935245,
+          "resolved": 196,
+          "resolved_per_30_days": 94.83872738178154,
+          "timeouts": 46,
+          "win_rate": 0.35714285714285715,
+          "wins": 70
+        }
+      },
+      "current_rules": [],
+      "direction": "BUY",
+      "final_gates": {
+        "first_month_minimum_10_resolved": true,
+        "first_month_positive": true,
+        "first_month_win_rate_above_50": true,
+        "second_month_minimum_10_resolved": true,
+        "second_month_not_worse_than_baseline": false,
+        "second_month_positive": false,
+        "second_month_win_rate_above_50": false,
+        "total_minimum_20_resolved": true,
+        "total_positive": true,
+        "total_win_rate_above_50": false
+      },
+      "frozen_candidate": {
+        "additional_rules": [
+          {
+            "feature": "h1_slope_atr",
+            "operator": "<=",
+            "threshold": -0.21194814
+          },
+          {
+            "feature": "m15_gap_atr",
+            "operator": "<=",
+            "threshold": -0.30523161
+          }
+        ],
+        "all_rules": [
+          {
+            "feature": "h1_slope_atr",
+            "operator": "<=",
+            "threshold": -0.21194814
+          },
+          {
+            "feature": "m15_gap_atr",
+            "operator": "<=",
+            "threshold": -0.30523161
+          }
+        ],
+        "definition_sha256": "72533ba8abc3ac87b597270553a7bc9f8d6fbbea31371dc8f926e0b733d22bd5",
+        "first_month": {
+          "ambiguous": 0,
+          "episodes": 10,
+          "episodes_per_30_days": 9.67741935483871,
+          "expectancy_r": 1.1444444444444444,
+          "losses": 1,
+          "maximum_loss_streak": 1,
+          "net_r": 11.444444444444445,
+          "profit_factor": 11.618556701030686,
+          "resolved": 10,
+          "resolved_per_30_days": 9.67741935483871,
+          "timeouts": 0,
+          "win_rate": 0.9,
+          "wins": 9
+        },
+        "qualified": true,
+        "selection_score": 7.40109120827221,
+        "wilson_lower_80": 0.7175556986096949
+      },
+      "holdout_opened": true,
+      "instrument": "EUR_USD",
+      "policy": {
+        "embargo_minutes": 30,
+        "maximum_rules": 2,
+        "minimum_first_month_win_rate_gain": 0.01,
+        "minimum_resolved_per_month": 10,
+        "minimum_total_resolved": 20,
+        "pair_seed_count": 36,
+        "purge_minutes": 240,
+        "target_win_rate": 0.5
+      },
+      "production_authority": false,
+      "resolved_definition": "WIN + LOSS only; TIMEOUT and AMBIGUOUS excluded",
+      "search": {
+        "directional_score_excluded": true,
+        "eligible_before_holdout": 190,
+        "evaluated_candidates": 812,
+        "single_candidates": 246,
+        "threshold_source": "FIRST_MONTH_ONLY"
+      },
+      "second_month": {
+        "ambiguous": 0,
+        "episodes": 19,
+        "episodes_per_30_days": 18.387103639151597,
+        "expectancy_r": -0.5228758169936091,
+        "losses": 13,
+        "maximum_loss_streak": 7,
+        "net_r": -8.888888888891355,
+        "profit_factor": 0.3855606758831866,
+        "resolved": 17,
+        "resolved_per_30_days": 16.451619045556694,
+        "timeouts": 2,
+        "win_rate": 0.23529411764705882,
+        "wins": 4
+      },
+      "split": {
+        "embargo_minutes": 30,
+        "first_month_role": "DISCOVERY",
+        "purge_minutes": 240,
+        "second_month_role": "FROZEN_HOLDOUT"
+      },
+      "strategy_id": "EURUSD_BUY_ONLY_V1",
+      "total": {
+        "ambiguous": 0,
+        "episodes": 29,
+        "episodes_per_30_days": 14.032260684039105,
+        "expectancy_r": 0.09465020576122551,
+        "losses": 14,
+        "maximum_loss_streak": 7,
+        "net_r": 2.555555555553089,
+        "profit_factor": 1.1644031451034615,
+        "resolved": 27,
+        "resolved_per_30_days": 13.064518567898478,
+        "timeouts": 2,
+        "win_rate": 0.48148148148148145,
+        "wins": 13
+      },
+      "verdict": "SECOND_MONTH_REJECTED",
+      "window": {
+        "end": "2026-09-14T23:59:59+00:00",
+        "second_month_start": "2026-08-15T00:00:00+00:00",
+        "start": "2026-07-15T00:00:00+00:00"
+      }
+    },
+    {
+      "baseline": {
+        "first_month": {
+          "ambiguous": 0,
+          "episodes": 12,
+          "episodes_per_30_days": 11.612903225806452,
+          "expectancy_r": 0.6825396825395769,
+          "losses": 2,
+          "maximum_loss_streak": 1,
+          "net_r": 4.777777777777038,
+          "profit_factor": 3.160804020099758,
+          "resolved": 7,
+          "resolved_per_30_days": 6.774193548387097,
+          "timeouts": 5,
+          "win_rate": 0.7142857142857143,
+          "wins": 5
+        },
+        "second_month": {
+          "ambiguous": 0,
+          "episodes": 6,
+          "episodes_per_30_days": 5.8064537807847145,
+          "expectancy_r": 0.14814814814810703,
+          "losses": 3,
+          "maximum_loss_streak": 1,
+          "net_r": 0.8888888888886421,
+          "profit_factor": 1.2693602693601722,
+          "resolved": 6,
+          "resolved_per_30_days": 5.8064537807847145,
+          "timeouts": 0,
+          "win_rate": 0.5,
+          "wins": 3
+        },
+        "total": {
+          "ambiguous": 0,
+          "episodes": 18,
+          "episodes_per_30_days": 8.709679045265652,
+          "expectancy_r": 0.43589743589736,
+          "losses": 5,
+          "maximum_loss_streak": 2,
+          "net_r": 5.66666666666568,
+          "profit_factor": 2.028225806451305,
+          "resolved": 13,
+          "resolved_per_30_days": 6.290323754914082,
+          "timeouts": 5,
+          "win_rate": 0.6153846153846154,
+          "wins": 8
+        }
+      },
+      "current_rules": [
+        {
+          "feature": "extension_atr",
+          "operator": ">=",
+          "threshold": 0.9
+        },
+        {
+          "feature": "session_strength",
+          "operator": ">=",
+          "threshold": 0.2
+        },
+        {
+          "feature": "session_momentum_atr",
+          "operator": ">=",
+          "threshold": -0.21
+        }
+      ],
+      "direction": "SELL",
+      "frozen_candidate": null,
+      "holdout_opened": false,
+      "instrument": "EUR_USD",
+      "policy": {
+        "embargo_minutes": 30,
+        "maximum_rules": 2,
+        "minimum_first_month_win_rate_gain": 0.01,
+        "minimum_resolved_per_month": 10,
+        "minimum_total_resolved": 20,
+        "pair_seed_count": 36,
+        "purge_minutes": 240,
+        "target_win_rate": 0.5
+      },
+      "production_authority": false,
+      "resolved_definition": "WIN + LOSS only; TIMEOUT and AMBIGUOUS excluded",
+      "search": null,
+      "split": {
+        "embargo_minutes": 30,
+        "first_month_role": "DISCOVERY",
+        "purge_minutes": 240,
+        "second_month_role": "FROZEN_HOLDOUT"
+      },
+      "strategy_id": "EURUSD_SELL_ONLY_V2",
+      "verdict": "INSUFFICIENT_BASELINE_EVIDENCE",
+      "window": {
+        "end": "2026-09-14T23:59:59+00:00",
+        "second_month_start": "2026-08-15T00:00:00+00:00",
+        "start": "2026-07-15T00:00:00+00:00"
+      }
+    },
+    {
+      "baseline": {
+        "first_month": {
+          "ambiguous": 1,
+          "episodes": 154,
+          "episodes_per_30_days": 149.03225806451613,
+          "expectancy_r": -0.41122866742573244,
+          "losses": 95,
+          "maximum_loss_streak": 23,
+          "net_r": -54.69341276762241,
+          "profit_factor": 0.48860270814065876,
+          "resolved": 133,
+          "resolved_per_30_days": 128.70967741935485,
+          "timeouts": 20,
+          "win_rate": 0.2857142857142857,
+          "wins": 38
+        },
+        "second_month": {
+          "ambiguous": 0,
+          "episodes": 142,
+          "episodes_per_30_days": 137.41940614523824,
+          "expectancy_r": -0.3875212139364233,
+          "losses": 89,
+          "maximum_loss_streak": 17,
+          "net_r": -48.827672955989335,
+          "profit_factor": 0.5107170091949322,
+          "resolved": 126,
+          "resolved_per_30_days": 121.93552939647901,
+          "timeouts": 16,
+          "win_rate": 0.29365079365079366,
+          "wins": 37
+        },
+        "total": {
+          "ambiguous": 1,
+          "episodes": 296,
+          "episodes_per_30_days": 143.22583318881294,
+          "expectancy_r": -0.39969531167417666,
+          "losses": 184,
+          "maximum_loss_streak": 23,
+          "net_r": -103.52108572361175,
+          "profit_factor": 0.4992772111843367,
+          "resolved": 259,
+          "resolved_per_30_days": 125.32260404021133,
+          "timeouts": 36,
+          "win_rate": 0.28957528957528955,
+          "wins": 75
+        }
+      },
+      "current_rules": [],
+      "direction": "BUY",
+      "final_gates": {
+        "first_month_minimum_10_resolved": true,
+        "first_month_positive": true,
+        "first_month_win_rate_above_50": true,
+        "second_month_minimum_10_resolved": true,
+        "second_month_not_worse_than_baseline": false,
+        "second_month_positive": false,
+        "second_month_win_rate_above_50": false,
+        "total_minimum_20_resolved": true,
+        "total_positive": true,
+        "total_win_rate_above_50": true
+      },
+      "frozen_candidate": {
+        "additional_rules": [
+          {
+            "feature": "m1_momentum",
+            "operator": "<=",
+            "threshold": 0.00011235
+          },
+          {
+            "feature": "direction_edge",
+            "operator": ">=",
+            "threshold": 44.0
+          }
+        ],
+        "all_rules": [
+          {
+            "feature": "m1_momentum",
+            "operator": "<=",
+            "threshold": 0.00011235
+          },
+          {
+            "feature": "direction_edge",
+            "operator": ">=",
+            "threshold": 44.0
+          }
+        ],
+        "definition_sha256": "e11c36b29b20edabd8f1ca8c555dad33669c91c63e005de3a8a4689dbba79d4f",
+        "first_month": {
+          "ambiguous": 0,
+          "episodes": 13,
+          "episodes_per_30_days": 12.580645161290322,
+          "expectancy_r": 1.1244444444443853,
+          "losses": 1,
+          "maximum_loss_streak": 1,
+          "net_r": 11.244444444443852,
+          "profit_factor": 10.825242718446297,
+          "resolved": 10,
+          "resolved_per_30_days": 9.67741935483871,
+          "timeouts": 3,
+          "win_rate": 0.9,
+          "wins": 9
+        },
+        "qualified": true,
+        "selection_score": 7.371091208272121,
+        "wilson_lower_80": 0.7175556986096949
+      },
+      "holdout_opened": true,
+      "instrument": "GBP_USD",
+      "policy": {
+        "embargo_minutes": 30,
+        "maximum_rules": 2,
+        "minimum_first_month_win_rate_gain": 0.01,
+        "minimum_resolved_per_month": 10,
+        "minimum_total_resolved": 20,
+        "pair_seed_count": 36,
+        "purge_minutes": 240,
+        "target_win_rate": 0.5
+      },
+      "production_authority": false,
+      "resolved_definition": "WIN + LOSS only; TIMEOUT and AMBIGUOUS excluded",
+      "search": {
+        "directional_score_excluded": true,
+        "eligible_before_holdout": 196,
+        "evaluated_candidates": 812,
+        "single_candidates": 248,
+        "threshold_source": "FIRST_MONTH_ONLY"
+      },
+      "second_month": {
+        "ambiguous": 0,
+        "episodes": 18,
+        "episodes_per_30_days": 17.419361342354144,
+        "expectancy_r": -0.41349206349222734,
+        "losses": 10,
+        "maximum_loss_streak": 5,
+        "net_r": -5.788888888891183,
+        "profit_factor": 0.4861932938855015,
+        "resolved": 14,
+        "resolved_per_30_days": 13.548392155164334,
+        "timeouts": 4,
+        "win_rate": 0.2857142857142857,
+        "wins": 4
+      },
+      "split": {
+        "embargo_minutes": 30,
+        "first_month_role": "DISCOVERY",
+        "purge_minutes": 240,
+        "second_month_role": "FROZEN_HOLDOUT"
+      },
+      "strategy_id": "GBPUSD_BUY_ONLY_V1",
+      "total": {
+        "ambiguous": 0,
+        "episodes": 31,
+        "episodes_per_30_days": 15.000002800179734,
+        "expectancy_r": 0.22731481481469454,
+        "losses": 11,
+        "maximum_loss_streak": 5,
+        "net_r": 5.455555555552669,
+        "profit_factor": 1.4395702775287835,
+        "resolved": 24,
+        "resolved_per_30_days": 11.612905393687535,
+        "timeouts": 7,
+        "win_rate": 0.5416666666666666,
+        "wins": 13
+      },
+      "verdict": "SECOND_MONTH_REJECTED",
+      "window": {
+        "end": "2026-09-14T23:59:59+00:00",
+        "second_month_start": "2026-08-15T00:00:00+00:00",
+        "start": "2026-07-15T00:00:00+00:00"
+      }
+    },
+    {
+      "baseline": {
+        "first_month": {
+          "ambiguous": 0,
+          "episodes": 149,
+          "episodes_per_30_days": 144.19354838709677,
+          "expectancy_r": -0.09656339031351255,
+          "losses": 76,
+          "maximum_loss_streak": 12,
+          "net_r": -12.456677350443119,
+          "profit_factor": 0.8539384608444777,
+          "resolved": 129,
+          "resolved_per_30_days": 124.83870967741936,
+          "timeouts": 20,
+          "win_rate": 0.4108527131782946,
+          "wins": 53
+        },
+        "second_month": {
+          "ambiguous": 2,
+          "episodes": 122,
+          "episodes_per_30_days": 118.0645602092892,
+          "expectancy_r": -0.1329347688868554,
+          "losses": 61,
+          "maximum_loss_streak": 11,
+          "net_r": -13.426411657572396,
+          "profit_factor": 0.8040575564810566,
+          "resolved": 101,
+          "resolved_per_30_days": 97.7419719765427,
+          "timeouts": 19,
+          "win_rate": 0.39603960396039606,
+          "wins": 40
+        },
+        "total": {
+          "ambiguous": 2,
+          "episodes": 271,
+          "episodes_per_30_days": 131.1290567370551,
+          "expectancy_r": -0.11253516960006747,
+          "losses": 137,
+          "maximum_loss_streak": 12,
+          "net_r": -25.883089008015517,
+          "profit_factor": 0.8317159806206421,
+          "resolved": 230,
+          "resolved_per_30_days": 111.29034335617222,
+          "timeouts": 39,
+          "win_rate": 0.4043478260869565,
+          "wins": 93
+        }
+      },
+      "current_rules": [],
+      "direction": "SELL",
+      "final_gates": {
+        "first_month_minimum_10_resolved": true,
+        "first_month_positive": true,
+        "first_month_win_rate_above_50": true,
+        "second_month_minimum_10_resolved": true,
+        "second_month_not_worse_than_baseline": false,
+        "second_month_positive": false,
+        "second_month_win_rate_above_50": false,
+        "total_minimum_20_resolved": true,
+        "total_positive": true,
+        "total_win_rate_above_50": true
+      },
+      "frozen_candidate": {
+        "additional_rules": [
+          {
+            "feature": "h1_slope_atr",
+            "operator": ">=",
+            "threshold": -0.11189737
+          },
+          {
+            "feature": "rr_raw",
+            "operator": ">=",
+            "threshold": 0.99555556
+          }
+        ],
+        "all_rules": [
+          {
+            "feature": "h1_slope_atr",
+            "operator": ">=",
+            "threshold": -0.11189737
+          },
+          {
+            "feature": "rr_raw",
+            "operator": ">=",
+            "threshold": 0.99555556
+          }
+        ],
+        "definition_sha256": "46e66b0299ff83622955ff9865e3eb73ba0b37c90b354e1ba19b77bf580733d2",
+        "first_month": {
+          "ambiguous": 0,
+          "episodes": 15,
+          "episodes_per_30_days": 14.516129032258064,
+          "expectancy_r": 0.988888888888758,
+          "losses": 2,
+          "maximum_loss_streak": 1,
+          "net_r": 12.855555555553854,
+          "profit_factor": 6.699507389160622,
+          "resolved": 13,
+          "resolved_per_30_days": 12.580645161290322,
+          "timeouts": 2,
+          "win_rate": 0.8461538461538461,
+          "wins": 11
+        },
+        "qualified": true,
+        "selection_score": 6.872972289728787,
+        "wilson_lower_80": 0.6804060478874371
+      },
+      "holdout_opened": true,
+      "instrument": "GBP_USD",
+      "policy": {
+        "embargo_minutes": 30,
+        "maximum_rules": 2,
+        "minimum_first_month_win_rate_gain": 0.01,
+        "minimum_resolved_per_month": 10,
+        "minimum_total_resolved": 20,
+        "pair_seed_count": 36,
+        "purge_minutes": 240,
+        "target_win_rate": 0.5
+      },
+      "production_authority": false,
+      "resolved_definition": "WIN + LOSS only; TIMEOUT and AMBIGUOUS excluded",
+      "search": {
+        "directional_score_excluded": true,
+        "eligible_before_holdout": 427,
+        "evaluated_candidates": 802,
+        "single_candidates": 242,
+        "threshold_source": "FIRST_MONTH_ONLY"
+      },
+      "second_month": {
+        "ambiguous": 0,
+        "episodes": 14,
+        "episodes_per_30_days": 13.548392155164334,
+        "expectancy_r": -0.5435897435899295,
+        "losses": 10,
+        "maximum_loss_streak": 6,
+        "net_r": -7.066666666669084,
+        "profit_factor": 0.37029702970286565,
+        "resolved": 13,
+        "resolved_per_30_days": 12.580649858366883,
+        "timeouts": 1,
+        "win_rate": 0.23076923076923078,
+        "wins": 3
+      },
+      "split": {
+        "embargo_minutes": 30,
+        "first_month_role": "DISCOVERY",
+        "purge_minutes": 240,
+        "second_month_role": "FROZEN_HOLDOUT"
+      },
+      "strategy_id": "GBPUSD_SELL_ONLY_V1",
+      "total": {
+        "ambiguous": 0,
+        "episodes": 29,
+        "episodes_per_30_days": 14.032260684039105,
+        "expectancy_r": 0.2226495726494142,
+        "losses": 12,
+        "maximum_loss_streak": 6,
+        "net_r": 5.788888888884769,
+        "profit_factor": 1.4295136026377038,
+        "resolved": 26,
+        "resolved_per_30_days": 12.580647509828164,
+        "timeouts": 3,
+        "win_rate": 0.5384615384615384,
+        "wins": 14
+      },
+      "verdict": "SECOND_MONTH_REJECTED",
+      "window": {
+        "end": "2026-09-14T23:59:59+00:00",
+        "second_month_start": "2026-08-15T00:00:00+00:00",
+        "start": "2026-07-15T00:00:00+00:00"
+      }
+    },
+    {
+      "baseline": {
+        "first_month": {
+          "ambiguous": 0,
+          "episodes": 212,
+          "episodes_per_30_days": 205.16129032258064,
+          "expectancy_r": -0.21598726516062128,
+          "losses": 125,
+          "maximum_loss_streak": 11,
+          "net_r": -41.90152944116053,
+          "profit_factor": 0.6967047745487263,
+          "resolved": 194,
+          "resolved_per_30_days": 187.74193548387098,
+          "timeouts": 18,
+          "win_rate": 0.3556701030927835,
+          "wins": 69
+        },
+        "second_month": {
+          "ambiguous": 0,
+          "episodes": 187,
+          "episodes_per_30_days": 180.9678095011236,
+          "expectancy_r": -0.08281770987563095,
+          "losses": 107,
+          "maximum_loss_streak": 10,
+          "net_r": -14.990005487489201,
+          "profit_factor": 0.8733695375605529,
+          "resolved": 181,
+          "resolved_per_30_days": 175.1613557203389,
+          "timeouts": 6,
+          "win_rate": 0.4088397790055249,
+          "wins": 74
+        },
+        "total": {
+          "ambiguous": 0,
+          "episodes": 399,
+          "episodes_per_30_days": 193.0645521700553,
+          "expectancy_r": -0.15171075980973261,
+          "losses": 232,
+          "maximum_loss_streak": 11,
+          "net_r": -56.891534928649726,
+          "profit_factor": 0.7782267978888824,
+          "resolved": 375,
+          "resolved_per_30_days": 181.45164677636774,
+          "timeouts": 24,
+          "win_rate": 0.38133333333333336,
+          "wins": 143
+        }
+      },
+      "current_rules": [],
+      "direction": "BUY",
+      "final_gates": {
+        "first_month_minimum_10_resolved": true,
+        "first_month_positive": true,
+        "first_month_win_rate_above_50": true,
+        "second_month_minimum_10_resolved": false,
+        "second_month_not_worse_than_baseline": false,
+        "second_month_positive": false,
+        "second_month_win_rate_above_50": false,
+        "total_minimum_20_resolved": false,
+        "total_positive": true,
+        "total_win_rate_above_50": true
+      },
+      "frozen_candidate": {
+        "additional_rules": [
+          {
+            "feature": "m15_gap_atr",
+            "operator": "<=",
+            "threshold": -0.58603886
+          },
+          {
+            "feature": "h1_gap_atr",
+            "operator": ">=",
+            "threshold": -0.73635175
+          }
+        ],
+        "all_rules": [
+          {
+            "feature": "m15_gap_atr",
+            "operator": "<=",
+            "threshold": -0.58603886
+          },
+          {
+            "feature": "h1_gap_atr",
+            "operator": ">=",
+            "threshold": -0.73635175
+          }
+        ],
+        "definition_sha256": "29ecaab9541b38a44200cbea30c701f019609ec7373c201c115058406967581f",
+        "first_month": {
+          "ambiguous": 0,
+          "episodes": 14,
+          "episodes_per_30_days": 13.548387096774194,
+          "expectancy_r": 1.2222222222219667,
+          "losses": 1,
+          "maximum_loss_streak": 1,
+          "net_r": 17.111111111107533,
+          "profit_factor": 16.71428571428091,
+          "resolved": 14,
+          "resolved_per_30_days": 13.548387096774194,
+          "timeouts": 0,
+          "win_rate": 0.9285714285714286,
+          "wins": 13
+        },
+        "qualified": true,
+        "selection_score": 8.090528120853476,
+        "wilson_lower_80": 0.7887642856886878
+      },
+      "holdout_opened": true,
+      "instrument": "USD_JPY",
+      "policy": {
+        "embargo_minutes": 30,
+        "maximum_rules": 2,
+        "minimum_first_month_win_rate_gain": 0.01,
+        "minimum_resolved_per_month": 10,
+        "minimum_total_resolved": 20,
+        "pair_seed_count": 36,
+        "purge_minutes": 240,
+        "target_win_rate": 0.5
+      },
+      "production_authority": false,
+      "resolved_definition": "WIN + LOSS only; TIMEOUT and AMBIGUOUS excluded",
+      "search": {
+        "directional_score_excluded": true,
+        "eligible_before_holdout": 219,
+        "evaluated_candidates": 827,
+        "single_candidates": 246,
+        "threshold_source": "FIRST_MONTH_ONLY"
+      },
+      "second_month": {
+        "ambiguous": 0,
+        "episodes": 5,
+        "episodes_per_30_days": 4.838711483987263,
+        "expectancy_r": -0.0955555555556924,
+        "losses": 3,
+        "maximum_loss_streak": 2,
+        "net_r": -0.477777777778462,
+        "profit_factor": 0.8547297297295263,
+        "resolved": 5,
+        "resolved_per_30_days": 4.838711483987263,
+        "timeouts": 0,
+        "win_rate": 0.4,
+        "wins": 2
+      },
+      "split": {
+        "embargo_minutes": 30,
+        "first_month_role": "DISCOVERY",
+        "purge_minutes": 240,
+        "second_month_role": "FROZEN_HOLDOUT"
+      },
+      "strategy_id": "USDJPY_BUY_ONLY_V1",
+      "total": {
+        "ambiguous": 0,
+        "episodes": 19,
+        "episodes_per_30_days": 9.193550103335966,
+        "expectancy_r": 0.8754385964910036,
+        "losses": 4,
+        "maximum_loss_streak": 2,
+        "net_r": 16.63333333332907,
+        "profit_factor": 4.799492385785646,
+        "resolved": 19,
+        "resolved_per_30_days": 9.193550103335966,
+        "timeouts": 0,
+        "win_rate": 0.7894736842105263,
+        "wins": 15
+      },
+      "verdict": "SECOND_MONTH_REJECTED",
+      "window": {
+        "end": "2026-09-14T23:59:59+00:00",
+        "second_month_start": "2026-08-15T00:00:00+00:00",
+        "start": "2026-07-15T00:00:00+00:00"
+      }
+    },
+    {
+      "baseline": {
+        "first_month": {
+          "ambiguous": 0,
+          "episodes": 25,
+          "episodes_per_30_days": 24.193548387096776,
+          "expectancy_r": -0.002808080808225322,
+          "losses": 14,
+          "maximum_loss_streak": 3,
+          "net_r": -0.07020202020563304,
+          "profit_factor": 0.9954523147388471,
+          "resolved": 25,
+          "resolved_per_30_days": 24.193548387096776,
+          "timeouts": 0,
+          "win_rate": 0.44,
+          "wins": 11
+        },
+        "second_month": {
+          "ambiguous": 0,
+          "episodes": 22,
+          "episodes_per_30_days": 21.290330529543954,
+          "expectancy_r": 0.6803156724097864,
+          "losses": 6,
+          "maximum_loss_streak": 1,
+          "net_r": 14.286629120605514,
+          "profit_factor": 3.152468013717363,
+          "resolved": 21,
+          "resolved_per_30_days": 20.3225882327465,
+          "timeouts": 1,
+          "win_rate": 0.7142857142857143,
+          "wins": 15
+        },
+        "total": {
+          "ambiguous": 0,
+          "episodes": 47,
+          "episodes_per_30_days": 22.741939729304757,
+          "expectancy_r": 0.30905276305217133,
+          "losses": 20,
+          "maximum_loss_streak": 3,
+          "net_r": 14.216427100399882,
+          "profit_factor": 1.6440292901801683,
+          "resolved": 46,
+          "resolved_per_30_days": 22.258068671234444,
+          "timeouts": 1,
+          "win_rate": 0.5652173913043478,
+          "wins": 26
+        }
+      },
+      "current_rules": [
+        {
+          "feature": "session_strength",
+          "operator": "<=",
+          "threshold": 0.27496452
+        },
+        {
+          "feature": "rr_raw",
+          "operator": "<=",
+          "threshold": 1.69111111
+        }
+      ],
+      "direction": "SELL",
+      "final_gates": {
+        "first_month_minimum_10_resolved": true,
+        "first_month_positive": true,
+        "first_month_win_rate_above_50": true,
+        "second_month_minimum_10_resolved": false,
+        "second_month_not_worse_than_baseline": true,
+        "second_month_positive": true,
+        "second_month_win_rate_above_50": true,
+        "total_minimum_20_resolved": false,
+        "total_positive": true,
+        "total_win_rate_above_50": true
+      },
+      "frozen_candidate": {
+        "additional_rules": [
+          {
+            "feature": "m15_gap_atr",
+            "operator": "<=",
+            "threshold": 0.26927624
+          },
+          {
+            "feature": "room_to_barrier_r",
+            "operator": "<=",
+            "threshold": 0.46666667
+          }
+        ],
+        "all_rules": [
+          {
+            "feature": "session_strength",
+            "operator": "<=",
+            "threshold": 0.27496452
+          },
+          {
+            "feature": "rr_raw",
+            "operator": "<=",
+            "threshold": 1.69111111
+          },
+          {
+            "feature": "m15_gap_atr",
+            "operator": "<=",
+            "threshold": 0.26927624
+          },
+          {
+            "feature": "room_to_barrier_r",
+            "operator": "<=",
+            "threshold": 0.46666667
+          }
+        ],
+        "definition_sha256": "9e2d567aa834afb68a189892fde44f767c828a9d03999faf77d286cd40a62df3",
+        "first_month": {
+          "ambiguous": 0,
+          "episodes": 11,
+          "episodes_per_30_days": 10.64516129032258,
+          "expectancy_r": 0.7131313131311887,
+          "losses": 3,
+          "maximum_loss_streak": 1,
+          "net_r": 7.844444444443075,
+          "profit_factor": 3.3691275167779597,
+          "resolved": 11,
+          "resolved_per_30_days": 10.64516129032258,
+          "timeouts": 0,
+          "win_rate": 0.7272727272727273,
+          "wins": 8
+        },
+        "qualified": true,
+        "selection_score": 5.290809262714469,
+        "wilson_lower_80": 0.5345329033149758
+      },
+      "holdout_opened": true,
+      "instrument": "USD_JPY",
+      "policy": {
+        "embargo_minutes": 30,
+        "maximum_rules": 2,
+        "minimum_first_month_win_rate_gain": 0.01,
+        "minimum_resolved_per_month": 10,
+        "minimum_total_resolved": 20,
+        "pair_seed_count": 36,
+        "purge_minutes": 240,
+        "target_win_rate": 0.5
+      },
+      "production_authority": false,
+      "resolved_definition": "WIN + LOSS only; TIMEOUT and AMBIGUOUS excluded",
+      "search": {
+        "directional_score_excluded": true,
+        "eligible_before_holdout": 55,
+        "evaluated_candidates": 818,
+        "single_candidates": 230,
+        "threshold_source": "FIRST_MONTH_ONLY"
+      },
+      "second_month": {
+        "ambiguous": 0,
+        "episodes": 9,
+        "episodes_per_30_days": 8.709680671177072,
+        "expectancy_r": 1.0791666666663706,
+        "losses": 1,
+        "maximum_loss_streak": 1,
+        "net_r": 8.633333333330965,
+        "profit_factor": 8.848484848481569,
+        "resolved": 8,
+        "resolved_per_30_days": 7.74193837437962,
+        "timeouts": 1,
+        "win_rate": 0.875,
+        "wins": 7
+      },
+      "split": {
+        "embargo_minutes": 30,
+        "first_month_role": "DISCOVERY",
+        "purge_minutes": 240,
+        "second_month_role": "FROZEN_HOLDOUT"
+      },
+      "strategy_id": "USDJPY_SELL_ONLY_V2",
+      "total": {
+        "ambiguous": 0,
+        "episodes": 20,
+        "episodes_per_30_days": 9.67742116140628,
+        "expectancy_r": 0.8672514619881074,
+        "losses": 4,
+        "maximum_loss_streak": 1,
+        "net_r": 16.47777777777404,
+        "profit_factor": 4.7355163727948115,
+        "resolved": 19,
+        "resolved_per_30_days": 9.193550103335966,
+        "timeouts": 1,
+        "win_rate": 0.7894736842105263,
+        "wins": 15
+      },
+      "verdict": "SECOND_MONTH_REJECTED",
+      "window": {
+        "end": "2026-09-14T23:59:59+00:00",
+        "second_month_start": "2026-08-15T00:00:00+00:00",
+        "start": "2026-07-15T00:00:00+00:00"
+      }
+    },
+    {
+      "baseline": {
+        "first_month": {
+          "ambiguous": 0,
+          "episodes": 134,
+          "episodes_per_30_days": 129.67741935483872,
+          "expectancy_r": -0.049279835390874625,
+          "losses": 63,
+          "maximum_loss_streak": 17,
+          "net_r": -5.322222222214459,
+          "profit_factor": 0.922592113768691,
+          "resolved": 108,
+          "resolved_per_30_days": 104.51612903225806,
+          "timeouts": 26,
+          "win_rate": 0.4166666666666667,
+          "wins": 45
+        },
+        "second_month": {
+          "ambiguous": 0,
+          "episodes": 137,
+          "episodes_per_30_days": 132.580694661251,
+          "expectancy_r": -0.40510204081624357,
+          "losses": 71,
+          "maximum_loss_streak": 12,
+          "net_r": -39.69999999999187,
+          "profit_factor": 0.48803553517701936,
+          "resolved": 98,
+          "resolved_per_30_days": 94.83874508615034,
+          "timeouts": 39,
+          "win_rate": 0.2755102040816326,
+          "wins": 27
+        },
+        "total": {
+          "ambiguous": 0,
+          "episodes": 271,
+          "episodes_per_30_days": 131.1290567370551,
+          "expectancy_r": -0.21855447680682685,
+          "losses": 134,
+          "maximum_loss_streak": 17,
+          "net_r": -45.02222222220633,
+          "profit_factor": 0.6922609554189328,
+          "resolved": 206,
+          "resolved_per_30_days": 99.67743796248469,
+          "timeouts": 65,
+          "win_rate": 0.34951456310679613,
+          "wins": 72
+        }
+      },
+      "current_rules": [],
+      "direction": "BUY",
+      "final_gates": {
+        "first_month_minimum_10_resolved": true,
+        "first_month_positive": true,
+        "first_month_win_rate_above_50": true,
+        "second_month_minimum_10_resolved": true,
+        "second_month_not_worse_than_baseline": false,
+        "second_month_positive": false,
+        "second_month_win_rate_above_50": false,
+        "total_minimum_20_resolved": true,
+        "total_positive": true,
+        "total_win_rate_above_50": false
+      },
+      "frozen_candidate": {
+        "additional_rules": [
+          {
+            "feature": "h1_gap_atr",
+            "operator": ">=",
+            "threshold": 1.57189676
+          },
+          {
+            "feature": "session_momentum_atr",
+            "operator": "<=",
+            "threshold": -0.58190933
+          }
+        ],
+        "all_rules": [
+          {
+            "feature": "h1_gap_atr",
+            "operator": ">=",
+            "threshold": 1.57189676
+          },
+          {
+            "feature": "session_momentum_atr",
+            "operator": "<=",
+            "threshold": -0.58190933
+          }
+        ],
+        "definition_sha256": "2c5150bf197a251c2872d4d070bc1ec18414b91ebf09d964538daa9f9942a8f8",
+        "first_month": {
+          "ambiguous": 0,
+          "episodes": 11,
+          "episodes_per_30_days": 10.64516129032258,
+          "expectancy_r": 1.4181818181818384,
+          "losses": 0,
+          "maximum_loss_streak": 0,
+          "net_r": 15.600000000000222,
+          "profit_factor": 999.0,
+          "resolved": 11,
+          "resolved_per_30_days": 10.64516129032258,
+          "timeouts": 0,
+          "win_rate": 1.0,
+          "wins": 11
+        },
+        "qualified": true,
+        "selection_score": 9.032839544270608,
+        "wilson_lower_80": 0.8700897188124962
+      },
+      "holdout_opened": true,
+      "instrument": "AUD_USD",
+      "policy": {
+        "embargo_minutes": 30,
+        "maximum_rules": 2,
+        "minimum_first_month_win_rate_gain": 0.01,
+        "minimum_resolved_per_month": 10,
+        "minimum_total_resolved": 20,
+        "pair_seed_count": 36,
+        "purge_minutes": 240,
+        "target_win_rate": 0.5
+      },
+      "production_authority": false,
+      "resolved_definition": "WIN + LOSS only; TIMEOUT and AMBIGUOUS excluded",
+      "search": {
+        "directional_score_excluded": true,
+        "eligible_before_holdout": 310,
+        "evaluated_candidates": 834,
+        "single_candidates": 246,
+        "threshold_source": "FIRST_MONTH_ONLY"
+      },
+      "second_month": {
+        "ambiguous": 0,
+        "episodes": 15,
+        "episodes_per_30_days": 14.516134451961786,
+        "expectancy_r": -0.891452991452889,
+        "losses": 12,
+        "maximum_loss_streak": 11,
+        "net_r": -11.588888888887558,
+        "profit_factor": 0.10930828351837475,
+        "resolved": 13,
+        "resolved_per_30_days": 12.580649858366883,
+        "timeouts": 2,
+        "win_rate": 0.07692307692307693,
+        "wins": 1
+      },
+      "split": {
+        "embargo_minutes": 30,
+        "first_month_role": "DISCOVERY",
+        "purge_minutes": 240,
+        "second_month_role": "FROZEN_HOLDOUT"
+      },
+      "strategy_id": "AUDUSD_BUY_ONLY_V1",
+      "total": {
+        "ambiguous": 0,
+        "episodes": 26,
+        "episodes_per_30_days": 12.580647509828164,
+        "expectancy_r": 0.16712962962969438,
+        "losses": 12,
+        "maximum_loss_streak": 11,
+        "net_r": 4.011111111112665,
+        "profit_factor": 1.3082835183605257,
+        "resolved": 24,
+        "resolved_per_30_days": 11.612905393687535,
+        "timeouts": 2,
+        "win_rate": 0.5,
+        "wins": 12
+      },
+      "verdict": "SECOND_MONTH_REJECTED",
+      "window": {
+        "end": "2026-09-14T23:59:59+00:00",
+        "second_month_start": "2026-08-15T00:00:00+00:00",
+        "start": "2026-07-15T00:00:00+00:00"
+      }
+    },
+    {
+      "baseline": {
+        "first_month": {
+          "ambiguous": 0,
+          "episodes": 82,
+          "episodes_per_30_days": 79.35483870967742,
+          "expectancy_r": -0.30663349917072397,
+          "losses": 46,
+          "maximum_loss_streak": 13,
+          "net_r": -20.544444444438504,
+          "profit_factor": 0.5902947041879805,
+          "resolved": 67,
+          "resolved_per_30_days": 64.83870967741936,
+          "timeouts": 15,
+          "win_rate": 0.31343283582089554,
+          "wins": 21
+        },
+        "second_month": {
+          "ambiguous": 2,
+          "episodes": 77,
+          "episodes_per_30_days": 74.51615685340384,
+          "expectancy_r": 0.02098765432106225,
+          "losses": 35,
+          "maximum_loss_streak": 7,
+          "net_r": 1.3222222222269218,
+          "profit_factor": 1.034693877551147,
+          "resolved": 63,
+          "resolved_per_30_days": 60.967764698239506,
+          "timeouts": 12,
+          "win_rate": 0.4444444444444444,
+          "wins": 28
+        },
+        "total": {
+          "ambiguous": 2,
+          "episodes": 159,
+          "episodes_per_30_days": 76.93549823317993,
+          "expectancy_r": -0.14786324786316604,
+          "losses": 81,
+          "maximum_loss_streak": 13,
+          "net_r": -19.222222222211585,
+          "profit_factor": 0.7821981619036623,
+          "resolved": 130,
+          "resolved_per_30_days": 62.90323754914082,
+          "timeouts": 27,
+          "win_rate": 0.3769230769230769,
+          "wins": 49
+        }
+      },
+      "current_rules": [],
+      "direction": "SELL",
+      "final_gates": {
+        "first_month_minimum_10_resolved": true,
+        "first_month_positive": true,
+        "first_month_win_rate_above_50": true,
+        "second_month_minimum_10_resolved": false,
+        "second_month_not_worse_than_baseline": false,
+        "second_month_positive": false,
+        "second_month_win_rate_above_50": false,
+        "total_minimum_20_resolved": false,
+        "total_positive": true,
+        "total_win_rate_above_50": true
+      },
+      "frozen_candidate": {
+        "additional_rules": [
+          {
+            "feature": "h1_gap_atr",
+            "operator": ">=",
+            "threshold": -0.08041662
+          },
+          {
+            "feature": "h1_slope_atr",
+            "operator": "<=",
+            "threshold": -0.28826047
+          }
+        ],
+        "all_rules": [
+          {
+            "feature": "h1_gap_atr",
+            "operator": ">=",
+            "threshold": -0.08041662
+          },
+          {
+            "feature": "h1_slope_atr",
+            "operator": "<=",
+            "threshold": -0.28826047
+          }
+        ],
+        "definition_sha256": "39cd3c641480546c12a92931595939f31766f8402eb9fb153153ff8e706b7e4f",
+        "first_month": {
+          "ambiguous": 0,
+          "episodes": 10,
+          "episodes_per_30_days": 9.67741935483871,
+          "expectancy_r": 0.6566666666667411,
+          "losses": 3,
+          "maximum_loss_streak": 1,
+          "net_r": 6.566666666667412,
+          "profit_factor": 3.010204081633099,
+          "resolved": 10,
+          "resolved_per_30_days": 9.67741935483871,
+          "timeouts": 0,
+          "win_rate": 0.7,
+          "wins": 7
+        },
+        "qualified": true,
+        "selection_score": 4.907952594646103,
+        "wilson_lower_80": 0.4973717052397509
+      },
+      "holdout_opened": true,
+      "instrument": "AUD_USD",
+      "policy": {
+        "embargo_minutes": 30,
+        "maximum_rules": 2,
+        "minimum_first_month_win_rate_gain": 0.01,
+        "minimum_resolved_per_month": 10,
+        "minimum_total_resolved": 20,
+        "pair_seed_count": 36,
+        "purge_minutes": 240,
+        "target_win_rate": 0.5
+      },
+      "production_authority": false,
+      "resolved_definition": "WIN + LOSS only; TIMEOUT and AMBIGUOUS excluded",
+      "search": {
+        "directional_score_excluded": true,
+        "eligible_before_holdout": 61,
+        "evaluated_candidates": 821,
+        "single_candidates": 238,
+        "threshold_source": "FIRST_MONTH_ONLY"
+      },
+      "second_month": {
+        "ambiguous": 0,
+        "episodes": 3,
+        "episodes_per_30_days": 2.9032268903923573,
+        "expectancy_r": -1.0833333333331998,
+        "losses": 2,
+        "maximum_loss_streak": 2,
+        "net_r": -2.1666666666663996,
+        "profit_factor": 0.0,
+        "resolved": 2,
+        "resolved_per_30_days": 1.935484593594905,
+        "timeouts": 1,
+        "win_rate": 0.0,
+        "wins": 0
+      },
+      "split": {
+        "embargo_minutes": 30,
+        "first_month_role": "DISCOVERY",
+        "purge_minutes": 240,
+        "second_month_role": "FROZEN_HOLDOUT"
+      },
+      "strategy_id": "AUDUSD_SELL_ONLY_V1",
+      "total": {
+        "ambiguous": 0,
+        "episodes": 13,
+        "episodes_per_30_days": 6.290323754914082,
+        "expectancy_r": 0.366666666666751,
+        "losses": 5,
+        "maximum_loss_streak": 3,
+        "net_r": 4.400000000001012,
+        "profit_factor": 1.809815950920524,
+        "resolved": 12,
+        "resolved_per_30_days": 5.806452696843768,
+        "timeouts": 1,
+        "win_rate": 0.5833333333333334,
+        "wins": 7
+      },
+      "verdict": "SECOND_MONTH_REJECTED",
+      "window": {
+        "end": "2026-09-14T23:59:59+00:00",
+        "second_month_start": "2026-08-15T00:00:00+00:00",
+        "start": "2026-07-15T00:00:00+00:00"
+      }
+    },
+    {
+      "baseline": {
+        "first_month": {
+          "ambiguous": 0,
+          "episodes": 102,
+          "episodes_per_30_days": 98.70967741935483,
+          "expectancy_r": -0.527262313860384,
+          "losses": 74,
+          "maximum_loss_streak": 15,
+          "net_r": -51.14444444445725,
+          "profit_factor": 0.3834717385480216,
+          "resolved": 97,
+          "resolved_per_30_days": 93.87096774193549,
+          "timeouts": 5,
+          "win_rate": 0.23711340206185566,
+          "wins": 23
+        },
+        "second_month": {
+          "ambiguous": 0,
+          "episodes": 121,
+          "episodes_per_30_days": 117.09681791249174,
+          "expectancy_r": -0.2238367658277323,
+          "losses": 61,
+          "maximum_loss_streak": 12,
+          "net_r": -21.264492753634567,
+          "profit_factor": 0.6879397679619103,
+          "resolved": 95,
+          "resolved_per_30_days": 91.93551819575798,
+          "timeouts": 26,
+          "win_rate": 0.35789473684210527,
+          "wins": 34
+        },
+        "total": {
+          "ambiguous": 0,
+          "episodes": 223,
+          "episodes_per_30_days": 107.90324594968003,
+          "expectancy_r": -0.3771298812400616,
+          "losses": 135,
+          "maximum_loss_streak": 19,
+          "net_r": -72.40893719809182,
+          "profit_factor": 0.5207810788991123,
+          "resolved": 192,
+          "resolved_per_30_days": 92.90324314950028,
+          "timeouts": 31,
+          "win_rate": 0.296875,
+          "wins": 57
+        }
+      },
+      "current_rules": [],
+      "direction": "BUY",
+      "final_gates": {
+        "first_month_minimum_10_resolved": true,
+        "first_month_positive": true,
+        "first_month_win_rate_above_50": true,
+        "second_month_minimum_10_resolved": true,
+        "second_month_not_worse_than_baseline": false,
+        "second_month_positive": false,
+        "second_month_win_rate_above_50": false,
+        "total_minimum_20_resolved": true,
+        "total_positive": false,
+        "total_win_rate_above_50": false
+      },
+      "frozen_candidate": {
+        "additional_rules": [
+          {
+            "feature": "m1_momentum",
+            "operator": ">=",
+            "threshold": 0.00012781
+          },
+          {
+            "feature": "h1_slope_atr",
+            "operator": ">=",
+            "threshold": 0.46609801
+          }
+        ],
+        "all_rules": [
+          {
+            "feature": "m1_momentum",
+            "operator": ">=",
+            "threshold": 0.00012781
+          },
+          {
+            "feature": "h1_slope_atr",
+            "operator": ">=",
+            "threshold": 0.46609801
+          }
+        ],
+        "definition_sha256": "2bb5d7b9a2caa7631ea3ec56475db6695cce5121d1ad5a7f39d3a4f5bdcfe63f",
+        "first_month": {
+          "ambiguous": 0,
+          "episodes": 12,
+          "episodes_per_30_days": 11.612903225806452,
+          "expectancy_r": 0.7050505050504692,
+          "losses": 3,
+          "maximum_loss_streak": 1,
+          "net_r": 7.755555555555161,
+          "profit_factor": 3.296052631578462,
+          "resolved": 11,
+          "resolved_per_30_days": 10.64516129032258,
+          "timeouts": 1,
+          "win_rate": 0.7272727272727273,
+          "wins": 8
+        },
+        "qualified": true,
+        "selection_score": 5.278688050593391,
+        "wilson_lower_80": 0.5345329033149758
+      },
+      "holdout_opened": true,
+      "instrument": "USD_CAD",
+      "policy": {
+        "embargo_minutes": 30,
+        "maximum_rules": 2,
+        "minimum_first_month_win_rate_gain": 0.01,
+        "minimum_resolved_per_month": 10,
+        "minimum_total_resolved": 20,
+        "pair_seed_count": 36,
+        "purge_minutes": 240,
+        "target_win_rate": 0.5
+      },
+      "production_authority": false,
+      "resolved_definition": "WIN + LOSS only; TIMEOUT and AMBIGUOUS excluded",
+      "search": {
+        "directional_score_excluded": true,
+        "eligible_before_holdout": 66,
+        "evaluated_candidates": 829,
+        "single_candidates": 248,
+        "threshold_source": "FIRST_MONTH_ONLY"
+      },
+      "second_month": {
+        "ambiguous": 0,
+        "episodes": 35,
+        "episodes_per_30_days": 33.87098038791083,
+        "expectancy_r": -0.5847826086957945,
+        "losses": 26,
+        "maximum_loss_streak": 10,
+        "net_r": -19.297826086961216,
+        "profit_factor": 0.3327180549406803,
+        "resolved": 33,
+        "resolved_per_30_days": 31.93549579431593,
+        "timeouts": 2,
+        "win_rate": 0.21212121212121213,
+        "wins": 7
+      },
+      "split": {
+        "embargo_minutes": 30,
+        "first_month_role": "DISCOVERY",
+        "purge_minutes": 240,
+        "second_month_role": "FROZEN_HOLDOUT"
+      },
+      "strategy_id": "USDCAD_BUY_ONLY_V1",
+      "total": {
+        "ambiguous": 0,
+        "episodes": 47,
+        "episodes_per_30_days": 22.741939729304757,
+        "expectancy_r": -0.26232433025922847,
+        "losses": 29,
+        "maximum_loss_streak": 10,
+        "net_r": -11.542270531406054,
+        "profit_factor": 0.642630110759509,
+        "resolved": 44,
+        "resolved_per_30_days": 21.290326555093817,
+        "timeouts": 3,
+        "win_rate": 0.3409090909090909,
+        "wins": 15
+      },
+      "verdict": "SECOND_MONTH_REJECTED",
+      "window": {
+        "end": "2026-09-14T23:59:59+00:00",
+        "second_month_start": "2026-08-15T00:00:00+00:00",
+        "start": "2026-07-15T00:00:00+00:00"
+      }
+    },
+    {
+      "baseline": {
+        "first_month": {
+          "ambiguous": 0,
+          "episodes": 153,
+          "episodes_per_30_days": 148.06451612903226,
+          "expectancy_r": -0.4896296296297753,
+          "losses": 101,
+          "maximum_loss_streak": 18,
+          "net_r": -66.10000000001966,
+          "profit_factor": 0.4150442477875299,
+          "resolved": 135,
+          "resolved_per_30_days": 130.6451612903226,
+          "timeouts": 18,
+          "win_rate": 0.2518518518518518,
+          "wins": 34
+        },
+        "second_month": {
+          "ambiguous": 0,
+          "episodes": 105,
+          "episodes_per_30_days": 101.61294116373251,
+          "expectancy_r": 0.14421052631570352,
+          "losses": 47,
+          "maximum_loss_streak": 13,
+          "net_r": 13.699999999991835,
+          "profit_factor": 1.2602363866608426,
+          "resolved": 95,
+          "resolved_per_30_days": 91.93551819575798,
+          "timeouts": 10,
+          "win_rate": 0.5052631578947369,
+          "wins": 48
+        },
+        "total": {
+          "ambiguous": 0,
+          "episodes": 258,
+          "episodes_per_30_days": 124.83873298214101,
+          "expectancy_r": -0.22782608695664272,
+          "losses": 148,
+          "maximum_loss_streak": 18,
+          "net_r": -52.40000000002782,
+          "profit_factor": 0.6836597799837835,
+          "resolved": 230,
+          "resolved_per_30_days": 111.29034335617222,
+          "timeouts": 28,
+          "win_rate": 0.3565217391304348,
+          "wins": 82
+        }
+      },
+      "current_rules": [],
+      "direction": "SELL",
+      "final_gates": {
+        "first_month_minimum_10_resolved": true,
+        "first_month_positive": true,
+        "first_month_win_rate_above_50": true,
+        "second_month_minimum_10_resolved": true,
+        "second_month_not_worse_than_baseline": false,
+        "second_month_positive": false,
+        "second_month_win_rate_above_50": false,
+        "total_minimum_20_resolved": true,
+        "total_positive": true,
+        "total_win_rate_above_50": false
+      },
+      "frozen_candidate": {
+        "additional_rules": [
+          {
+            "feature": "h1_slope_atr",
+            "operator": ">=",
+            "threshold": -0.05945066
+          },
+          {
+            "feature": "m15_slope_atr",
+            "operator": ">=",
+            "threshold": -0.25057726
+          }
+        ],
+        "all_rules": [
+          {
+            "feature": "h1_slope_atr",
+            "operator": ">=",
+            "threshold": -0.05945066
+          },
+          {
+            "feature": "m15_slope_atr",
+            "operator": ">=",
+            "threshold": -0.25057726
+          }
+        ],
+        "definition_sha256": "ff3d537fe74831e47372d83b903e6df6e2f859d4ee3b60e4cd7d4222297342ee",
+        "first_month": {
+          "ambiguous": 0,
+          "episodes": 13,
+          "episodes_per_30_days": 12.580645161290322,
+          "expectancy_r": 0.9620370370369898,
+          "losses": 2,
+          "maximum_loss_streak": 2,
+          "net_r": 11.544444444443878,
+          "profit_factor": 6.274111675125991,
+          "resolved": 12,
+          "resolved_per_30_days": 11.612903225806452,
+          "timeouts": 1,
+          "win_rate": 0.8333333333333334,
+          "wins": 10
+        },
+        "qualified": true,
+        "selection_score": 6.651205337969929,
+        "wilson_lower_80": 0.6578125361049787
+      },
+      "holdout_opened": true,
+      "instrument": "USD_CAD",
+      "policy": {
+        "embargo_minutes": 30,
+        "maximum_rules": 2,
+        "minimum_first_month_win_rate_gain": 0.01,
+        "minimum_resolved_per_month": 10,
+        "minimum_total_resolved": 20,
+        "pair_seed_count": 36,
+        "purge_minutes": 240,
+        "target_win_rate": 0.5
+      },
+      "production_authority": false,
+      "resolved_definition": "WIN + LOSS only; TIMEOUT and AMBIGUOUS excluded",
+      "search": {
+        "directional_score_excluded": true,
+        "eligible_before_holdout": 160,
+        "evaluated_candidates": 813,
+        "single_candidates": 242,
+        "threshold_source": "FIRST_MONTH_ONLY"
+      },
+      "second_month": {
+        "ambiguous": 0,
+        "episodes": 22,
+        "episodes_per_30_days": 21.290330529543954,
+        "expectancy_r": -0.4398989898991278,
+        "losses": 16,
+        "maximum_loss_streak": 10,
+        "net_r": -9.677777777780811,
+        "profit_factor": 0.46101485148507426,
+        "resolved": 22,
+        "resolved_per_30_days": 21.290330529543954,
+        "timeouts": 0,
+        "win_rate": 0.2727272727272727,
+        "wins": 6
+      },
+      "split": {
+        "embargo_minutes": 30,
+        "first_month_role": "DISCOVERY",
+        "purge_minutes": 240,
+        "second_month_role": "FROZEN_HOLDOUT"
+      },
+      "strategy_id": "USDCAD_SELL_ONLY_V1",
+      "total": {
+        "ambiguous": 0,
+        "episodes": 35,
+        "episodes_per_30_days": 16.93548703246099,
+        "expectancy_r": 0.05490196078420779,
+        "losses": 18,
+        "maximum_loss_streak": 10,
+        "net_r": 1.866666666663065,
+        "profit_factor": 1.0926640926638982,
+        "resolved": 34,
+        "resolved_per_30_days": 16.451615974390677,
+        "timeouts": 1,
+        "win_rate": 0.47058823529411764,
+        "wins": 16
+      },
+      "verdict": "SECOND_MONTH_REJECTED",
+      "window": {
+        "end": "2026-09-14T23:59:59+00:00",
+        "second_month_start": "2026-08-15T00:00:00+00:00",
+        "start": "2026-07-15T00:00:00+00:00"
+      }
+    }
+  ],
+  "schema_version": 1,
+  "window": {
+    "end": "2026-09-14T23:59:59+00:00",
+    "second_month_start": "2026-08-15T00:00:00+00:00",
+    "start": "2026-07-15T00:00:00+00:00"
+  }
+}
