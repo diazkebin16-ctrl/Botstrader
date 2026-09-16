@@ -1,0 +1,146 @@
+{
+  "schema_version": 1,
+  "experiment": "EURUSD_BUY_ACCURACY_SECOND_ATTEMPT",
+  "decision": "REJECTED_NO_DEPLOYMENT",
+  "dataset": {
+    "window_start": "2026-07-15T00:00:00+00:00",
+    "window_end": "2026-09-14T23:59:59+00:00",
+    "source": "OANDA Practice",
+    "price_components": [
+      "MID",
+      "BID",
+      "ASK"
+    ],
+    "m1_candles": 73282,
+    "bytes": 20335311,
+    "sha256": "28079d1bfd3b27385f022bd693967c58768ad4096534277e23b5b63ca0205eff",
+    "sha_match": true
+  },
+  "methodology": {
+    "discovery_fraction": 0.5,
+    "holdout_fraction": 0.5,
+    "holdout_opened_once": true,
+    "minimum_holdout_resolved": 8,
+    "target_win_rate_strictly_above": 0.55,
+    "maximum_rules": 2,
+    "previous_failed_mechanism_excluded": "session_momentum_atr <= threshold",
+    "directional_score_excluded": true,
+    "look_ahead": false,
+    "bid_ask_required": true,
+    "entry_slippage_pips": 0.1,
+    "exit_slippage_pips": 0.1,
+    "horizon_minutes": 240,
+    "embargo_minutes": 30
+  },
+  "baseline": {
+    "discovery": {
+      "episodes": 129,
+      "resolved": 106,
+      "wins": 34,
+      "losses": 72,
+      "timeouts": 23,
+      "ambiguous": 0,
+      "win_rate": 0.32075471698113206,
+      "net_r": -32.28000000001167,
+      "expectancy_r": -0.30452830188690255,
+      "profit_factor": 0.5942004693260897,
+      "maximum_loss_streak": 17
+    },
+    "holdout": {
+      "episodes": 113,
+      "resolved": 90,
+      "wins": 36,
+      "losses": 54,
+      "timeouts": 23,
+      "ambiguous": 0,
+      "win_rate": 0.4,
+      "net_r": -9.755555555565028,
+      "expectancy_r": -0.10839506172850032,
+      "profit_factor": 0.8370150361981218,
+      "maximum_loss_streak": 18
+    },
+    "total": {
+      "episodes": 242,
+      "resolved": 196,
+      "wins": 70,
+      "losses": 126,
+      "timeouts": 46,
+      "ambiguous": 0,
+      "win_rate": 0.35714285714285715,
+      "net_r": -42.0355555555767,
+      "expectancy_r": -0.2144671201815138,
+      "profit_factor": 0.6984584973935245,
+      "maximum_loss_streak": 18
+    }
+  },
+  "search": {
+    "single_candidates": 492,
+    "evaluated_candidates": 1152,
+    "eligible_before_holdout": 181
+  },
+  "frozen_candidate": {
+    "rules": [
+      {
+        "feature": "h1_slope_atr",
+        "operator": "<=",
+        "threshold": -0.21194814
+      },
+      {
+        "feature": "m15_gap_atr",
+        "operator": "<=",
+        "threshold": -0.30523161
+      }
+    ],
+    "definition_sha256": "72533ba8abc3ac87b597270553a7bc9f8d6fbbea31371dc8f926e0b733d22bd5",
+    "discovery": {
+      "episodes": 10,
+      "resolved": 10,
+      "wins": 9,
+      "losses": 1,
+      "timeouts": 0,
+      "ambiguous": 0,
+      "win_rate": 0.9,
+      "net_r": 11.444444444444445,
+      "expectancy_r": 1.1444444444444444,
+      "profit_factor": 11.618556701030686,
+      "maximum_loss_streak": 1
+    }
+  },
+  "holdout": {
+    "episodes": 19,
+    "resolved": 17,
+    "wins": 4,
+    "losses": 13,
+    "timeouts": 2,
+    "ambiguous": 0,
+    "win_rate": 0.23529411764705882,
+    "net_r": -8.888888888891355,
+    "expectancy_r": -0.5228758169936091,
+    "profit_factor": 0.3855606758831866,
+    "maximum_loss_streak": 7
+  },
+  "total_candidate": {
+    "episodes": 29,
+    "resolved": 27,
+    "wins": 13,
+    "losses": 14,
+    "timeouts": 2,
+    "ambiguous": 0,
+    "win_rate": 0.48148148148148145,
+    "net_r": 2.555555555553089,
+    "expectancy_r": 0.09465020576122551,
+    "profit_factor": 1.1644031451034615,
+    "maximum_loss_streak": 7
+  },
+  "final_gates": {
+    "holdout_minimum_sample": true,
+    "holdout_win_rate_above_55": false,
+    "holdout_expectancy_positive": false,
+    "holdout_net_positive": false,
+    "holdout_profit_factor_above_one": false,
+    "holdout_loss_streak_reduced": true
+  },
+  "runner_report_sha256": "b9e119e5bf64772b936d56a55eb47d2fdd180d49349ddc6f837bc9ab77d945c0",
+  "production_authority": false,
+  "main_commit_unchanged": "803a3bfa0211bc5abebcfd6c51da186fcca8dcc6"
+}
