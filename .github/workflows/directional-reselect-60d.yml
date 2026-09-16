@@ -4,15 +4,8 @@ on:
     inputs:
       replay_run_id:
         required: true
-        default: '35123033435'
-  push:
-    branches: [codex/adaptive-60-day-release]
-    paths:
-      - .github/workflows/directional-reselect-60d.yml
-      - directional_trend_optimizer.py
-      - run_directional_trend_optimization.py
-      - major_trend.py
-      - test_directional_trend_optimizer.py
+        type: string
+        description: 'Run ID containing five completed 60-day replay artifacts'
 permissions:
   contents: write
   actions: read
@@ -35,7 +28,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           github-token: ${{ github.token }}
-          run-id: ${{ inputs.replay_run_id || '35123033435' }}
+          run-id: ${{ inputs.replay_run_id }}
           pattern: trend60-replay-*
           path: replay_evidence
           merge-multiple: true
