@@ -74,7 +74,8 @@ def test_lane_isolation_and_all_ten_lanes_are_reported():
 
 def test_current_eurusd_sell_rules_are_an_incumbent_not_a_search_floor():
     result = _optimize(_rows(instrument="EUR_USD", direction="SELL"), instrument="EUR_USD", direction="SELL")
-    assert len(result["current_rules"]) == 2
+    from directional_strategies import strategy_definition
+    assert result["current_rules"] == strategy_definition("EUR_USD", "SELL")["filters"]
     assert result["strategy_id"] == "EURUSD_SELL_ONLY_V2"
     assert result["search"]["candidate_base"] == "UNFILTERED_DIRECTIONAL_LANE"
 

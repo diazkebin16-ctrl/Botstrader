@@ -4,7 +4,6 @@ on:
   workflow_dispatch:
   push:
     branches:
-      - main
       - codex/adaptive-60-day-trends
     paths:
       - .github/workflows/directional-one-month-min10.yml

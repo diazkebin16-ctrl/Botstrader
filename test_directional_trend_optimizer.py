@@ -154,3 +154,26 @@ def test_runtime_switches_role_when_trend_reverses_and_fails_closed(monkeypatch)
     assert result["major_trend_role"] == "AGAINST" and not result["eligible"]
     row["features"].pop("major_trend_version")
     assert not registry.evaluate_directional_strategy(row)["eligible"]
+
+
+def test_adaptive_replay_never_calls_temporal_split_helpers(monkeypatch):
+    import historical_replay as replay
+    from types import SimpleNamespace
+    def forbidden(*args, **kwargs):
+        raise AssertionError("Temporal splitting was requested")
+    monkeypatch.setattr(replay, "chronological_holdout", forbidden)
+    monkeypatch.setattr(replay, "walk_forward_splits", forbidden)
+    bundle = {}
+    for tf, seconds in replay.BAR_SECONDS.items():
+        bundle[tf] = [{"t": END - timedelta(seconds=(80-i)*seconds),
+                       "o": 100, "c": 100, "h": 101, "l": 99} for i in range(80)]
+    monkeypatch.setattr(replay, "replay_snapshot", lambda *args, **kwargs: {
+        "candle_ts": (END - timedelta(minutes=1)).isoformat(), "features": {},
+        "actionable": False, "signal": "WAIT", "decision_reason": "WAIT"})
+    server = SimpleNamespace(_direction_hypothesis=lambda *args: {})
+    result = replay.replay_history(server, bundle, "USD_JPY", END-timedelta(minutes=1), END,
+        [replay.ReplayVariant("ADAPTIVE")],
+        replay.ReplayConfig(adaptive_major_trend=True, temporal_validation=False))
+    assert result["variants"]["ADAPTIVE"]["holdout"] is None
+    assert result["variants"]["ADAPTIVE"]["walk_forward"] == []
+    assert result["variants"]["ADAPTIVE"]["major_trend_exposure_minutes"] == {"LATERAL": 1}
