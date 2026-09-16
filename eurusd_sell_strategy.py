@@ -12,10 +12,7 @@ import json
 import math
 from typing import Any, Iterable, Mapping
 
-from directional_strategies import (
-    EURUSD_SELL_STRATEGY,
-    candidate_definition_sha256 as directional_definition_sha256,
-)
+from directional_strategies import EURUSD_SELL_STRATEGY
 
 
 STRATEGY_DEFINITION = EURUSD_SELL_STRATEGY
@@ -28,7 +25,7 @@ def _canonical_json(value: Any) -> str:
 
 
 def candidate_definition_sha256() -> str:
-    return directional_definition_sha256("EUR_USD", "SELL")
+    return hashlib.sha256(_canonical_json(STRATEGY_DEFINITION).encode("utf-8")).hexdigest()
 
 
 def strategy_identity() -> dict[str, Any]:
