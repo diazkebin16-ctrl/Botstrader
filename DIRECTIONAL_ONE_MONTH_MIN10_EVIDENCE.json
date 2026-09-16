@@ -1,0 +1,1179 @@
+{
+  "all_ten_qualified": true,
+  "approved_count": 10,
+  "approved_strategy_ids": [
+    "EURUSD_BUY_ONLY_V1",
+    "EURUSD_SELL_ONLY_V2",
+    "GBPUSD_BUY_ONLY_V1",
+    "GBPUSD_SELL_ONLY_V1",
+    "USDJPY_BUY_ONLY_V1",
+    "USDJPY_SELL_ONLY_V2",
+    "AUDUSD_BUY_ONLY_V1",
+    "AUDUSD_SELL_ONLY_V1",
+    "USDCAD_BUY_ONLY_V1",
+    "USDCAD_SELL_ONLY_V1"
+  ],
+  "comparison_periods": [],
+  "datasets": {
+    "AUD_USD": {
+      "bid_ask_required": true,
+      "bytes": 11024563,
+      "m1_candles": 39700,
+      "sha256": "9497adac0a51878c171821ae90419be69ff28ab0479259a0a56188355af00f01"
+    },
+    "EUR_USD": {
+      "bid_ask_required": true,
+      "bytes": 11094704,
+      "m1_candles": 39978,
+      "sha256": "72bb26fe2a03cb92942d6df809e88378f31bd8c5a76870db384800c6ee71a13c"
+    },
+    "GBP_USD": {
+      "bid_ask_required": true,
+      "bytes": 11132902,
+      "m1_candles": 40103,
+      "sha256": "5b0ec932158a5d097a79c408626c1bc45b15b06fe363216662372ab98cba872f"
+    },
+    "USD_CAD": {
+      "bid_ask_required": true,
+      "bytes": 11098256,
+      "m1_candles": 40008,
+      "sha256": "fb53b0f0821da5a52fc9add35aa0cb241ec847322dea1df9164e3eda0d18d02b"
+    },
+    "USD_JPY": {
+      "bid_ask_required": true,
+      "bytes": 11128165,
+      "m1_candles": 40013,
+      "sha256": "cf58c1109bcd7bfa855e44f2a75380efe7edd82f7ffee7beaa0338ff2f36d0db"
+    }
+  },
+  "execution_model": {
+    "bid_ask_required": true,
+    "entry_slippage_pips": 0.1,
+    "exit_slippage_pips": 0.1,
+    "horizon_minutes": 240,
+    "look_ahead": false,
+    "source": "OANDA Practice"
+  },
+  "policy": {
+    "maximum_rules": 2,
+    "minimum_resolved": 10,
+    "target_win_rate": 0.5
+  },
+  "production_authority": false,
+  "results": [
+    {
+      "baseline": {
+        "ambiguous": 0,
+        "episodes": 113,
+        "episodes_per_30_days": 113.0,
+        "expectancy_r": -0.15330836454442326,
+        "losses": 55,
+        "maximum_loss_streak": 21,
+        "net_r": -13.64444444445367,
+        "profit_factor": 0.7762390670552761,
+        "resolved": 89,
+        "resolved_per_30_days": 89.0,
+        "timeouts": 24,
+        "win_rate": 0.38202247191011235,
+        "wins": 34
+      },
+      "comparison_periods": [],
+      "current_rules": [],
+      "direction": "BUY",
+      "final_gates": {
+        "minimum_10_resolved": true,
+        "positive_expectancy_safety": true,
+        "win_rate_strictly_above_50": true
+      },
+      "frozen_candidate": {
+        "all_rules": [
+          {
+            "feature": "h1_gap_atr",
+            "operator": ">=",
+            "threshold": 1.58196289
+          },
+          {
+            "feature": "m15_gap_atr",
+            "operator": ">=",
+            "threshold": 1.20277563
+          }
+        ],
+        "definition_sha256": "b25742499cda828b53a8f8b59815af590950b6c99945fe6e70af2d24c66bdabf",
+        "final_gates": {
+          "minimum_10_resolved": true,
+          "positive_expectancy_safety": true,
+          "win_rate_strictly_above_50": true
+        },
+        "metrics": {
+          "ambiguous": 0,
+          "episodes": 12,
+          "episodes_per_30_days": 12.0,
+          "expectancy_r": 1.1805555555555247,
+          "losses": 1,
+          "maximum_loss_streak": 1,
+          "net_r": 14.166666666666297,
+          "profit_factor": 14.010204081631134,
+          "resolved": 12,
+          "resolved_per_30_days": 12.0,
+          "timeouts": 0,
+          "win_rate": 0.9166666666666666,
+          "wins": 11
+        },
+        "out_of_sample_validated": false,
+        "paper_only": true,
+        "qualified": true,
+        "selection_score": 10.327903623247543,
+        "wilson_lower_80": 0.7582809685228543
+      },
+      "holdout_opened": false,
+      "instrument": "EUR_USD",
+      "policy": {
+        "maximum_rules": 2,
+        "minimum_resolved": 10,
+        "target_win_rate": 0.5
+      },
+      "production_authority": false,
+      "resolved_definition": "WIN + LOSS only; TIMEOUT and AMBIGUOUS excluded",
+      "search": {
+        "candidate_base": "UNFILTERED_DIRECTIONAL_LANE",
+        "directional_score_excluded": true,
+        "eligible_one_window_candidates": 2685,
+        "evaluated_candidates": 29268,
+        "selection_is_out_of_sample": false,
+        "single_candidates": 250,
+        "temporal_comparison": false,
+        "threshold_source": "SAME_FROZEN_30_DAY_WINDOW"
+      },
+      "selection_protocol": "ONE_30_DAY_WINDOW_MIN10_PAPER_ONLY",
+      "split": null,
+      "strategy_id": "EURUSD_BUY_ONLY_V1",
+      "unfiltered_baseline": {
+        "ambiguous": 0,
+        "episodes": 113,
+        "episodes_per_30_days": 113.0,
+        "expectancy_r": -0.15330836454442326,
+        "losses": 55,
+        "maximum_loss_streak": 21,
+        "net_r": -13.64444444445367,
+        "profit_factor": 0.7762390670552761,
+        "resolved": 89,
+        "resolved_per_30_days": 89.0,
+        "timeouts": 24,
+        "win_rate": 0.38202247191011235,
+        "wins": 34
+      },
+      "verdict": "PAPER_CANDIDATE",
+      "window": {
+        "days": 30.0,
+        "end": "2026-09-16T12:11:00+00:00",
+        "start": "2026-08-17T12:11:00+00:00"
+      }
+    },
+    {
+      "baseline": {
+        "ambiguous": 0,
+        "episodes": 8,
+        "episodes_per_30_days": 8.0,
+        "expectancy_r": -0.16666666666672836,
+        "losses": 5,
+        "maximum_loss_streak": 3,
+        "net_r": -1.3333333333338269,
+        "profit_factor": 0.7585513078470156,
+        "resolved": 8,
+        "resolved_per_30_days": 8.0,
+        "timeouts": 0,
+        "win_rate": 0.375,
+        "wins": 3
+      },
+      "comparison_periods": [],
+      "current_rules": [
+        {
+          "feature": "extension_atr",
+          "operator": ">=",
+          "threshold": 0.9
+        },
+        {
+          "feature": "session_strength",
+          "operator": ">=",
+          "threshold": 0.2
+        },
+        {
+          "feature": "session_momentum_atr",
+          "operator": ">=",
+          "threshold": -0.21
+        }
+      ],
+      "direction": "SELL",
+      "final_gates": {
+        "minimum_10_resolved": true,
+        "positive_expectancy_safety": true,
+        "win_rate_strictly_above_50": true
+      },
+      "frozen_candidate": {
+        "all_rules": [
+          {
+            "feature": "h1_gap_atr",
+            "operator": ">=",
+            "threshold": 0.81177932
+          },
+          {
+            "feature": "session_momentum_atr",
+            "operator": ">=",
+            "threshold": -0.32319926
+          }
+        ],
+        "definition_sha256": "8823aaee47eb15eae5a45ba8b61f94ae769e0e98e18513b435cb2074f79e733c",
+        "final_gates": {
+          "minimum_10_resolved": true,
+          "positive_expectancy_safety": true,
+          "win_rate_strictly_above_50": true
+        },
+        "metrics": {
+          "ambiguous": 0,
+          "episodes": 13,
+          "episodes_per_30_days": 13.0,
+          "expectancy_r": 0.8988888888888322,
+          "losses": 2,
+          "maximum_loss_streak": 2,
+          "net_r": 8.988888888888322,
+          "profit_factor": 5.106598984770806,
+          "resolved": 10,
+          "resolved_per_30_days": 10.0,
+          "timeouts": 3,
+          "win_rate": 0.8,
+          "wins": 8
+        },
+        "out_of_sample_validated": false,
+        "paper_only": true,
+        "qualified": true,
+        "selection_score": 8.137716845848429,
+        "wilson_lower_80": 0.6015960115342781
+      },
+      "holdout_opened": false,
+      "instrument": "EUR_USD",
+      "policy": {
+        "maximum_rules": 2,
+        "minimum_resolved": 10,
+        "target_win_rate": 0.5
+      },
+      "production_authority": false,
+      "resolved_definition": "WIN + LOSS only; TIMEOUT and AMBIGUOUS excluded",
+      "search": {
+        "candidate_base": "UNFILTERED_DIRECTIONAL_LANE",
+        "directional_score_excluded": true,
+        "eligible_one_window_candidates": 510,
+        "evaluated_candidates": 28336,
+        "selection_is_out_of_sample": false,
+        "single_candidates": 246,
+        "temporal_comparison": false,
+        "threshold_source": "SAME_FROZEN_30_DAY_WINDOW"
+      },
+      "selection_protocol": "ONE_30_DAY_WINDOW_MIN10_PAPER_ONLY",
+      "split": null,
+      "strategy_id": "EURUSD_SELL_ONLY_V2",
+      "unfiltered_baseline": {
+        "ambiguous": 0,
+        "episodes": 103,
+        "episodes_per_30_days": 103.0,
+        "expectancy_r": -0.3711111111112246,
+        "losses": 53,
+        "maximum_loss_streak": 12,
+        "net_r": -27.833333333341844,
+        "profit_factor": 0.5243068742878009,
+        "resolved": 75,
+        "resolved_per_30_days": 75.0,
+        "timeouts": 27,
+        "win_rate": 0.29333333333333333,
+        "wins": 22
+      },
+      "verdict": "PAPER_CANDIDATE",
+      "window": {
+        "days": 30.0,
+        "end": "2026-09-16T12:11:00+00:00",
+        "start": "2026-08-17T12:11:00+00:00"
+      }
+    },
+    {
+      "baseline": {
+        "ambiguous": 0,
+        "episodes": 141,
+        "episodes_per_30_days": 141.0,
+        "expectancy_r": -0.3815547169812468,
+        "losses": 88,
+        "maximum_loss_streak": 17,
+        "net_r": -47.69433962265585,
+        "profit_factor": 0.5168013593160146,
+        "resolved": 125,
+        "resolved_per_30_days": 125.0,
+        "timeouts": 16,
+        "win_rate": 0.296,
+        "wins": 37
+      },
+      "comparison_periods": [],
+      "current_rules": [],
+      "direction": "BUY",
+      "final_gates": {
+        "minimum_10_resolved": true,
+        "positive_expectancy_safety": true,
+        "win_rate_strictly_above_50": true
+      },
+      "frozen_candidate": {
+        "all_rules": [
+          {
+            "feature": "extension_atr",
+            "operator": "<=",
+            "threshold": 0.40566165
+          },
+          {
+            "feature": "session_momentum_atr",
+            "operator": "<=",
+            "threshold": -0.89624724
+          }
+        ],
+        "definition_sha256": "3fe34afd8e7b9c4f729445279916d800a798b8c0c70d7cf97100ed90ed3d26ba",
+        "final_gates": {
+          "minimum_10_resolved": true,
+          "positive_expectancy_safety": true,
+          "win_rate_strictly_above_50": true
+        },
+        "metrics": {
+          "ambiguous": 0,
+          "episodes": 10,
+          "episodes_per_30_days": 10.0,
+          "expectancy_r": 0.633333333333284,
+          "losses": 3,
+          "maximum_loss_streak": 1,
+          "net_r": 6.33333333333284,
+          "profit_factor": 2.8811881188116106,
+          "resolved": 10,
+          "resolved_per_30_days": 10.0,
+          "timeouts": 0,
+          "win_rate": 0.7,
+          "wins": 7
+        },
+        "out_of_sample_validated": false,
+        "paper_only": true,
+        "qualified": true,
+        "selection_score": 6.514362671792061,
+        "wilson_lower_80": 0.4973717052397509
+      },
+      "holdout_opened": false,
+      "instrument": "GBP_USD",
+      "policy": {
+        "maximum_rules": 2,
+        "minimum_resolved": 10,
+        "target_win_rate": 0.5
+      },
+      "production_authority": false,
+      "resolved_definition": "WIN + LOSS only; TIMEOUT and AMBIGUOUS excluded",
+      "search": {
+        "candidate_base": "UNFILTERED_DIRECTIONAL_LANE",
+        "directional_score_excluded": true,
+        "eligible_one_window_candidates": 66,
+        "evaluated_candidates": 28802,
+        "selection_is_out_of_sample": false,
+        "single_candidates": 248,
+        "temporal_comparison": false,
+        "threshold_source": "SAME_FROZEN_30_DAY_WINDOW"
+      },
+      "selection_protocol": "ONE_30_DAY_WINDOW_MIN10_PAPER_ONLY",
+      "split": null,
+      "strategy_id": "GBPUSD_BUY_ONLY_V1",
+      "unfiltered_baseline": {
+        "ambiguous": 0,
+        "episodes": 141,
+        "episodes_per_30_days": 141.0,
+        "expectancy_r": -0.3815547169812468,
+        "losses": 88,
+        "maximum_loss_streak": 17,
+        "net_r": -47.69433962265585,
+        "profit_factor": 0.5168013593160146,
+        "resolved": 125,
+        "resolved_per_30_days": 125.0,
+        "timeouts": 16,
+        "win_rate": 0.296,
+        "wins": 37
+      },
+      "verdict": "PAPER_CANDIDATE",
+      "window": {
+        "days": 30.0,
+        "end": "2026-09-16T12:11:00+00:00",
+        "start": "2026-08-17T12:11:00+00:00"
+      }
+    },
+    {
+      "baseline": {
+        "ambiguous": 2,
+        "episodes": 126,
+        "episodes_per_30_days": 126.0,
+        "expectancy_r": -0.14681238615677578,
+        "losses": 64,
+        "maximum_loss_streak": 11,
+        "net_r": -15.415300546461458,
+        "profit_factor": 0.7856008268920845,
+        "resolved": 105,
+        "resolved_per_30_days": 105.0,
+        "timeouts": 19,
+        "win_rate": 0.3904761904761905,
+        "wins": 41
+      },
+      "comparison_periods": [],
+      "current_rules": [],
+      "direction": "SELL",
+      "final_gates": {
+        "minimum_10_resolved": true,
+        "positive_expectancy_safety": true,
+        "win_rate_strictly_above_50": true
+      },
+      "frozen_candidate": {
+        "all_rules": [
+          {
+            "feature": "h1_gap_atr",
+            "operator": ">=",
+            "threshold": -1.0078491
+          },
+          {
+            "feature": "m15_gap_atr",
+            "operator": ">=",
+            "threshold": 0.13508471
+          }
+        ],
+        "definition_sha256": "cfca0e71c49f48db69b23a79e15c479dfc00689af95ad25ffef92c2d79ab7e49",
+        "final_gates": {
+          "minimum_10_resolved": true,
+          "positive_expectancy_safety": true,
+          "win_rate_strictly_above_50": true
+        },
+        "metrics": {
+          "ambiguous": 0,
+          "episodes": 11,
+          "episodes_per_30_days": 11.0,
+          "expectancy_r": 0.8822222222221038,
+          "losses": 2,
+          "maximum_loss_streak": 1,
+          "net_r": 8.822222222221038,
+          "profit_factor": 4.911330049259745,
+          "resolved": 10,
+          "resolved_per_30_days": 10.0,
+          "timeouts": 1,
+          "win_rate": 0.8,
+          "wins": 8
+        },
+        "out_of_sample_validated": false,
+        "paper_only": true,
+        "qualified": true,
+        "selection_score": 8.104383512514973,
+        "wilson_lower_80": 0.6015960115342781
+      },
+      "holdout_opened": false,
+      "instrument": "GBP_USD",
+      "policy": {
+        "maximum_rules": 2,
+        "minimum_resolved": 10,
+        "target_win_rate": 0.5
+      },
+      "production_authority": false,
+      "resolved_definition": "WIN + LOSS only; TIMEOUT and AMBIGUOUS excluded",
+      "search": {
+        "candidate_base": "UNFILTERED_DIRECTIONAL_LANE",
+        "directional_score_excluded": true,
+        "eligible_one_window_candidates": 2388,
+        "evaluated_candidates": 27424,
+        "selection_is_out_of_sample": false,
+        "single_candidates": 242,
+        "temporal_comparison": false,
+        "threshold_source": "SAME_FROZEN_30_DAY_WINDOW"
+      },
+      "selection_protocol": "ONE_30_DAY_WINDOW_MIN10_PAPER_ONLY",
+      "split": null,
+      "strategy_id": "GBPUSD_SELL_ONLY_V1",
+      "unfiltered_baseline": {
+        "ambiguous": 2,
+        "episodes": 126,
+        "episodes_per_30_days": 126.0,
+        "expectancy_r": -0.14681238615677578,
+        "losses": 64,
+        "maximum_loss_streak": 11,
+        "net_r": -15.415300546461458,
+        "profit_factor": 0.7856008268920845,
+        "resolved": 105,
+        "resolved_per_30_days": 105.0,
+        "timeouts": 19,
+        "win_rate": 0.3904761904761905,
+        "wins": 41
+      },
+      "verdict": "PAPER_CANDIDATE",
+      "window": {
+        "days": 30.0,
+        "end": "2026-09-16T12:11:00+00:00",
+        "start": "2026-08-17T12:11:00+00:00"
+      }
+    },
+    {
+      "baseline": {
+        "ambiguous": 0,
+        "episodes": 214,
+        "episodes_per_30_days": 214.0,
+        "expectancy_r": -0.1444530284332761,
+        "losses": 125,
+        "maximum_loss_streak": 10,
+        "net_r": -29.323964771955048,
+        "profit_factor": 0.7879245003888,
+        "resolved": 203,
+        "resolved_per_30_days": 203.0,
+        "timeouts": 11,
+        "win_rate": 0.3842364532019704,
+        "wins": 78
+      },
+      "comparison_periods": [],
+      "current_rules": [],
+      "direction": "BUY",
+      "final_gates": {
+        "minimum_10_resolved": true,
+        "positive_expectancy_safety": true,
+        "win_rate_strictly_above_50": true
+      },
+      "frozen_candidate": {
+        "all_rules": [
+          {
+            "feature": "m15_gap_atr",
+            "operator": "<=",
+            "threshold": 0.84085822
+          },
+          {
+            "feature": "session_momentum_atr",
+            "operator": "<=",
+            "threshold": -1.54426238
+          }
+        ],
+        "definition_sha256": "46730a57233cb44c644de0cf8d6387dd0d06739309b9880afe54cd89a9c1196c",
+        "final_gates": {
+          "minimum_10_resolved": true,
+          "positive_expectancy_safety": true,
+          "win_rate_strictly_above_50": true
+        },
+        "metrics": {
+          "ambiguous": 0,
+          "episodes": 10,
+          "episodes_per_30_days": 10.0,
+          "expectancy_r": 0.8985256410253996,
+          "losses": 2,
+          "maximum_loss_streak": 1,
+          "net_r": 8.985256410253996,
+          "profit_factor": 5.043365384613532,
+          "resolved": 10,
+          "resolved_per_30_days": 10.0,
+          "timeouts": 0,
+          "win_rate": 0.8,
+          "wins": 8
+        },
+        "out_of_sample_validated": false,
+        "paper_only": true,
+        "qualified": true,
+        "selection_score": 8.136990350121565,
+        "wilson_lower_80": 0.6015960115342781
+      },
+      "holdout_opened": false,
+      "instrument": "USD_JPY",
+      "policy": {
+        "maximum_rules": 2,
+        "minimum_resolved": 10,
+        "target_win_rate": 0.5
+      },
+      "production_authority": false,
+      "resolved_definition": "WIN + LOSS only; TIMEOUT and AMBIGUOUS excluded",
+      "search": {
+        "candidate_base": "UNFILTERED_DIRECTIONAL_LANE",
+        "directional_score_excluded": true,
+        "eligible_one_window_candidates": 1525,
+        "evaluated_candidates": 28340,
+        "selection_is_out_of_sample": false,
+        "single_candidates": 246,
+        "temporal_comparison": false,
+        "threshold_source": "SAME_FROZEN_30_DAY_WINDOW"
+      },
+      "selection_protocol": "ONE_30_DAY_WINDOW_MIN10_PAPER_ONLY",
+      "split": null,
+      "strategy_id": "USDJPY_BUY_ONLY_V1",
+      "unfiltered_baseline": {
+        "ambiguous": 0,
+        "episodes": 214,
+        "episodes_per_30_days": 214.0,
+        "expectancy_r": -0.1444530284332761,
+        "losses": 125,
+        "maximum_loss_streak": 10,
+        "net_r": -29.323964771955048,
+        "profit_factor": 0.7879245003888,
+        "resolved": 203,
+        "resolved_per_30_days": 203.0,
+        "timeouts": 11,
+        "win_rate": 0.3842364532019704,
+        "wins": 78
+      },
+      "verdict": "PAPER_CANDIDATE",
+      "window": {
+        "days": 30.0,
+        "end": "2026-09-16T12:11:00+00:00",
+        "start": "2026-08-17T12:11:00+00:00"
+      }
+    },
+    {
+      "baseline": {
+        "ambiguous": 0,
+        "episodes": 23,
+        "episodes_per_30_days": 23.0,
+        "expectancy_r": 0.7125235458861069,
+        "losses": 6,
+        "maximum_loss_streak": 1,
+        "net_r": 15.67551800949435,
+        "profit_factor": 3.3617223369522873,
+        "resolved": 22,
+        "resolved_per_30_days": 22.0,
+        "timeouts": 1,
+        "win_rate": 0.7272727272727273,
+        "wins": 16
+      },
+      "comparison_periods": [],
+      "current_rules": [
+        {
+          "feature": "session_strength",
+          "operator": "<=",
+          "threshold": 0.27496452
+        },
+        {
+          "feature": "rr_raw",
+          "operator": "<=",
+          "threshold": 1.69111111
+        }
+      ],
+      "direction": "SELL",
+      "final_gates": {
+        "minimum_10_resolved": true,
+        "positive_expectancy_safety": true,
+        "win_rate_strictly_above_50": true
+      },
+      "frozen_candidate": {
+        "all_rules": [
+          {
+            "feature": "rr_raw",
+            "operator": "<=",
+            "threshold": 1.02888889
+          },
+          {
+            "feature": "session_strength",
+            "operator": "<=",
+            "threshold": 0.24427135
+          }
+        ],
+        "definition_sha256": "46e70aa972aaf8cb358e697911636029bbd578de36638c61655008c448c7294c",
+        "final_gates": {
+          "minimum_10_resolved": true,
+          "positive_expectancy_safety": true,
+          "win_rate_strictly_above_50": true
+        },
+        "metrics": {
+          "ambiguous": 0,
+          "episodes": 12,
+          "episodes_per_30_days": 12.0,
+          "expectancy_r": 0.974218374218164,
+          "losses": 2,
+          "maximum_loss_streak": 1,
+          "net_r": 11.690620490617968,
+          "profit_factor": 6.3139184048255865,
+          "resolved": 12,
+          "resolved_per_30_days": 12.0,
+          "timeouts": 0,
+          "win_rate": 0.8333333333333334,
+          "wins": 10
+        },
+        "out_of_sample_validated": false,
+        "paper_only": true,
+        "qualified": true,
+        "selection_score": 8.868878269727396,
+        "wilson_lower_80": 0.6578125361049787
+      },
+      "holdout_opened": false,
+      "instrument": "USD_JPY",
+      "policy": {
+        "maximum_rules": 2,
+        "minimum_resolved": 10,
+        "target_win_rate": 0.5
+      },
+      "production_authority": false,
+      "resolved_definition": "WIN + LOSS only; TIMEOUT and AMBIGUOUS excluded",
+      "search": {
+        "candidate_base": "UNFILTERED_DIRECTIONAL_LANE",
+        "directional_score_excluded": true,
+        "eligible_one_window_candidates": 1129,
+        "evaluated_candidates": 28340,
+        "selection_is_out_of_sample": false,
+        "single_candidates": 246,
+        "temporal_comparison": false,
+        "threshold_source": "SAME_FROZEN_30_DAY_WINDOW"
+      },
+      "selection_protocol": "ONE_30_DAY_WINDOW_MIN10_PAPER_ONLY",
+      "split": null,
+      "strategy_id": "USDJPY_SELL_ONLY_V2",
+      "unfiltered_baseline": {
+        "ambiguous": 0,
+        "episodes": 213,
+        "episodes_per_30_days": 213.0,
+        "expectancy_r": -0.19252779369196046,
+        "losses": 129,
+        "maximum_loss_streak": 18,
+        "net_r": -39.08314211946797,
+        "profit_factor": 0.7254340126161183,
+        "resolved": 203,
+        "resolved_per_30_days": 203.0,
+        "timeouts": 10,
+        "win_rate": 0.3645320197044335,
+        "wins": 74
+      },
+      "verdict": "PAPER_CANDIDATE",
+      "window": {
+        "days": 30.0,
+        "end": "2026-09-16T12:11:00+00:00",
+        "start": "2026-08-17T12:11:00+00:00"
+      }
+    },
+    {
+      "baseline": {
+        "ambiguous": 0,
+        "episodes": 137,
+        "episodes_per_30_days": 137.0,
+        "expectancy_r": -0.4483870967741101,
+        "losses": 69,
+        "maximum_loss_streak": 12,
+        "net_r": -41.69999999999224,
+        "profit_factor": 0.44662341492190594,
+        "resolved": 93,
+        "resolved_per_30_days": 93.0,
+        "timeouts": 41,
+        "win_rate": 0.25806451612903225,
+        "wins": 24
+      },
+      "comparison_periods": [],
+      "current_rules": [],
+      "direction": "BUY",
+      "final_gates": {
+        "minimum_10_resolved": true,
+        "positive_expectancy_safety": true,
+        "win_rate_strictly_above_50": true
+      },
+      "frozen_candidate": {
+        "all_rules": [
+          {
+            "feature": "room_to_barrier_r",
+            "operator": "<=",
+            "threshold": 0.46666667
+          },
+          {
+            "feature": "session_momentum_atr",
+            "operator": "<=",
+            "threshold": -0.68553545
+          }
+        ],
+        "definition_sha256": "6f02aba3d2977e370fd12350389683ade95b987f38f7491ba07b5c8b2d57ebf0",
+        "final_gates": {
+          "minimum_10_resolved": true,
+          "positive_expectancy_safety": true,
+          "win_rate_strictly_above_50": true
+        },
+        "metrics": {
+          "ambiguous": 0,
+          "episodes": 20,
+          "episodes_per_30_days": 20.0,
+          "expectancy_r": 0.4166666666667386,
+          "losses": 4,
+          "maximum_loss_streak": 1,
+          "net_r": 4.166666666667386,
+          "profit_factor": 1.976562500000278,
+          "resolved": 10,
+          "resolved_per_30_days": 10.0,
+          "timeouts": 10,
+          "win_rate": 0.6,
+          "wins": 6
+        },
+        "out_of_sample_validated": false,
+        "paper_only": true,
+        "qualified": true,
+        "selection_score": 5.07083071162413,
+        "wilson_lower_80": 0.40135184255626694
+      },
+      "holdout_opened": false,
+      "instrument": "AUD_USD",
+      "policy": {
+        "maximum_rules": 2,
+        "minimum_resolved": 10,
+        "target_win_rate": 0.5
+      },
+      "production_authority": false,
+      "resolved_definition": "WIN + LOSS only; TIMEOUT and AMBIGUOUS excluded",
+      "search": {
+        "candidate_base": "UNFILTERED_DIRECTIONAL_LANE",
+        "directional_score_excluded": true,
+        "eligible_one_window_candidates": 15,
+        "evaluated_candidates": 28802,
+        "selection_is_out_of_sample": false,
+        "single_candidates": 248,
+        "temporal_comparison": false,
+        "threshold_source": "SAME_FROZEN_30_DAY_WINDOW"
+      },
+      "selection_protocol": "ONE_30_DAY_WINDOW_MIN10_PAPER_ONLY",
+      "split": null,
+      "strategy_id": "AUDUSD_BUY_ONLY_V1",
+      "unfiltered_baseline": {
+        "ambiguous": 0,
+        "episodes": 137,
+        "episodes_per_30_days": 137.0,
+        "expectancy_r": -0.4483870967741101,
+        "losses": 69,
+        "maximum_loss_streak": 12,
+        "net_r": -41.69999999999224,
+        "profit_factor": 0.44662341492190594,
+        "resolved": 93,
+        "resolved_per_30_days": 93.0,
+        "timeouts": 41,
+        "win_rate": 0.25806451612903225,
+        "wins": 24
+      },
+      "verdict": "PAPER_CANDIDATE",
+      "window": {
+        "days": 30.0,
+        "end": "2026-09-16T12:11:00+00:00",
+        "start": "2026-08-17T12:11:00+00:00"
+      }
+    },
+    {
+      "baseline": {
+        "ambiguous": 2,
+        "episodes": 86,
+        "episodes_per_30_days": 86.0,
+        "expectancy_r": -0.003059581320377896,
+        "losses": 39,
+        "maximum_loss_streak": 7,
+        "net_r": -0.21111111110607483,
+        "profit_factor": 0.9950235725511922,
+        "resolved": 69,
+        "resolved_per_30_days": 69.0,
+        "timeouts": 13,
+        "win_rate": 0.43478260869565216,
+        "wins": 30
+      },
+      "comparison_periods": [],
+      "current_rules": [],
+      "direction": "SELL",
+      "final_gates": {
+        "minimum_10_resolved": true,
+        "positive_expectancy_safety": true,
+        "win_rate_strictly_above_50": true
+      },
+      "frozen_candidate": {
+        "all_rules": [
+          {
+            "feature": "session_displacement_atr",
+            "operator": ">=",
+            "threshold": -2.912
+          },
+          {
+            "feature": "session_momentum_atr",
+            "operator": ">=",
+            "threshold": 1.86666667
+          }
+        ],
+        "definition_sha256": "dcb156ec57f12a3db9f6ee9e1ac37648bc3a5a9d2ecc7757abcbb823cea8e69e",
+        "final_gates": {
+          "minimum_10_resolved": true,
+          "positive_expectancy_safety": true,
+          "win_rate_strictly_above_50": true
+        },
+        "metrics": {
+          "ambiguous": 0,
+          "episodes": 11,
+          "episodes_per_30_days": 11.0,
+          "expectancy_r": 1.1838383838384308,
+          "losses": 1,
+          "maximum_loss_streak": 1,
+          "net_r": 13.022222222222737,
+          "profit_factor": 13.082474226805816,
+          "resolved": 11,
+          "resolved_per_30_days": 11.0,
+          "timeouts": 0,
+          "win_rate": 0.9090909090909091,
+          "wins": 10
+        },
+        "out_of_sample_validated": false,
+        "paper_only": true,
+        "qualified": true,
+        "selection_score": 10.142021173239646,
+        "wilson_lower_80": 0.7394949884519448
+      },
+      "holdout_opened": false,
+      "instrument": "AUD_USD",
+      "policy": {
+        "maximum_rules": 2,
+        "minimum_resolved": 10,
+        "target_win_rate": 0.5
+      },
+      "production_authority": false,
+      "resolved_definition": "WIN + LOSS only; TIMEOUT and AMBIGUOUS excluded",
+      "search": {
+        "candidate_base": "UNFILTERED_DIRECTIONAL_LANE",
+        "directional_score_excluded": true,
+        "eligible_one_window_candidates": 2774,
+        "evaluated_candidates": 27878,
+        "selection_is_out_of_sample": false,
+        "single_candidates": 244,
+        "temporal_comparison": false,
+        "threshold_source": "SAME_FROZEN_30_DAY_WINDOW"
+      },
+      "selection_protocol": "ONE_30_DAY_WINDOW_MIN10_PAPER_ONLY",
+      "split": null,
+      "strategy_id": "AUDUSD_SELL_ONLY_V1",
+      "unfiltered_baseline": {
+        "ambiguous": 2,
+        "episodes": 86,
+        "episodes_per_30_days": 86.0,
+        "expectancy_r": -0.003059581320377896,
+        "losses": 39,
+        "maximum_loss_streak": 7,
+        "net_r": -0.21111111110607483,
+        "profit_factor": 0.9950235725511922,
+        "resolved": 69,
+        "resolved_per_30_days": 69.0,
+        "timeouts": 13,
+        "win_rate": 0.43478260869565216,
+        "wins": 30
+      },
+      "verdict": "PAPER_CANDIDATE",
+      "window": {
+        "days": 30.0,
+        "end": "2026-09-16T12:11:00+00:00",
+        "start": "2026-08-17T12:11:00+00:00"
+      }
+    },
+    {
+      "baseline": {
+        "ambiguous": 0,
+        "episodes": 130,
+        "episodes_per_30_days": 130.0,
+        "expectancy_r": -0.2296799516909397,
+        "losses": 67,
+        "maximum_loss_streak": 12,
+        "net_r": -23.88671497585773,
+        "profit_factor": 0.680791863163656,
+        "resolved": 104,
+        "resolved_per_30_days": 104.0,
+        "timeouts": 26,
+        "win_rate": 0.3557692307692308,
+        "wins": 37
+      },
+      "comparison_periods": [],
+      "current_rules": [],
+      "direction": "BUY",
+      "final_gates": {
+        "minimum_10_resolved": true,
+        "positive_expectancy_safety": true,
+        "win_rate_strictly_above_50": true
+      },
+      "frozen_candidate": {
+        "all_rules": [
+          {
+            "feature": "rr_raw",
+            "operator": "<=",
+            "threshold": 0.53333333
+          },
+          {
+            "feature": "buy_score",
+            "operator": "<=",
+            "threshold": 47.0
+          }
+        ],
+        "definition_sha256": "af623ebc17ce341e77ca32ea9faef56f3230438f0c1b93a422581c4cbcc69394",
+        "final_gates": {
+          "minimum_10_resolved": true,
+          "positive_expectancy_safety": true,
+          "win_rate_strictly_above_50": true
+        },
+        "metrics": {
+          "ambiguous": 0,
+          "episodes": 11,
+          "episodes_per_30_days": 11.0,
+          "expectancy_r": 1.1322222222221654,
+          "losses": 1,
+          "maximum_loss_streak": 1,
+          "net_r": 11.322222222221654,
+          "profit_factor": 11.0891089108877,
+          "resolved": 10,
+          "resolved_per_30_days": 10.0,
+          "timeouts": 1,
+          "win_rate": 0.9,
+          "wins": 9
+        },
+        "out_of_sample_validated": false,
+        "paper_only": true,
+        "qualified": true,
+        "selection_score": 9.813980383269262,
+        "wilson_lower_80": 0.7175556986096949
+      },
+      "holdout_opened": false,
+      "instrument": "USD_CAD",
+      "policy": {
+        "maximum_rules": 2,
+        "minimum_resolved": 10,
+        "target_win_rate": 0.5
+      },
+      "production_authority": false,
+      "resolved_definition": "WIN + LOSS only; TIMEOUT and AMBIGUOUS excluded",
+      "search": {
+        "candidate_base": "UNFILTERED_DIRECTIONAL_LANE",
+        "directional_score_excluded": true,
+        "eligible_one_window_candidates": 1401,
+        "evaluated_candidates": 29268,
+        "selection_is_out_of_sample": false,
+        "single_candidates": 250,
+        "temporal_comparison": false,
+        "threshold_source": "SAME_FROZEN_30_DAY_WINDOW"
+      },
+      "selection_protocol": "ONE_30_DAY_WINDOW_MIN10_PAPER_ONLY",
+      "split": null,
+      "strategy_id": "USDCAD_BUY_ONLY_V1",
+      "unfiltered_baseline": {
+        "ambiguous": 0,
+        "episodes": 130,
+        "episodes_per_30_days": 130.0,
+        "expectancy_r": -0.2296799516909397,
+        "losses": 67,
+        "maximum_loss_streak": 12,
+        "net_r": -23.88671497585773,
+        "profit_factor": 0.680791863163656,
+        "resolved": 104,
+        "resolved_per_30_days": 104.0,
+        "timeouts": 26,
+        "win_rate": 0.3557692307692308,
+        "wins": 37
+      },
+      "verdict": "PAPER_CANDIDATE",
+      "window": {
+        "days": 30.0,
+        "end": "2026-09-16T12:11:00+00:00",
+        "start": "2026-08-17T12:11:00+00:00"
+      }
+    },
+    {
+      "baseline": {
+        "ambiguous": 0,
+        "episodes": 106,
+        "episodes_per_30_days": 106.0,
+        "expectancy_r": 0.1320048309177883,
+        "losses": 46,
+        "maximum_loss_streak": 11,
+        "net_r": 12.144444444436525,
+        "profit_factor": 1.236018138630775,
+        "resolved": 92,
+        "resolved_per_30_days": 92.0,
+        "timeouts": 14,
+        "win_rate": 0.5,
+        "wins": 46
+      },
+      "comparison_periods": [],
+      "current_rules": [],
+      "direction": "SELL",
+      "final_gates": {
+        "minimum_10_resolved": true,
+        "positive_expectancy_safety": true,
+        "win_rate_strictly_above_50": true
+      },
+      "frozen_candidate": {
+        "all_rules": [
+          {
+            "feature": "rr_raw",
+            "operator": "<=",
+            "threshold": 1.17777778
+          },
+          {
+            "feature": "m15_gap_atr",
+            "operator": "<=",
+            "threshold": -2.08580719
+          }
+        ],
+        "definition_sha256": "30a3057e34f95af6122ab52d3ce7da89484cb341c23d254dd0b3ebd5e29700b1",
+        "final_gates": {
+          "minimum_10_resolved": true,
+          "positive_expectancy_safety": true,
+          "win_rate_strictly_above_50": true
+        },
+        "metrics": {
+          "ambiguous": 0,
+          "episodes": 19,
+          "episodes_per_30_days": 19.0,
+          "expectancy_r": 1.3784313725490152,
+          "losses": 0,
+          "maximum_loss_streak": 0,
+          "net_r": 23.43333333333326,
+          "profit_factor": 999.0,
+          "resolved": 17,
+          "resolved_per_30_days": 17.0,
+          "timeouts": 2,
+          "win_rate": 1.0,
+          "wins": 17
+        },
+        "out_of_sample_validated": false,
+        "paper_only": true,
+        "qualified": true,
+        "selection_score": 12.30477653157941,
+        "wilson_lower_80": 0.9119010068902417
+      },
+      "holdout_opened": false,
+      "instrument": "USD_CAD",
+      "policy": {
+        "maximum_rules": 2,
+        "minimum_resolved": 10,
+        "target_win_rate": 0.5
+      },
+      "production_authority": false,
+      "resolved_definition": "WIN + LOSS only; TIMEOUT and AMBIGUOUS excluded",
+      "search": {
+        "candidate_base": "UNFILTERED_DIRECTIONAL_LANE",
+        "directional_score_excluded": true,
+        "eligible_one_window_candidates": 9282,
+        "evaluated_candidates": 28336,
+        "selection_is_out_of_sample": false,
+        "single_candidates": 246,
+        "temporal_comparison": false,
+        "threshold_source": "SAME_FROZEN_30_DAY_WINDOW"
+      },
+      "selection_protocol": "ONE_30_DAY_WINDOW_MIN10_PAPER_ONLY",
+      "split": null,
+      "strategy_id": "USDCAD_SELL_ONLY_V1",
+      "unfiltered_baseline": {
+        "ambiguous": 0,
+        "episodes": 106,
+        "episodes_per_30_days": 106.0,
+        "expectancy_r": 0.1320048309177883,
+        "losses": 46,
+        "maximum_loss_streak": 11,
+        "net_r": 12.144444444436525,
+        "profit_factor": 1.236018138630775,
+        "resolved": 92,
+        "resolved_per_30_days": 92.0,
+        "timeouts": 14,
+        "win_rate": 0.5,
+        "wins": 46
+      },
+      "verdict": "PAPER_CANDIDATE",
+      "window": {
+        "days": 30.0,
+        "end": "2026-09-16T12:11:00+00:00",
+        "start": "2026-08-17T12:11:00+00:00"
+      }
+    }
+  ],
+  "schema_version": 2,
+  "split": null,
+  "strategy_count": 10,
+  "window": {
+    "end": "2026-09-16T12:11:00+00:00",
+    "start": "2026-08-17T12:11:00+00:00"
+  }
+}
