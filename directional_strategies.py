@@ -11,6 +11,9 @@ import json
 import math
 from typing import Any, Mapping
 
+from trend_paper_activation import load_active_definitions
+from major_trend import BIAS, TREND_VERSION
+
 
 SUPPORTED_INSTRUMENTS = ("EUR_USD", "GBP_USD", "USD_JPY", "AUD_USD", "USD_CAD")
 SUPPORTED_DIRECTIONS = ("BUY", "SELL")
@@ -100,6 +103,21 @@ STRATEGY_DEFINITIONS = {
     for instrument in SUPPORTED_INSTRUMENTS
     for direction in SUPPORTED_DIRECTIONS
 }
+for _key, _candidate in load_active_definitions().items():
+    if _key not in STRATEGY_DEFINITIONS:
+        raise ValueError("Unknown instrument in adaptive PAPER evidence")
+    STRATEGY_DEFINITIONS[_key].update(_candidate)
+    STRATEGY_DEFINITIONS[_key]["filters"] = []
+    STRATEGY_DEFINITIONS[_key]["evidence_window"] = (
+        _candidate["window"]["start"] + "/" + _candidate["window"]["end"]
+    )
+
+
+def adaptive_trend_enabled(instrument):
+    return any("conditional_rules" in definition for (inst, _), definition in STRATEGY_DEFINITIONS.items()
+               if inst == _normalize_instrument(instrument))
+
+
 STRATEGY_IDS = tuple(
     STRATEGY_DEFINITIONS[(instrument, direction)]["strategy_id"]
     for instrument in SUPPORTED_INSTRUMENTS
@@ -205,7 +223,19 @@ def evaluate_directional_strategy(row: Mapping[str, Any]) -> dict[str, Any]:
 
     features = row.get("features") if isinstance(row.get("features"), Mapping) else {}
     checks = []
-    for rule in definition["filters"]:
+    rules = definition["filters"]
+    regime = features.get("major_trend_regime")
+    role = None
+    if "conditional_rules" in definition:
+        bias = BIAS.get(regime)
+        if bias is not None and features.get("major_trend_version") == TREND_VERSION:
+            role = "LATERAL" if bias == 0 else ("WITH" if (bias > 0) == (direction == "BUY") else "AGAINST")
+        policy = definition["conditional_rules"].get(role, {})
+        checks.append({"feature": "major_trend_regime", "value": regime,
+                       "passed": bool(policy.get("enabled")),
+                       "reason": None if policy.get("enabled") else "NO_QUALIFIED_TREND_EVIDENCE"})
+        rules = policy.get("filters", [])
+    for rule in rules:
         feature = str(rule["feature"])
         operator = str(rule["operator"])
         threshold = float(rule["threshold"])
@@ -233,7 +263,9 @@ def evaluate_directional_strategy(row: Mapping[str, Any]) -> dict[str, Any]:
         "strategy_id": definition["strategy_id"],
         "candidate_definition_sha256": candidate_definition_sha256(instrument, direction),
         "base_filter_pipeline": list(BASE_FILTER_PIPELINE),
-        "lane_filters": json.loads(_canonical_json(definition["filters"])),
+        "lane_filters": json.loads(_canonical_json(rules)),
+        "major_trend_regime": regime,
+        "major_trend_role": role,
         "checks": checks,
         "paper_only": True,
         "research_only": True,

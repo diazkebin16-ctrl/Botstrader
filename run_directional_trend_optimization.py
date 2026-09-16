@@ -7,11 +7,6 @@ import json
 import os
 from pathlib import Path
 
-os.environ["AUTO_TRADE"] = "false"
-os.environ["TRADING_ENVIRONMENT"] = "SIMULATION"
-os.environ["PRIMARY_OANDA_ENV"] = "practice"
-os.environ["PRODUCTION_AUTHORIZED"] = "false"
-os.environ.setdefault("DB_PATH", "/tmp/directional_trend_research.db")
 
 from directional_trend_optimizer import optimize_all
 from directional_strategies import SUPPORTED_INSTRUMENTS
@@ -26,6 +21,11 @@ def frozen_window(now=None):
 
 
 async def main():
+    os.environ["AUTO_TRADE"] = "false"
+    os.environ["TRADING_ENVIRONMENT"] = "SIMULATION"
+    os.environ["PRIMARY_OANDA_ENV"] = "practice"
+    os.environ["PRODUCTION_AUTHORIZED"] = "false"
+    os.environ.setdefault("DB_PATH", "/tmp/directional_trend_research.db")
     import server
     root = Path(os.getenv("DIRECTIONAL_TREND_ROOT", "/tmp/directional_trend_60d"))
     root.mkdir(parents=True, exist_ok=True)

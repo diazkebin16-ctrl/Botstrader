@@ -38,6 +38,7 @@ from directional_strategies import (
     all_strategy_definitions,
     directional_strategy_id,
     evaluate_directional_strategy,
+    adaptive_trend_enabled,
 )
 from slot_allocator import slot_policy
 from opportunity_ranker import rank_opportunities
@@ -306,7 +307,7 @@ TREND_RUNNER_MIN_SCORE = max(0.0, float(os.getenv("TREND_RUNNER_MIN_SCORE", "0.6
 TREND_RUNNER_TP_R = max(2.0, float(os.getenv("TREND_RUNNER_TP_R", "3.0")))
 TREND_RUNNER_TRAIL_START_R = max(1.5, float(os.getenv("TREND_RUNNER_TRAIL_START_R", "1.75")))
 TREND_RUNNER_TRAIL_DISTANCE_R = max(0.40, float(os.getenv("TREND_RUNNER_TRAIL_DISTANCE_R", "0.90")))
-VERSION_TAG = "3.40.3"
+VERSION_TAG = "3.41.0"
 ENTRY_TIMING_ENABLED = os.getenv("ENTRY_TIMING_ENABLED", "true").lower() == "true"
 MAX_ENTRY_EXTENSION_ATR = max(0.5, float(os.getenv("MAX_ENTRY_EXTENSION_ATR", "1.50")))
 MIN_ROOM_TO_BARRIER_R = max(1.0, float(os.getenv("MIN_ROOM_TO_BARRIER_R", "1.50")))
@@ -9830,6 +9831,14 @@ async def scan(client: httpx.AsyncClient, inst: str, *, batch_collect: bool=Fals
 
     obs_strategy_started=time.perf_counter()
     r = analyze(h1, m15, m5, m1, inst)
+    if adaptive_trend_enabled(inst):
+        from major_trend import major_trend, trend_features
+        h4 = await candles(client, inst, "H4", 140)
+        # Use the last M1 close, exactly as in replay, not future wall-clock bars.
+        decision_time = m1[-1]["t"] + timedelta(minutes=1)
+        trend = major_trend(h1, h4, decision_time)
+        r["features"].update(trend_features(trend))
+        r["major_trend"] = trend
     attach_directional_strategy(r)
     obs_strategy_ms=(time.perf_counter()-obs_strategy_started)*1000
     r["market_data_stale"]=bool(obs_market_health.get("stale"))

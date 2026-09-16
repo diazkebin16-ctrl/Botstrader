@@ -83,6 +83,35 @@ jobs:
           evidence_ref="research/adaptive-60d-${{ github.run_id }}"
           git push origin "HEAD:$evidence_ref"
 
+      - name: Refresh qualified PAPER configuration on main
+        if: github.ref == 'refs/heads/main'
+        shell: bash
+        run: |
+          python - <<'PYCODE'
+          import json, os
+          from pathlib import Path
+          from trend_paper_activation import activate_report
+          source = Path(os.environ["DIRECTIONAL_TREND_ROOT"]) / "DIRECTIONAL_TREND_60D_EVIDENCE.json"
+          report = json.loads(source.read_text())
+          if report["all_ten_qualified"]:
+              activate_report(source)
+          else:
+              print("All ten strategies did not qualify; active PAPER configuration retained.")
+          PYCODE
+          if [ -f ACTIVE_TREND_60D_PAPER.json ]; then
+            git add ACTIVE_TREND_60D_PAPER.json
+            if ! git diff --cached --quiet; then
+              git fetch origin main
+              current_main="$(git rev-parse origin/main)"
+              if [ "$current_main" != "${{ github.sha }}" ]; then
+                echo "Main changed during research; evidence saved, activation deferred."
+                exit 0
+              fi
+              git commit -m "Refresh qualified adaptive 60-day PAPER strategies"
+              git push origin HEAD:main
+            fi
+          fi
+
       - name: Upload evidence
         if: always()
         uses: actions/upload-artifact@v4

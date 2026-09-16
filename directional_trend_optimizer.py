@@ -1,5 +1,6 @@
 """One 60-day in-sample selector with causal, reversal-aware evidence floors."""
 from collections import Counter
+from datetime import timedelta
 from itertools import combinations
 import hashlib
 import json
@@ -29,13 +30,21 @@ def closed_nonoverlapping(rows, start, end):
     """
     selected, busy_until, seen = [], utc(start), set()
     for row in sorted(rows, key=lambda r: r["candle_ts"]):
+        if row.get("outcome_status") in ("INVALID", "ENTRY_INVALIDATED", "ENTRY_BLOCKED_OPERATIONAL_TIME"):
+            # A rejected order never opens a position and cannot occupy the pair.
+            continue
+        if row.get("outcome_status") in ("DATA_INSUFFICIENT", "DATA_INTEGRITY_ERROR"):
+            raise ValueError("Incomplete executable bid/ask evidence")
         entry = utc(row.get("entry_ts") or row["candle_ts"])
         identity = (row["instrument"], row["candle_ts"])
         if identity in seen or entry < busy_until or not utc(start) <= entry < utc(end):
             continue
         seen.add(identity)
         exit_time = utc(row["exit_ts"]) if row.get("exit_ts") else utc(end)
-        busy_until = max(entry, exit_time)
+        # TP/SL timestamps identify the start of the exit M1 candle.
+        # Its high/low is only known at the close, so do not reuse that minute.
+        release = exit_time + timedelta(minutes=1) if row.get("outcome_status") in ("WIN", "LOSS", "AMBIGUOUS") else exit_time
+        busy_until = max(entry, release)
         if row.get("exit_ts") and entry <= exit_time <= utc(end):
             selected.append(dict(row))
     return selected
@@ -63,7 +72,11 @@ def _select_role(rows, thresholds, minima):
         w = int(np.count_nonzero(mask & wins))
         expectancy = float(returns[mask].sum()) / n
         # Floors are hard constraints; role win rates are reported, not extra gates.
-        score = 10 * _wilson_lower(w, n) + 2 * expectancy + .01 * np.log1p(n) - .05 * len(rules)
+        excess = sum(max(0, int(np.count_nonzero(mask & regimes[r])) - target) / max(target, 1)
+                     for r, target in minima.items())
+        # Prefer the requested balance among qualifying candidates; this is a
+        # soft frequency preference, never fabricated trades or a trading quota.
+        score = 10 * _wilson_lower(w, n) + 2 * expectancy - excess - .05 * len(rules)
         if best is None or score > best[0]:
             best = (score, {"rules": rules, "rows": [r for r, keep in zip(rows, mask) if keep]})
 

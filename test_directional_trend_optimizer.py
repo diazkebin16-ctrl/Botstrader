@@ -94,6 +94,13 @@ def test_overlap_duplicate_and_post_window_closes_excluded():
     assert len(closed_nonoverlapping(data + [data[0]], START, END)) == 1
 
 
+def test_invalid_entry_does_not_lock_the_pair_for_sixty_days():
+    data = rows("BUY", "UP", 3, START)
+    data[0]["outcome_status"] = "ENTRY_INVALIDATED"
+    data[0].pop("exit_ts")
+    assert len(closed_nonoverlapping(data, START, END)) == 2
+
+
 def test_window_is_exactly_sixty_days():
     start, end = frozen_window(END)
     assert end - start == timedelta(days=60)
@@ -104,3 +111,46 @@ def test_window_is_exactly_sixty_days():
 def test_empty_exposure_fails():
     with pytest.raises(ValueError):
         directional_targets({})
+
+
+def activation_fixture():
+    data = rows("BUY", "UP", 36, START) + rows("SELL", "UP", 18, START + timedelta(days=30))
+    pair = optimize(data, {"UP": 1})
+    from major_trend import TREND_VERSION
+    return {"protocol": "ONE_60_DAY_CAUSAL_H1_H4_ADAPTIVE_PAPER", "production_authority": False,
+            "split": None, "comparison_periods": [], "trend_version": TREND_VERSION,
+            "window": {"start": START.isoformat(), "end": END.isoformat(), "days": 60},
+            "execution_model": {"closed_within_window_only": True}, "pairs": [pair]}
+
+
+def test_activation_recomputes_gates_and_rejects_tampering(tmp_path):
+    from trend_paper_activation import qualified_definitions, activate_report
+    import json
+    report = activation_fixture()
+    assert len(qualified_definitions(report)) == 2
+    source, active = tmp_path / "evidence.json", tmp_path / "active.json"
+    source.write_text(json.dumps(report))
+    assert activate_report(source, active) == 2
+    report["pairs"][0]["results"][0]["metrics"]["wins"] = 0
+    with pytest.raises(ValueError):
+        qualified_definitions(report)
+
+
+def test_runtime_switches_role_when_trend_reverses_and_fails_closed(monkeypatch):
+    import directional_strategies as registry
+    from major_trend import TREND_VERSION
+    definition = dict(registry.STRATEGY_DEFINITIONS[("USD_JPY", "BUY")])
+    definition["conditional_rules"] = {
+        "WITH": {"enabled": True, "filters": [{"feature": "rr_raw", "operator": ">=", "threshold": 1}]},
+        "AGAINST": {"enabled": True, "filters": [{"feature": "rr_raw", "operator": ">=", "threshold": 2}]},
+        "LATERAL": {"enabled": False, "filters": []},
+    }
+    monkeypatch.setitem(registry.STRATEGY_DEFINITIONS, ("USD_JPY", "BUY"), definition)
+    row = {"instrument": "USD_JPY", "signal": "BUY", "features": {
+        "major_trend_regime": "UP", "major_trend_version": TREND_VERSION, "rr_raw": 1.5}}
+    assert registry.evaluate_directional_strategy(row)["eligible"]
+    row["features"]["major_trend_regime"] = "DOWN"
+    result = registry.evaluate_directional_strategy(row)
+    assert result["major_trend_role"] == "AGAINST" and not result["eligible"]
+    row["features"].pop("major_trend_version")
+    assert not registry.evaluate_directional_strategy(row)["eligible"]
