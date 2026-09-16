@@ -1,9 +1,10 @@
-"""Two-month, lane-isolated optimizer for the ten PAPER FX strategies.
+"""Two-month, lane-isolated selector for the ten PAPER FX strategies.
 
-The first frozen month is used for discovery. Exactly one candidate per lane
-may be frozen before the second frozen month is opened as an out-of-sample
-holdout. A candidate must retain at least ten resolved WIN/LOSS outcomes in
-each month; TIMEOUT and AMBIGUOUS episodes never count toward that minimum.
+This selector is intentionally retrospective: both frozen months participate
+in candidate selection.  It is used only to start a PAPER forward experiment,
+never as proof of out-of-sample profitability or as LIVE authority.  A final
+candidate must retain at least ten resolved WIN/LOSS outcomes in each month
+and finish strictly above 50% with positive expectancy in each month.
 """
 from __future__ import annotations
 
@@ -27,11 +28,9 @@ class MonthPolicy:
     target_win_rate: float = 0.50
     minimum_resolved_per_month: int = 10
     minimum_total_resolved: int = 20
-    minimum_first_month_win_rate_gain: float = 0.01
     purge_minutes: int = 240
     embargo_minutes: int = 30
     maximum_rules: int = 2
-    pair_seed_count: int = 36
 
 
 def _dt(value: Any) -> datetime:
@@ -103,10 +102,9 @@ def _segments(
     return first_month, second_month
 
 
-def _candidate_rules(rows: Sequence[Mapping[str, Any]], current_rules: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+def _candidate_rules(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     result: list[dict[str, Any]] = []
     seen: set[tuple[str, str, float]] = set()
-    current = {(str(rule["feature"]), str(rule["operator"]), float(rule["threshold"])) for rule in current_rules}
     for feature in FEATURES:
         values = []
         for row in rows:
@@ -120,7 +118,7 @@ def _candidate_rules(rows: Sequence[Mapping[str, Any]], current_rules: Sequence[
             threshold = round(_quantile(values, fraction), 8)
             for operator in (">=", "<="):
                 identity = (feature, operator, threshold)
-                if identity in seen or identity in current:
+                if identity in seen:
                     continue
                 seen.add(identity)
                 result.append({"feature": feature, "operator": operator, "threshold": threshold})
@@ -146,15 +144,21 @@ def optimize_lane(
     definition = strategy_definition(instrument, direction)
     current_rules = list(definition["filters"])
     raw_lane = _lane(rows, instrument, direction)
-    current_lane = apply_rules(raw_lane, current_rules)
-    first_month, second_month = _segments(current_lane, start, second_month_start, end, policy)
+    raw_first_month, raw_second_month = _segments(raw_lane, start, second_month_start, end, policy)
+    current_first_month = apply_rules(raw_first_month, current_rules)
+    current_second_month = apply_rules(raw_second_month, current_rules)
     first_days = (_dt(second_month_start) - _dt(start)).total_seconds() / 86400.0
     second_days = (_dt(end) - _dt(second_month_start)).total_seconds() / 86400.0
     total_days = first_days + second_days
-    baseline = {
-        "first_month": metrics(first_month, first_days),
-        "second_month": metrics(second_month, second_days),
-        "total": metrics([*first_month, *second_month], total_days),
+    raw_baseline = {
+        "first_month": metrics(raw_first_month, first_days),
+        "second_month": metrics(raw_second_month, second_days),
+        "total": metrics([*raw_first_month, *raw_second_month], total_days),
+    }
+    incumbent = {
+        "first_month": metrics(current_first_month, first_days),
+        "second_month": metrics(current_second_month, second_days),
+        "total": metrics([*current_first_month, *current_second_month], total_days),
     }
     report: dict[str, Any] = {
         "strategy_id": definition["strategy_id"],
@@ -166,58 +170,77 @@ def optimize_lane(
             "end": _dt(end).isoformat(),
         },
         "split": {
-            "first_month_role": "DISCOVERY",
-            "second_month_role": "FROZEN_HOLDOUT",
+            "first_month_role": "RETROSPECTIVE_SELECTION",
+            "second_month_role": "RETROSPECTIVE_SELECTION",
             "purge_minutes": policy.purge_minutes,
             "embargo_minutes": policy.embargo_minutes,
         },
         "resolved_definition": "WIN + LOSS only; TIMEOUT and AMBIGUOUS excluded",
         "policy": policy.__dict__,
         "current_rules": current_rules,
-        "baseline": baseline,
+        "baseline": incumbent,
+        "unfiltered_baseline": raw_baseline,
         "search": None,
         "frozen_candidate": None,
         "holdout_opened": False,
-        "verdict": "INSUFFICIENT_BASELINE_EVIDENCE",
+        "verdict": "INSUFFICIENT_RAW_EVIDENCE",
+        "selection_protocol": "TWO_MONTH_CONSTRAINED_PAPER_ONLY",
         "production_authority": False,
     }
     if (
-        baseline["first_month"]["resolved"] < policy.minimum_resolved_per_month
-        or baseline["second_month"]["resolved"] < policy.minimum_resolved_per_month
+        raw_baseline["first_month"]["resolved"] < policy.minimum_resolved_per_month
+        or raw_baseline["second_month"]["resolved"] < policy.minimum_resolved_per_month
     ):
         return report
 
-    baseline_first_rate = _wr(baseline["first_month"])
-
-    def screen(additional_rules: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
-        selected_metrics = metrics(apply_rules(first_month, additional_rules), first_days)
-        win_rate = _wr(selected_metrics)
-        qualified = (
-            selected_metrics["resolved"] >= policy.minimum_resolved_per_month
-            and win_rate > policy.target_win_rate
-            and win_rate >= baseline_first_rate + policy.minimum_first_month_win_rate_gain
-            and _positive(selected_metrics)
+    def screen(rules: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+        first_metrics = metrics(apply_rules(raw_first_month, rules), first_days)
+        second_metrics = metrics(apply_rules(raw_second_month, rules), second_days)
+        total_metrics = metrics(
+            apply_rules([*raw_first_month, *raw_second_month], rules), total_days,
+        )
+        gates = {
+            "first_month_minimum_10_resolved": first_metrics["resolved"] >= policy.minimum_resolved_per_month,
+            "first_month_win_rate_above_50": _wr(first_metrics) > policy.target_win_rate,
+            "first_month_positive": _positive(first_metrics),
+            "second_month_minimum_10_resolved": second_metrics["resolved"] >= policy.minimum_resolved_per_month,
+            "second_month_win_rate_above_50": _wr(second_metrics) > policy.target_win_rate,
+            "second_month_positive": _positive(second_metrics),
+            "total_minimum_20_resolved": total_metrics["resolved"] >= policy.minimum_total_resolved,
+            "total_win_rate_above_50": _wr(total_metrics) > policy.target_win_rate,
+            "total_positive": _positive(total_metrics),
+        }
+        qualified = all(gates.values())
+        first_wilson = _wilson_lower(first_metrics["wins"], first_metrics["resolved"])
+        second_wilson = _wilson_lower(second_metrics["wins"], second_metrics["resolved"])
+        minimum_expectancy = min(
+            float(first_metrics.get("expectancy_r") or -999.0),
+            float(second_metrics.get("expectancy_r") or -999.0),
         )
         score = (
-            8.0 * _wilson_lower(selected_metrics["wins"], selected_metrics["resolved"])
-            + 1.5 * float(selected_metrics["expectancy_r"] or -999.0)
-            + 0.01 * math.log1p(selected_metrics["resolved"])
-            - 0.04 * len(additional_rules)
+            10.0 * min(first_wilson, second_wilson)
+            + 2.0 * minimum_expectancy
+            + 0.50 * min(_wr(first_metrics), _wr(second_metrics))
+            + 0.01 * math.log1p(total_metrics["resolved"])
+            - 0.05 * len(rules)
         )
         return {
-            "additional_rules": [dict(rule) for rule in additional_rules],
-            "first_month": selected_metrics,
-            "wilson_lower_80": _wilson_lower(selected_metrics["wins"], selected_metrics["resolved"]),
+            "all_rules": [dict(rule) for rule in rules],
+            "first_month": first_metrics,
+            "second_month": second_metrics,
+            "total": total_metrics,
+            "final_gates": gates,
+            "minimum_month_wilson_lower_80": min(first_wilson, second_wilson),
             "qualified": qualified,
             "selection_score": score,
         }
 
-    rules = _candidate_rules(first_month, current_rules)
+    rules = _candidate_rules([*raw_first_month, *raw_second_month])
+    evaluated = [screen([]), screen(current_rules)]
     singles = [screen([rule]) for rule in rules]
-    seeds = sorted(singles, key=lambda item: (-float(item["selection_score"]), str(item["additional_rules"])))[:policy.pair_seed_count]
-    evaluated = list(singles)
+    evaluated.extend(singles)
     if policy.maximum_rules >= 2:
-        for left, right in combinations((item["additional_rules"][0] for item in seeds), 2):
+        for left, right in combinations(rules, 2):
             if left["feature"] == right["feature"]:
                 continue
             evaluated.append(screen([left, right]))
@@ -225,43 +248,31 @@ def optimize_lane(
     report["search"] = {
         "single_candidates": len(singles),
         "evaluated_candidates": len(evaluated),
-        "eligible_before_holdout": len(eligible),
-        "threshold_source": "FIRST_MONTH_ONLY",
+        "eligible_two_month_candidates": len(eligible),
+        "threshold_source": "BOTH_FROZEN_MONTHS",
+        "candidate_base": "UNFILTERED_DIRECTIONAL_LANE",
+        "selection_is_out_of_sample": False,
         "directional_score_excluded": True,
     }
     if not eligible:
-        report["verdict"] = "NO_CANDIDATE_BEFORE_HOLDOUT"
+        report["verdict"] = "NO_TWO_MONTH_CANDIDATE"
         return report
 
-    frozen = sorted(eligible, key=lambda item: (-float(item["selection_score"]), str(item["additional_rules"])))[0]
-    additional_rules = frozen["additional_rules"]
-    all_rules = current_rules + additional_rules
+    frozen = sorted(
+        eligible,
+        key=lambda item: (-float(item["selection_score"]), str(item["all_rules"])),
+    )[0]
+    all_rules = frozen["all_rules"]
     report["frozen_candidate"] = {
         **frozen,
-        "all_rules": all_rules,
         "definition_sha256": _definition_sha(all_rules),
+        "paper_only": True,
+        "out_of_sample_validated": False,
     }
-    report["holdout_opened"] = True
-    second_metrics = metrics(apply_rules(second_month, additional_rules), second_days)
-    total_metrics = metrics(apply_rules([*first_month, *second_month], additional_rules), total_days)
-    second_rate = _wr(second_metrics)
-    total_rate = _wr(total_metrics)
-    gates = {
-        "first_month_minimum_10_resolved": frozen["first_month"]["resolved"] >= policy.minimum_resolved_per_month,
-        "first_month_win_rate_above_50": _wr(frozen["first_month"]) > policy.target_win_rate,
-        "first_month_positive": _positive(frozen["first_month"]),
-        "second_month_minimum_10_resolved": second_metrics["resolved"] >= policy.minimum_resolved_per_month,
-        "second_month_win_rate_above_50": second_rate > policy.target_win_rate,
-        "second_month_not_worse_than_baseline": second_rate >= _wr(baseline["second_month"]),
-        "second_month_positive": _positive(second_metrics),
-        "total_minimum_20_resolved": total_metrics["resolved"] >= policy.minimum_total_resolved,
-        "total_win_rate_above_50": total_rate > policy.target_win_rate,
-        "total_positive": _positive(total_metrics),
-    }
-    report["second_month"] = second_metrics
-    report["total"] = total_metrics
-    report["final_gates"] = gates
-    report["verdict"] = "RESEARCH_CANDIDATE" if all(gates.values()) else "SECOND_MONTH_REJECTED"
+    report["second_month"] = frozen["second_month"]
+    report["total"] = frozen["total"]
+    report["final_gates"] = frozen["final_gates"]
+    report["verdict"] = "PAPER_CANDIDATE"
     return report
 
 
@@ -279,7 +290,7 @@ def optimize_all_lanes(
                     second_month_start=second_month_start, end=end, policy=policy,
                 )
             )
-    approved = [item["strategy_id"] for item in results if item["verdict"] == "RESEARCH_CANDIDATE"]
+    approved = [item["strategy_id"] for item in results if item["verdict"] == "PAPER_CANDIDATE"]
     return {
         "window": {
             "start": _dt(start).isoformat(),

@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - research/two-month-min10
+      - research/two-month-min10-v2
   workflow_dispatch:
 
 permissions:

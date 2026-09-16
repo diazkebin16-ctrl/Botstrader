@@ -42,9 +42,9 @@ def _optimize(rows, *, instrument="GBP_USD", direction="BUY"):
 def test_fewer_than_ten_resolved_in_either_month_is_never_modified():
     rows = _month_rows(START, count=9) + _month_rows(SECOND, count=20)
     result = _optimize(rows)
-    assert result["verdict"] == "INSUFFICIENT_BASELINE_EVIDENCE"
-    assert result["baseline"]["first_month"]["resolved"] == 9
-    assert result["baseline"]["second_month"]["resolved"] == 20
+    assert result["verdict"] == "INSUFFICIENT_RAW_EVIDENCE"
+    assert result["unfiltered_baseline"]["first_month"]["resolved"] == 9
+    assert result["unfiltered_baseline"]["second_month"]["resolved"] == 20
     assert result["holdout_opened"] is False
 
 
@@ -56,9 +56,9 @@ def test_monthly_minimum_counts_only_win_and_loss():
         row["outcome_status"] = "TIMEOUT" if index < 4 else "AMBIGUOUS"
         rows.append(row)
     result = _optimize(rows)
-    assert result["baseline"]["first_month"]["episodes"] == 14
-    assert result["baseline"]["first_month"]["resolved"] == 9
-    assert result["verdict"] == "INSUFFICIENT_BASELINE_EVIDENCE"
+    assert result["unfiltered_baseline"]["first_month"]["episodes"] == 14
+    assert result["unfiltered_baseline"]["first_month"]["resolved"] == 9
+    assert result["verdict"] == "INSUFFICIENT_RAW_EVIDENCE"
 
 
 def test_lane_isolation_and_determinism():
@@ -69,19 +69,19 @@ def test_lane_isolation_and_determinism():
     assert first["baseline"]["total"]["resolved"] == 40
 
 
-def test_second_month_cannot_change_the_frozen_candidate():
+def test_both_months_are_explicitly_part_of_paper_candidate_selection():
     normal = _optimize(_rows())
     inverted_rows = _month_rows(START) + _month_rows(SECOND, invert=True)
     inverted = _optimize(inverted_rows)
-    assert normal["holdout_opened"] is True
-    assert inverted["holdout_opened"] is True
-    assert normal["frozen_candidate"] == inverted["frozen_candidate"]
-    assert normal["search"]["threshold_source"] == "FIRST_MONTH_ONLY"
+    assert normal["holdout_opened"] is False
+    assert inverted["holdout_opened"] is False
+    assert normal["search"]["threshold_source"] == "BOTH_FROZEN_MONTHS"
+    assert normal["search"]["selection_is_out_of_sample"] is False
 
 
 def test_qualified_candidate_has_ten_resolved_in_each_month():
     result = _optimize(_rows())
-    assert result["verdict"] == "RESEARCH_CANDIDATE"
+    assert result["verdict"] == "PAPER_CANDIDATE"
     assert result["frozen_candidate"]["first_month"]["resolved"] >= 10
     assert result["second_month"]["resolved"] >= 10
     assert result["frozen_candidate"]["first_month"]["win_rate"] > 0.50
@@ -95,11 +95,13 @@ def test_all_ten_lanes_are_reported():
     )
     assert len(result["results"]) == 10
     assert result["approved_count"] == 0
-    assert all(item["verdict"] == "INSUFFICIENT_BASELINE_EVIDENCE" for item in result["results"])
+    assert all(item["verdict"] == "INSUFFICIENT_RAW_EVIDENCE" for item in result["results"])
 
 
-def test_current_eurusd_sell_rules_are_applied_before_search():
+def test_current_eurusd_sell_rules_are_an_incumbent_not_a_search_floor():
     rows = _rows(instrument="EUR_USD", direction="SELL")
     result = _optimize(rows, instrument="EUR_USD", direction="SELL")
     assert len(result["current_rules"]) == 3
     assert result["strategy_id"] == "EURUSD_SELL_ONLY_V2"
+    assert result["search"]["candidate_base"] == "UNFILTERED_DIRECTIONAL_LANE"
+    assert result["frozen_candidate"]["all_rules"] != result["current_rules"]
