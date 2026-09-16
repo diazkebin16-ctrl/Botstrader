@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Download and optimize all ten directional PAPER lanes over one month."""
+"""Download and optimize all ten directional PAPER lanes over two months."""
 from __future__ import annotations
 
 import asyncio
@@ -21,7 +21,8 @@ from historical_replay import ReplayConfig, ReplayVariant, replay_history
 from replay_validation import ReplayValidationConfig
 
 
-START = datetime(2026, 8, 15, tzinfo=timezone.utc)
+START = datetime(2026, 7, 15, tzinfo=timezone.utc)
+SECOND_MONTH_START = datetime(2026, 8, 15, tzinfo=timezone.utc)
 END = datetime(2026, 9, 14, 23, 59, 59, tzinfo=timezone.utc)
 INSTRUMENTS = ("EUR_USD", "GBP_USD", "USD_JPY", "AUD_USD", "USD_CAD")
 OUTPUT_ROOT = Path(os.getenv("DIRECTIONAL_MONTH_ROOT", "/tmp/directional_month_optimization"))
@@ -44,7 +45,7 @@ async def main() -> int:
     for index, instrument in enumerate(INSTRUMENTS, 1):
         print(f"DIRECTIONAL_MONTH pair_start {index}/5 {instrument}", flush=True)
         bundle = await fetch_bundle(instrument, START, END, warmup_days=10, horizon_minutes=240)
-        cache = OUTPUT_ROOT / f"{instrument}_20260815_20260914_mba.json"
+        cache = OUTPUT_ROOT / f"{instrument}_20260715_20260914_mba.json"
         save_bundle(str(cache), bundle)
         identity = {
             "sha256": sha256(cache),
@@ -85,7 +86,9 @@ async def main() -> int:
             flush=True,
         )
 
-    report = optimize_all_lanes(rows_by_instrument, start=START, end=END)
+    report = optimize_all_lanes(
+        rows_by_instrument, start=START, second_month_start=SECOND_MONTH_START, end=END,
+    )
     report["schema_version"] = 1
     report["datasets"] = datasets
     report["execution_model"] = {
@@ -104,7 +107,7 @@ async def main() -> int:
             "verdict": item["verdict"],
             "baseline": item["baseline"],
             "frozen_candidate": item["frozen_candidate"],
-            "holdout": item.get("holdout"),
+            "second_month": item.get("second_month"),
             "total": item.get("total"),
             "final_gates": item.get("final_gates"),
         }
