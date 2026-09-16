@@ -1,15 +1,19 @@
-name: Directional One-Month Min-10 PAPER Research
+name: Directional Adaptive 60-Day PAPER Research
 
 on:
   workflow_dispatch:
   push:
     branches:
       - main
+      - codex/adaptive-60-day-trends
     paths:
       - .github/workflows/directional-one-month-min10.yml
-      - directional_month_optimizer.py
-      - run_directional_month_optimization.py
-      - test_directional_month_optimizer.py
+      - directional_trend_optimizer.py
+      - run_directional_trend_optimization.py
+      - test_directional_trend_optimizer.py
+      - major_trend.py
+      - historical_replay.py
+      - historical_candles.py
   schedule:
     - cron: "17 2 * * 1"
 
@@ -17,7 +21,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: directional-one-month-min10
+  group: directional-adaptive-60d
   cancel-in-progress: false
 
 jobs:
@@ -37,10 +41,10 @@ jobs:
       OANDA: https://api-fxpractice.oanda.com
 
     steps:
-      - name: Checkout exact main
+      - name: Checkout triggering revision
         uses: actions/checkout@v4
         with:
-          ref: main
+          ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: true
 
@@ -50,7 +54,7 @@ jobs:
           python-version: "3.12"
 
       - name: Configure isolated output path
-        run: echo "DIRECTIONAL_MONTH_ROOT=$RUNNER_TEMP/directional_one_month_min10" >> "$GITHUB_ENV"
+        run: echo "DIRECTIONAL_TREND_ROOT=$RUNNER_TEMP/directional_trend_60d" >> "$GITHUB_ENV"
 
       - name: Install research dependencies
         run: |
@@ -59,31 +63,34 @@ jobs:
           npm install -g @railway/cli@5.23.3
 
       - name: Validate single-window optimizer
-        run: python -m pytest -q test_directional_month_optimizer.py
+        run: python -m pytest -q test_directional_trend_optimizer.py
 
       - name: Import PAPER credentials securely
         run: python automation_v3_railway_adapter.py export-runtime
 
-      - name: Run all ten PAPER strategies over one 30-day window
-        run: python run_directional_month_optimization.py
+      - name: Run all ten PAPER strategies over one 60-day window
+        run: python run_directional_trend_optimization.py
 
       - name: Record governed evidence
         shell: bash
         run: |
-          cp "$DIRECTIONAL_MONTH_ROOT/DIRECTIONAL_ONE_MONTH_MIN10_EVIDENCE.json" DIRECTIONAL_ONE_MONTH_MIN10_EVIDENCE.json
+          cp "$DIRECTIONAL_TREND_ROOT/DIRECTIONAL_TREND_60D_EVIDENCE.json" DIRECTIONAL_TREND_60D_EVIDENCE.json
           git config user.name "Botstrader PAPER Research"
           git config user.email "research@users.noreply.github.com"
-          git add DIRECTIONAL_ONE_MONTH_MIN10_EVIDENCE.json
+          git add DIRECTIONAL_TREND_60D_EVIDENCE.json
           git diff --cached --check
-          git commit -m "Record one-month min-10 PAPER evidence" || true
-          git push origin HEAD:research/one-month-min10-evidence
+          git diff --cached --quiet || git commit -m "Record adaptive 60-day PAPER evidence"
+          evidence_ref="research/adaptive-60d-${{ github.run_id }}"
+          git push origin "HEAD:$evidence_ref"
 
       - name: Upload evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: directional-one-month-min10-${{ github.run_id }}
-          path: ${{ runner.temp }}/directional_one_month_min10/DIRECTIONAL_ONE_MONTH_MIN10_EVIDENCE.json
+          name: directional-adaptive-60d-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/directional_trend_60d/DIRECTIONAL_TREND_60D_EVIDENCE.json
+            ${{ runner.temp }}/directional_trend_60d/*_episodes.json
           if-no-files-found: warn
           retention-days: 30
 
@@ -91,16 +98,15 @@ jobs:
         if: always()
         shell: bash
         run: |
-          report="$DIRECTIONAL_MONTH_ROOT/DIRECTIONAL_ONE_MONTH_MIN10_EVIDENCE.json"
+          report="$DIRECTIONAL_TREND_ROOT/DIRECTIONAL_TREND_60D_EVIDENCE.json"
           if [ -f "$report" ]; then
             python - "$report" >> "$GITHUB_STEP_SUMMARY" <<'PY'
           import json, sys
           report = json.load(open(sys.argv[1], encoding="utf-8"))
-          print("## One-month PAPER gate")
+          print("## Adaptive 60-day PAPER gate")
           print(f"Approved: {report['approved_count']}/10")
           for item in report["results"]:
-              candidate = item.get("frozen_candidate") or {}
-              metrics = candidate.get("metrics") or item.get("baseline") or {}
+              metrics = item.get("metrics") or {}
               print(f"- {item['strategy_id']}: {item['verdict']} — resolved={metrics.get('resolved')} win_rate={metrics.get('win_rate')}")
           print("\nLIVE authority: disabled")
           PY
