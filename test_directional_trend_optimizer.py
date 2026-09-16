@@ -71,7 +71,7 @@ def test_reversal_requires_evidence_in_both_regimes():
     data = rows("BUY", "UP", 18, START) + rows("SELL", "UP", 9, START + timedelta(days=8))
     report = optimize(data, {"UP": 100, "DOWN": 100})
     assert not report["pair_qualified"]
-    assert not report["results"][0]["final_gates"]["regime_minima"]
+    assert not report["results"][0]["final_gates"]["adaptive_role_minima"]
     data += rows("BUY", "DOWN", 9, START + timedelta(days=30))
     data += rows("SELL", "DOWN", 18, START + timedelta(days=40))
     report = optimize(data, {"UP": 100, "DOWN": 100})
@@ -84,7 +84,7 @@ def test_exact_fifty_percent_fails_and_timeouts_do_not_count():
     assert not optimize(data, {"UP": 1})["pair_qualified"]
     data[0]["outcome_status"] = "TIMEOUT"
     report = optimize(data, {"UP": 1})
-    assert not report["results"][0]["final_gates"]["regime_minima"]
+    assert not report["results"][0]["final_gates"]["adaptive_role_minima"]
 
 
 def test_overlap_duplicate_and_post_window_closes_excluded():
@@ -177,3 +177,39 @@ def test_adaptive_replay_never_calls_temporal_split_helpers(monkeypatch):
     assert result["variants"]["ADAPTIVE"]["holdout"] is None
     assert result["variants"]["ADAPTIVE"]["walk_forward"] == []
     assert result["variants"]["ADAPTIVE"]["major_trend_exposure_minutes"] == {"LATERAL": 1}
+
+
+def test_parallel_pair_aggregation_rejects_mixed_windows(tmp_path):
+    import json
+    from run_directional_trend_optimization import aggregate
+    payload = {"instrument": "EUR_USD", "window": {
+        "start": (START + timedelta(days=1)).isoformat(), "end": END.isoformat()}}
+    (tmp_path / "EUR_USD_replay.json").write_text(json.dumps(payload))
+    with pytest.raises(ValueError, match="different windows"):
+        aggregate(tmp_path, START, END)
+
+
+def test_rejected_setup_does_not_occupy_a_position_before_filtering():
+    data = rows("BUY", "UP", 36, START + timedelta(hours=1))
+    data += rows("SELL", "UP", 18, START + timedelta(days=30))
+    for row in data:
+        row["features"]["rr_raw"] = 2.0
+    rejected = rows("BUY", "UP", 1, START)[0]
+    rejected.update(outcome_status="TIMEOUT", realized_r=None,
+                    exit_ts=(START + timedelta(days=2)).isoformat())
+    rejected["features"]["rr_raw"] = 0.1
+    report = optimize([rejected]+data, {"UP":1})
+    assert report["pair_qualified"]
+    assert report["results"][0]["metrics"]["resolved"] == 36
+
+
+def test_weak_and_strong_context_share_role_minima_without_reducing_total():
+    data = rows("BUY", "WEAK_UP", 34, START)
+    data += rows("SELL", "UP", 20, START + timedelta(days=30))
+    report = optimize(data, {"UP":1,"WEAK_UP":1})
+    assert report["pair_qualified"]
+    buy, sell = report["results"]
+    assert buy["minimum_by_role"]["WITH"] == 34
+    assert sell["minimum_by_role"]["AGAINST"] == 20
+    assert buy["resolved_by_regime"].get("UP",0) == 0
+    assert buy["metrics"]["resolved"] + sell["metrics"]["resolved"] == 54

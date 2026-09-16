@@ -3,7 +3,7 @@ import hashlib
 import json
 from pathlib import Path
 
-from major_trend import TREND_VERSION, directional_targets, utc
+from major_trend import BIAS, TREND_VERSION, directional_targets, utc
 
 ACTIVE_FILE = Path(__file__).with_name("ACTIVE_TREND_60D_PAPER.json")
 
@@ -24,6 +24,11 @@ def qualified_definitions(report):
         targets = directional_targets(pair["exposure_minutes"])
         if not pair.get("pair_qualified"):
             continue
+        def role_for(side, regime):
+            bias = BIAS[regime]
+            return "LATERAL" if bias == 0 else ("WITH" if (bias > 0) == (side == "BUY") else "AGAINST")
+        role_targets = {side:{role:sum(n for regime,n in targets[side].items() if role_for(side,regime)==role)
+                              for role in ("WITH","AGAINST","LATERAL")} for side in ("BUY","SELL")}
         results = pair["results"]
         if len(results) != 2 or {r["direction"] for r in results} != {"BUY", "SELL"}:
             raise ValueError("A complete BUY and SELL pair is required")
@@ -34,7 +39,8 @@ def qualified_definitions(report):
                     or metrics["resolved"] != metrics["wins"] + metrics["losses"]
                     or metrics["wins"] <= metrics["losses"] or metrics["expectancy_r"] <= 0
                     or row["minimum_by_regime"] != targets[direction]
-                    or any(row["resolved_by_regime"].get(regime, 0) < n for regime, n in targets[direction].items())
+                    or row["minimum_by_role"] != role_targets[direction]
+                    or any(sum(row["resolved_by_regime"].get(regime,0) for regime in BIAS if role_for(direction,regime)==role) < n for role,n in role_targets[direction].items())
                     or not all(row["final_gates"].values())):
                 raise ValueError("Candidate failed recomputed evidence gates")
             candidate = dict(row["candidate"])
@@ -44,6 +50,7 @@ def qualified_definitions(report):
             if (candidate["instrument"] != pair["instrument"] or candidate["direction"] != direction
                     or candidate["trend_version"] != TREND_VERSION or candidate["window"] != window
                     or candidate["minimum_by_regime"] != targets[direction]
+                    or candidate["minimum_by_role"] != role_targets[direction]
                     or candidate["paper_only"] is not True or candidate["production_authority"] is not False):
                 raise ValueError("Candidate metadata does not match its evidence")
             definitions[(pair["instrument"], direction)] = candidate
