@@ -77,6 +77,7 @@ def test_adaptive_observe_only_before_executed_sample_minimum(monkeypatch):
     monkeypatch.setattr(server,"evaluate_active_research_rules",lambda r:{"ok":True})
     monkeypatch.setattr(server,"strategy_execution_gate",lambda r:{"ok":True})
     monkeypatch.setattr(server,"reentry_guard",lambda r:{"ok":True})
+    monkeypatch.setattr(server,"evaluate_directional_strategy",lambda r:{"eligible":True})
     conf={"probability":0.05,"required_confidence":0.65,"samples":0,"mature":False}
     out=server.execution_decision(r,conf)
     assert out["execute"] is True

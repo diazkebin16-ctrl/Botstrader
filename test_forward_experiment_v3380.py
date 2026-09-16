@@ -195,6 +195,7 @@ def test_safe_canonical_signal_is_admitted_for_paper_collection(monkeypatch):
     monkeypatch.setattr(server, "evaluate_active_research_rules", lambda r: {"ok": True})
     monkeypatch.setattr(server, "strategy_execution_gate", lambda r: {"ok": True})
     monkeypatch.setattr(server, "reentry_guard", lambda r: {"ok": True})
+    monkeypatch.setattr(server, "evaluate_directional_strategy", lambda r: {"eligible": True})
     monkeypatch.setattr(server.deployment_manager, "managed_paper_entry_gate", lambda identity: {"allow": True, "reasons": []})
     expected = {
         "GBP_USD": "GBP_PAPER_COLLECTION_V1",

@@ -23,6 +23,52 @@ BASE_FILTER_PIPELINE = (
     "BROKER_PREFLIGHT",
 )
 
+# Frozen from DIRECTIONAL_ONE_MONTH_MIN10_EVIDENCE.json for the single
+# 2026-08-17T12:11Z..2026-09-16T12:11Z PAPER research window. These filters
+# have no LIVE authority and retain every global safety/risk/broker veto.
+ONE_MONTH_PAPER_FILTERS = {
+    ("EUR_USD", "BUY"): [
+        {"feature": "h1_gap_atr", "operator": ">=", "threshold": 1.58196289},
+        {"feature": "m15_gap_atr", "operator": ">=", "threshold": 1.20277563},
+    ],
+    ("EUR_USD", "SELL"): [
+        {"feature": "h1_gap_atr", "operator": ">=", "threshold": 0.81177932},
+        {"feature": "session_momentum_atr", "operator": ">=", "threshold": -0.32319926},
+    ],
+    ("GBP_USD", "BUY"): [
+        {"feature": "extension_atr", "operator": "<=", "threshold": 0.40566165},
+        {"feature": "session_momentum_atr", "operator": "<=", "threshold": -0.89624724},
+    ],
+    ("GBP_USD", "SELL"): [
+        {"feature": "h1_gap_atr", "operator": ">=", "threshold": -1.0078491},
+        {"feature": "m15_gap_atr", "operator": ">=", "threshold": 0.13508471},
+    ],
+    ("USD_JPY", "BUY"): [
+        {"feature": "m15_gap_atr", "operator": "<=", "threshold": 0.84085822},
+        {"feature": "session_momentum_atr", "operator": "<=", "threshold": -1.54426238},
+    ],
+    ("USD_JPY", "SELL"): [
+        {"feature": "rr_raw", "operator": "<=", "threshold": 1.02888889},
+        {"feature": "session_strength", "operator": "<=", "threshold": 0.24427135},
+    ],
+    ("AUD_USD", "BUY"): [
+        {"feature": "room_to_barrier_r", "operator": "<=", "threshold": 0.46666667},
+        {"feature": "session_momentum_atr", "operator": "<=", "threshold": -0.68553545},
+    ],
+    ("AUD_USD", "SELL"): [
+        {"feature": "session_displacement_atr", "operator": ">=", "threshold": -2.912},
+        {"feature": "session_momentum_atr", "operator": ">=", "threshold": 1.86666667},
+    ],
+    ("USD_CAD", "BUY"): [
+        {"feature": "rr_raw", "operator": "<=", "threshold": 0.53333333},
+        {"feature": "buy_score", "operator": "<=", "threshold": 47.0},
+    ],
+    ("USD_CAD", "SELL"): [
+        {"feature": "rr_raw", "operator": "<=", "threshold": 1.17777778},
+        {"feature": "m15_gap_atr", "operator": "<=", "threshold": -2.08580719},
+    ],
+}
+
 
 def _strategy_id(instrument: str, direction: str) -> str:
     version = "V2" if (instrument, direction) in {
@@ -33,18 +79,7 @@ def _strategy_id(instrument: str, direction: str) -> str:
 
 
 def _definition(instrument: str, direction: str) -> dict[str, Any]:
-    filters: list[dict[str, Any]] = []
-    if instrument == "EUR_USD" and direction == "SELL":
-        filters = [
-            {"feature": "extension_atr", "operator": ">=", "threshold": 0.9},
-            {"feature": "session_strength", "operator": ">=", "threshold": 0.2},
-            {"feature": "session_momentum_atr", "operator": ">=", "threshold": -0.21},
-        ]
-    elif instrument == "USD_JPY" and direction == "SELL":
-        filters = [
-            {"feature": "session_strength", "operator": "<=", "threshold": 0.27496452},
-            {"feature": "rr_raw", "operator": "<=", "threshold": 1.69111111},
-        ]
+    filters = ONE_MONTH_PAPER_FILTERS[(instrument, direction)]
     return {
         "strategy_id": _strategy_id(instrument, direction),
         "instrument": instrument,
@@ -54,6 +89,9 @@ def _definition(instrument: str, direction: str) -> dict[str, Any]:
         "research_only": True,
         "production_authority": False,
         "auto_activation": False,
+        "evidence_window": "2026-08-17T12:11:00Z/2026-09-16T12:11:00Z",
+        "minimum_resolved": 10,
+        "minimum_win_rate_exclusive": 0.50,
     }
 
 
@@ -67,7 +105,22 @@ STRATEGY_IDS = tuple(
     for instrument in SUPPORTED_INSTRUMENTS
     for direction in SUPPORTED_DIRECTIONS
 )
-EURUSD_SELL_STRATEGY = STRATEGY_DEFINITIONS[("EUR_USD", "SELL")]
+# Historical two-month candidate retained for the standalone replay module.
+# Runtime routing uses STRATEGY_DEFINITIONS and the new 30-day PAPER filters.
+EURUSD_SELL_STRATEGY = {
+    "strategy_id": "EURUSD_SELL_ONLY_V2",
+    "instrument": "EUR_USD",
+    "direction": "SELL",
+    "filters": [
+        {"feature": "extension_atr", "operator": ">=", "threshold": 0.9},
+        {"feature": "session_strength", "operator": ">=", "threshold": 0.2},
+        {"feature": "session_momentum_atr", "operator": ">=", "threshold": -0.21},
+    ],
+    "paper_only": True,
+    "research_only": True,
+    "production_authority": False,
+    "auto_activation": False,
+}
 
 
 def _canonical_json(value: Any) -> str:
