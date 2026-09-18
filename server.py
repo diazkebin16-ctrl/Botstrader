@@ -417,6 +417,26 @@ WEEKEND_RESEARCH_ENABLED = os.getenv("WEEKEND_RESEARCH_ENABLED", "true").lower()
 WEEKEND_NEWS_INTERVAL_MIN = max(30, int(os.getenv("WEEKEND_NEWS_INTERVAL_MIN", "60")))
 WEEKEND_SIGNAL_CONTEXT_HOURS = max(1, min(48, int(os.getenv("WEEKEND_SIGNAL_CONTEXT_HOURS", "24"))))
 WEEKEND_REACTION_HORIZONS = (1, 4, 12, 24)
+# The instrument scan is skipped while the market is closed. Execution was
+# already refused there (execute() returns MARKET_CLOSED), so the collect
+# pipeline was fetching unchanged candles, recomputing identical features and
+# writing a decision cycle to disk 1440 times a day on 48 of every 168 hours.
+# Weekend news research still runs: it is the one piece of closed-market work
+# whose input actually moves, and collect_weekend_news_snapshot already rate
+# limits it to one bucket per instrument per hour.
+# Set WEEKEND_SCAN_ENABLED=true to restore the previous behaviour.
+WEEKEND_SCAN_ENABLED = os.getenv("WEEKEND_SCAN_ENABLED", "false").lower() == "true"
+# Compaction is only ever offered while the market is closed, because VACUUM
+# holds an exclusive lock for the length of the rewrite.
+STORAGE_COMPACTION_ENABLED = os.getenv("STORAGE_COMPACTION_ENABLED", "true").lower() == "true"
+STORAGE_COMPACTION_INTERVAL_HOURS = max(1, int(os.getenv("STORAGE_COMPACTION_INTERVAL_HOURS", "24")))
+STORAGE_COMPACTION_MIN_RECLAIM_MB = max(16, int(os.getenv("STORAGE_COMPACTION_MIN_RECLAIM_MB", "256")))
+STORAGE_COMPACTION_HEADROOM_MB = max(64, int(os.getenv("STORAGE_COMPACTION_HEADROOM_MB", "256")))
+# Pruning used to run once a cycle, which was cheap while it capped five
+# small telemetry tables. It now caps the per-cycle tables too, and walking
+# those to find the cut point every single minute costs more than the rows
+# it deletes. Quarter-hourly keeps every table just as bounded.
+STORAGE_PRUNE_INTERVAL_MINUTES = max(1, int(os.getenv("STORAGE_PRUNE_INTERVAL_MINUTES", "15")))
 STRATEGY_SELF_EVAL_ENABLED = os.getenv("STRATEGY_SELF_EVAL_ENABLED", "true").lower() == "true"
 STRATEGY_AUTO_PAUSE = os.getenv("STRATEGY_AUTO_PAUSE", "true").lower() == "true"
 STRATEGY_BASELINE_WINDOW = max(40, int(os.getenv("STRATEGY_BASELINE_WINDOW", "100")))
@@ -10498,6 +10518,56 @@ def _record_counterfactual_cycle(cycle: Dict[str,Any], ranked: List[Any], alloca
             "execution_authority":False,"research_authority":False,"look_ahead":False}
 
 
+_LAST_STORAGE_COMPACTION: Optional[datetime] = None
+_LAST_STORAGE_PRUNE: Optional[datetime] = None
+
+
+def maybe_prune_storage(force: bool=False) -> Dict[str, Any]:
+    """Bound the telemetry tables, on an interval rather than every cycle."""
+    global _LAST_STORAGE_PRUNE
+    now=datetime.now(timezone.utc)
+    if not force and _LAST_STORAGE_PRUNE and (now-_LAST_STORAGE_PRUNE) < timedelta(minutes=STORAGE_PRUNE_INTERVAL_MINUTES):
+        return {"pruned":False,"reason":"INTERVAL_NOT_ELAPSED"}
+    _LAST_STORAGE_PRUNE=now
+    deleted=storage_lifecycle_manager.prune()
+    state["storage_prune"]={"ts":now_iso(),"deleted":deleted}
+    return {"pruned":True,"deleted":deleted}
+
+
+async def storage_maintenance_window() -> Dict[str, Any]:
+    """Give back to the volume what pruning freed, at most once a day.
+
+    prune() deletes rows, which lets SQLite reuse those pages but never
+    shrinks the file: without this, the database keeps its high-water mark
+    for good. compact() refuses when the volume lacks room for the rewrite,
+    so a nearly full disk makes this a no-op instead of an incident.
+    """
+    global _LAST_STORAGE_COMPACTION
+    if not STORAGE_COMPACTION_ENABLED:
+        return {"compacted":False,"reason":"DISABLED"}
+    now=datetime.now(timezone.utc)
+    if _LAST_STORAGE_COMPACTION and (now-_LAST_STORAGE_COMPACTION) < timedelta(hours=STORAGE_COMPACTION_INTERVAL_HOURS):
+        return {"compacted":False,"reason":"INTERVAL_NOT_ELAPSED"}
+    _LAST_STORAGE_COMPACTION=now
+    try:
+        pruned=(await asyncio.to_thread(maybe_prune_storage,True)).get("deleted") or {}
+        result=await asyncio.to_thread(
+            storage_lifecycle_manager.compact,
+            min_reclaim_bytes=STORAGE_COMPACTION_MIN_RECLAIM_MB*1024*1024,
+            headroom_bytes=STORAGE_COMPACTION_HEADROOM_MB*1024*1024,
+        )
+    except Exception as e:
+        log.exception("storage maintenance failed: %s",e)
+        state["storage_maintenance"]={"ts":now_iso(),"error":str(e)}
+        return {"compacted":False,"reason":"ERROR","error":str(e)}
+    summary={"ts":now_iso(),"pruned":pruned,**result}
+    state["storage_maintenance"]=summary
+    log.info("Storage maintenance pruned=%s compacted=%s reason=%s reclaimed=%s bytes",
+             sum(int(v or 0) for v in pruned.values()),result.get("compacted"),
+             result.get("reason"),result.get("bytes_reclaimed",0))
+    return summary
+
+
 def _persist_multi_asset_cycle(cycle: Dict[str, Any]) -> None:
     c=conn()
     c.execute("""INSERT OR REPLACE INTO multi_asset_decision_cycles(
@@ -10665,6 +10735,45 @@ async def execute_ranked_candidate(client: httpx.AsyncClient, candidate: Dict[st
             "intent":intent_obj,"intent_state":intent_state or "FILLED","fallback_allowed":False}
 
 
+async def closed_market_cycle(client: httpx.AsyncClient) -> bool:
+    """What there is to do while the market is shut, and nothing more.
+
+    No candle moves, no order can be filled and no open trade can be managed,
+    so the collect pipeline is skipped outright. Three things still happen:
+    the worker keeps signalling liveness so the watchdog does not restart a
+    perfectly healthy process, weekend news research keeps collecting (it is
+    the only closed-market input that changes), and the database gets the one
+    window in the week when an exclusive lock costs nothing.
+    """
+    _worker_heartbeat()
+    researched={}
+    for inst in SCAN_INSTRUMENTS:
+        if WEEKEND_RESEARCH_ENABLED:
+            try:
+                snap=await collect_weekend_news_snapshot(client,inst)
+                state.setdefault("weekend_research",{})[inst]=snap
+                researched[inst]=bool(snap.get("collected"))
+            except Exception as e:
+                log.warning("weekend research failed for %s: %s",inst,e)
+                researched[inst]=False
+        state.setdefault("instrument_state",{})[inst]={
+            "instrument":inst,"mode":instrument_mode(inst),"last_scan":now_iso(),"ok":True,
+            "market_closed":True,"scan_skipped":"MARKET_CLOSED",
+        }
+        _worker_heartbeat()
+    state["market_closed_cycles"]=int(state.get("market_closed_cycles") or 0)+1
+    state["last_closed_market_cycle"]=now_iso()
+    if OBSERVABILITY_ENABLED:
+        _obs_module("Market Data","MARKET_CLOSED",warnings=["MARKET_CLOSED"],
+                    last_operation="scan skipped; market closed",
+                    details={"market_closed":True,"fresh_for_trading":False,
+                             "market_data_state":"MARKET_CLOSED","weekend_research":researched})
+        _obs_module("Execution Engine","PAUSED",last_operation="market closed",
+                    details={"market_closed":True})
+    await storage_maintenance_window()
+    return True
+
+
 async def scan_instruments_once(client: httpx.AsyncClient) -> bool:
     """COLLECT -> RANK -> SLOT/BROKER/PORTFOLIO CHECK -> EXECUTE.
 
@@ -10674,9 +10783,12 @@ async def scan_instruments_once(client: httpx.AsyncClient) -> bool:
     """
     cycle_ok=True
     collected=[]
+    market_closed=market_is_weekend_closed()
+    if market_closed and not WEEKEND_SCAN_ENABLED:
+        return await closed_market_cycle(client)
     for inst in SCAN_INSTRUMENTS:
         try:
-            if WEEKEND_RESEARCH_ENABLED and market_is_weekend_closed():
+            if WEEKEND_RESEARCH_ENABLED and market_closed:
                 snap=await collect_weekend_news_snapshot(client,inst)
                 state.setdefault("weekend_research",{})[inst]=snap
             result=await _batch_scan_candidate(client,inst)
@@ -10830,7 +10942,7 @@ async def worker():
                     observability_strategy_degradation_summary()
                     observability_silent_anomalies()
                     observability_manager.prune()
-                    storage_lifecycle_manager.prune()
+                    maybe_prune_storage()
                     m=observability_manager.sample_system_metrics(broker_latency_ms=(obs_broker.get("latency_ms") if 'obs_broker' in locals() else None))
                     db_status="DEGRADED" if m.get("db_latency_ms") is not None and m["db_latency_ms"]>OBSERVABILITY_DB_LATENCY_WARNING_MS else "OK"
                     _obs_module("Database",db_status,m.get("db_latency_ms"),warnings=["database latency elevated"] if db_status!="OK" else [],last_operation="observability SELECT 1")
